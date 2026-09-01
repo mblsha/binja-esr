@@ -114,20 +114,158 @@ def test_opcode_table_semantic_roundtrip_is_canonical() -> None:
         pytest.fail("Opcode table round-trip divergence:\n" + "\n".join(mismatches))
 
 
-def test_imm20_assembler_and_decoder_require_canonical_high_nibble() -> None:
+def test_hw009_far_control_alias_decodes_but_assembles_canonically() -> None:
     canonical = Assembler().assemble("JPF 0xFCDAB").as_binary()
     assert canonical == bytearray.fromhex("03ABCD0F")
     assert asm_str(decode(canonical, 0).render()) == "JPF   FCDAB"
 
-    # PC-E500 F003A is dispatch-table data with no analyzed code entry, not
-    # evidence that silicon ignores the upper nibble of an executable target.
-    assert decode_instr(Decoder(bytearray.fromhex("053A077C")), 0, OPCODES) is None
+    # PC-E500 HW-009 executed all 16 encoded upper nibbles for both JPF and
+    # CALLF. Every variant reached the same low-20-bit target.
+    for opcode, mnemonic in ((0x03, "JPF"), (0x05, "CALLF")):
+        for upper_nibble in range(16):
+            raw_alias = bytearray((opcode, 0xE0, 0x01, (upper_nibble << 4) | 0x01))
+            decoded = decode_instr(Decoder(raw_alias), 0, OPCODES)
+            assert decoded is not None
+            assert asm_str(decoded.render()) == f"{mnemonic:<6}101E0"
 
+            encoder = Encoder()
+            decoded.encode(encoder, 0)
+            assert encoder.buf == bytearray((opcode, 0xE0, 0x01, 0x01))
+
+    with pytest.raises(AssemblerError, match="20-bit immediate out of range"):
+        Assembler().assemble("CALLF 0xF101E0")
+
+    # Generic/unmeasured Imm20 users remain strict.
     raw_alias = Imm20()
     raw_alias.value = 0xC073A
     raw_alias.extra_hi = 0x7C
     with pytest.raises(ValueError, match="high byte out of range"):
         raw_alias.encode(Encoder(), 0)
+
+
+@pytest.mark.parametrize(
+    ("opcode", "register"),
+    [
+        (0x88, "A"),
+        (0x89, "IL"),
+        (0x8A, "BA"),
+        (0x8B, "I"),
+        (0x8C, "X"),
+        (0x8D, "Y"),
+        (0x8E, "U"),
+        (0x8F, "S"),
+    ],
+)
+def test_hw009_direct_read_alias_decodes_but_assembles_canonically(
+    opcode: int, register: str
+) -> None:
+    raw_alias = bytearray((opcode, 0xF0, 0x01, 0x81))
+    decoded = decode_instr(Decoder(raw_alias), 0, OPCODES)
+    assert decoded is not None
+    assert asm_str(decoded.render()) == f"MV    {register}, [101F0]"
+
+    encoder = Encoder()
+    decoded.encode(encoder, 0)
+    assert encoder.buf == bytearray((opcode, 0xF0, 0x01, 0x01))
+    assert Assembler().assemble(f"MV {register},[0x101F0]").as_binary() == bytearray(
+        (opcode, 0xF0, 0x01, 0x01)
+    )
+    with pytest.raises(AssemblerError, match="20-bit immediate out of range"):
+        Assembler().assemble(f"MV {register},[0x8101F0]")
+
+
+@pytest.mark.parametrize(
+    ("opcode", "mnemonic", "immediate"),
+    [
+        (0x62, "CMP", 0x00),
+        (0x66, "TEST", 0xFF),
+        (0x6A, "XOR", 0x00),
+        (0x72, "AND", 0xFF),
+        (0x7A, "OR", 0x00),
+    ],
+)
+def test_hw009_absolute_byte_alias_decodes_but_assembles_canonically(
+    opcode: int, mnemonic: str, immediate: int
+) -> None:
+    raw_alias = bytearray((opcode, 0xD0, 0x06, 0x84, immediate))
+    decoded = decode_instr(Decoder(raw_alias), 0, OPCODES)
+    assert decoded is not None
+    assert asm_str(decoded.render()) == f"{mnemonic:<6}[406D0], {immediate:02X}"
+
+    encoder = Encoder()
+    decoded.encode(encoder, 0)
+    assert encoder.buf == bytearray((opcode, 0xD0, 0x06, 0x04, immediate))
+    assert Assembler().assemble(
+        f"{mnemonic} [0x406D0],0x{immediate:02X}"
+    ).as_binary() == bytearray((opcode, 0xD0, 0x06, 0x04, immediate))
+    with pytest.raises(AssemblerError, match="20-bit immediate out of range"):
+        Assembler().assemble(f"{mnemonic} [0x8406D0],0x{immediate:02X}")
+
+
+@pytest.mark.parametrize(
+    ("opcode", "register"),
+    [
+        (0xA8, "A"),
+        (0xA9, "IL"),
+        (0xAA, "BA"),
+        (0xAB, "I"),
+        (0xAC, "X"),
+        (0xAD, "Y"),
+        (0xAE, "U"),
+        (0xAF, "S"),
+    ],
+)
+def test_hw009_direct_write_alias_decodes_but_assembles_canonically(
+    opcode: int, register: str
+) -> None:
+    decoded = decode_instr(Decoder(bytearray((opcode, 0xD0, 0x06, 0x84))), 0, OPCODES)
+    assert decoded is not None
+    assert asm_str(decoded.render()) == f"MV    [406D0], {register}"
+
+    encoder = Encoder()
+    decoded.encode(encoder, 0)
+    assert encoder.buf == bytearray((opcode, 0xD0, 0x06, 0x04))
+
+
+@pytest.mark.parametrize(
+    ("opcode", "mnemonic", "to_external"),
+    [
+        (0xD0, "MV", False),
+        (0xD1, "MVW", False),
+        (0xD2, "MVP", False),
+        (0xD3, "MVL", False),
+        (0xD8, "MV", True),
+        (0xD9, "MVW", True),
+        (0xDA, "MVP", True),
+        (0xDB, "MVL", True),
+    ],
+)
+def test_hw009_absolute_transfer_alias_decodes_but_assembles_canonically(
+    opcode: int, mnemonic: str, to_external: bool
+) -> None:
+    if to_external:
+        raw_alias = bytearray((opcode, 0xD0, 0x06, 0x84, 0x60))
+        canonical = bytearray((opcode, 0xD0, 0x06, 0x04, 0x60))
+        rendered = f"{mnemonic:<6}[406D0], (BP+60)"
+        source = f"{mnemonic} [0x406D0],(BP+0x60)"
+        invalid_source = f"{mnemonic} [0x8406D0],(BP+0x60)"
+    else:
+        raw_alias = bytearray((opcode, 0x60, 0xF0, 0x01, 0x81))
+        canonical = bytearray((opcode, 0x60, 0xF0, 0x01, 0x01))
+        rendered = f"{mnemonic:<6}(BP+60), [101F0]"
+        source = f"{mnemonic} (BP+0x60),[0x101F0]"
+        invalid_source = f"{mnemonic} (BP+0x60),[0x8101F0]"
+
+    decoded = decode_instr(Decoder(raw_alias), 0, OPCODES)
+    assert decoded is not None
+    assert asm_str(decoded.render()) == rendered
+
+    encoder = Encoder()
+    decoded.encode(encoder, 0)
+    assert encoder.buf == canonical
+    assert Assembler().assemble(source).as_binary() == canonical
+    with pytest.raises(AssemblerError, match="20-bit immediate out of range"):
+        Assembler().assemble(invalid_source)
 
 
 @pytest.mark.parametrize(

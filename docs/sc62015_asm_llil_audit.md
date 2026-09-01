@@ -25,12 +25,39 @@ Evidence is ranked as follows:
 Level 5 is regression evidence, not hardware evidence. Two backends can agree
 on the same wrong behavior. ROM use sites are strong evidence that an encoding
 is real, but a dedicated device capture outranks an inference from firmware.
-The paired private repository currently contains decoded FT600 event tables,
-not the named raw JSON artifacts, so those results are hardware reports rather
-than independently reprocessable captures from a clean checkout.
-The live Binary Ninja session was not
-available for this pass, so no conclusion is presented as a live-decompiler
-finding.  The current decoder was preferred over stale text exports.
+For the 2026-08-30 PC-E500 campaign, the paired private repository preserves
+the exact generated probe source, raw FT600 JSON, payload and artifact hashes,
+strict execution windows, and decoded result tables. Its dated campaign record
+is `docs/pc-e500/en/analysis/sc62015_hardware_campaign_2026-08-30.md` in that
+repository; `sc62015_hardware_followup_2026-08-30.md` records the same-day
+boundary, system-stack-F, and Y/S follow-up, and
+`sc62015_hardware_overlap_matrix_2026-08-30.md` records the later isolated
+HW-007 matrix, `sc62015_hardware_ce1_pointer_overlap_2026-08-31.md` the
+read-only direct/displaced `F1`/`F2`/`F3` external-pointer trace,
+`sc62015_hardware_ce1_write_order_2026-08-31.md` the address-only
+direct/displaced `F8`/`F9`/`FA`/`FB` external-write trace,
+`sc62015_hardware_upper_address_2026-08-30.md` the HW-009 direct-read partial,
+`sc62015_hardware_upper_read_matrix_2026-08-31.md` the paired 89-8F
+direct-read width matrix,
+`sc62015_hardware_upper_write_2026-08-31.md` the paired A8-AF direct-write
+address matrix,
+`sc62015_hardware_upper_absolute_byte_2026-08-31.md` the paired
+62/66/6A/72/7A absolute-byte matrix,
+`sc62015_hardware_upper_absolute_transfer_2026-08-31.md` the corrected paired
+D0-D3/D8-DB transfer matrix,
+and `sc62015_hardware_wait_flags_2026-08-30.md` the HW-003 C/Z matrix. The later
+`sc62015_hardware_zero_wait_2026-08-30.md` records the HW-002 zero-count WAIT
+result. The private `sc62015_hardware_instruction_closure_2026-09-01.md`
+reconciles the later TCL, zero-count block, far-control, PRE, RETI, IR,
+WAIT/IRQ, HALT/OFF, and software RESET captures and separates valid-instruction
+closure from residual peripheral or malformed-encoding work. The connected
+unit's PCB, package, and unit revisions were not
+recorded, so claims are scoped to that unit. The
+capture tools were invoked from a relocated path, but their private-recorded
+hashes match byte-identical files at tracked legacy paths in the gateware base.
+The live Binary Ninja session was not available for this pass, so no conclusion
+is presented as a live-decompiler finding. The current decoder was preferred
+over stale text exports.
 
 ## Disposition
 
@@ -49,56 +76,107 @@ The execution policy after this audit is:
 
 ## Re-evaluation after device-evidence review
 
-The second pass changed two audit classifications:
+The device-evidence passes changed these audit classifications:
 
 - The original blanket upper-nibble rejection for every `Imm20` was wrong.
-  The X/Y device-capture reports execute a third byte of `3C` and expose `0C`
-  through the following push. Register-immediate opcodes now have a distinct 20-bit
-  normalization policy; control/address operands remain quarantined.
-- RETI preserving ISR is a conservative, ROM-consistent emulator contract, not
-  a hardware-proven instruction side effect. Both stock ROMs acknowledge ISR
-  before RETI, so only a deliberately unacknowledged device probe can decide it.
+  Archived X/Y/U/S probes execute a third byte of `3C` and expose only the low
+  nibble across discriminating D7 comparison and copy/serialization consumers.
+  Register-immediate opcodes now have a distinct 20-bit normalization policy;
+  control/address operands remain quarantined. The physical circuit point at
+  which bits 23–20 disappear is unobservable and is not an architectural
+  subcase.
+- A 2026-08-30 PC-E500 campaign directly established wrapping binary `PMDF`
+  with preservation of deliberately contradictory incoming `C`/`Z`. In the
+  tested BA/I and seeded-`F=03` (`C=1`, `Z=1`) state, `ED`/`FD` selectors `01`,
+  `03`, `21`, and canonical `23` matched in result and observed event shape.
+- The campaign and follow-up established the operand-width split: `C7 CMPP
+  (m),(n)` is raw-24 versus raw-24, `D7 CMPP (m),r3` is raw-24 memory versus a
+  zero-extended 20-bit register across directly tested X/Y/U/S selectors, and
+  `EXP` swaps both raw 24-bit triples. `EXP` preserved
+  `F=03` in the tested case, but that single case is not a complete flag matrix.
+- `POPU F`, `POPS F`, and `RETI` normalize tested arbitrary stack bytes to
+  their low two `C`/`Z` bits; the corresponding pushes and normal interrupt
+  frame therefore emit the normalized byte.
+- A guarded opcode `88` pair establishes that raw encoded address `8100FD`
+  consumes all four bytes and reads the same low-20-bit `100FD` byte as
+  canonical `0100FD`. A later paired 89-8F matrix extends that result across
+  every remaining direct register-load width: high bytes `81` and `01` load
+  the same one/two/three sentinel bytes from `101F0`. The paired A8-AF matrix
+  shows raw encoded destination `8406D0` consumes four bytes and emits the same
+  width-sized low-to-high write-address burst as canonical `0406D0` for every
+  direct register-store width. A further absolute-byte matrix shows CMP/TEST
+  reads and XOR/AND/OR identity read-then-write sequences match between high
+  bytes `84` and `04`. The corrected D0-D3/D8-DB matrix shows high bytes
+  `81`/`01` select the same external source for transfers into IMEM and high
+  bytes `84`/`04` emit the same bounded CE1 destination sequence for transfers
+  out of IMEM. The loaded gateware does not expose write data. These results are
+  scoped to 62/66/6A/72/7A, 88-8F, A8-AF, D0-D3, D8-DB, and tested upper nibble
+  `8`; they do not establish a general control/address alias rule.
+- A deliberately unacknowledged real-device matrix now establishes that RETI
+  leaves each defined ISR bit, and all seven together, unchanged. A separate
+  arbitrary stacked-F matrix establishes `F = raw & 03` during RETI and the
+  five-byte frame order. The former preserve-ISR contract is now hardware-backed.
 
-The raw-data split survives re-evaluation: `MVP` is supported by both executable
-ROM use and a device round trip; `C7 CMPP (m),(n)` remains a raw three-byte
-comparison whose upper-nibble flags are model-derived; `D7 CMPP (m),r3` is a
-20-bit pointer comparison, corroborated only by the baseline emulator's
-best-guess pending hardware; and upper-nibble `EXP` remains quarantined. No
-parity-only result is promoted to an ISA fact.
+The campaign also resolved the remaining valid-instruction alternatives.
+Nonzero `WAIT` with `I=1,2,4` cleared I and added one captured
+countdown/address unit per requested idle unit. A later `I=2` matrix shows all
+four architectural C/Z images `00..03` survive. A human-attended exact `WAIT`
+with `I=0000` produces 65,536 CE-inactive address/countdown samples covering
+one full 16-bit wrap, then resumes with I still zero and tested `F=03`
+(`C=1`, `Z=1`) preserved. Exact 4,096- and 65,535-unit runs with an independently
+arising MTI show that WAIT completes atomically and the IRQ is delivered at the
+next boundary after the fall-through fetch. A separate matrix establishes the
+same 65,536-iteration do-while interpretation for all nine counted block
+families. The isolated overlap matrix covers
+exact aliases and both ±1 directions for
+fixed-width moves, counted moves, `EXL`, and `EXP`. Fixed-width move final
+states are snapshot-equivalent, counted moves expose direction-specific
+cascades, and `EXL`/`EXP` are sequential-byte-exchange-equivalent. Overlapping
+`EXP` contradicts whole-triple snapshot behavior. Final state does not expose
+invisible IMEM micro-order. A BP-relative companion establishes
+snapshot-equivalent source and initial-destination selection for tested
+`MVW`/`MVP` even though the first write overwrites BP. Counted companions fix
+the tested initial BP, PX, and BP+PX destination bases and PY source base before
+iteration. The follow-up verifies read-side boundary wrapping but not external
+partial-write visibility. Separate device matrices establish TCL's independent
+named timer-phase restarts, every high-nibble JPF/CALLF alias, measured PRE
+aliases/boundaries, software IR frame semantics, HALT/OFF fall-through resume,
+and software RESET's distinct vector/no-frame transfer. No parity-only result
+is promoted to an ISA fact.
 
 ## Corrected defects
 
 | Area | Previous behavior | Audit disposition |
 | --- | --- | --- |
 | Reserved opcodes `20`/`BF` | Python/Rust could manufacture placeholder execution | Reject as invalid; ROM byte sightings are not treated as executable proof |
-| PRE decoding | Consecutive or noncanonical prefixes could reach execution, and mid-instruction byte pairs at `EFE2B` and `F0002` were incorrectly promoted to executable overlaps | Reject stacked/noncanonical PRE before scheduler mutation; no ignored-PRE pair currently has a proved executable boundary |
+| PRE decoding | Consecutive or noncanonical prefixes could reach execution, and mid-instruction byte pairs at `EFE2B` and `F0002` were incorrectly promoted to executable overlaps | Reject unsupported stacked/noncanonical PRE before scheduler mutation. Device probes now pin the accepted redundant aliases and consecutive-prefix boundary; only the named `F0002` entry `23 48 3F` remains exact ROM-backed redundant-PRE evidence |
 | Instruction observers and lookahead | Python fused-decode inspected the following opcode after every non-PRE instruction, the facade and PCE wrapper could fetch the current opcode repeatedly for rendering, WAIT detection, and tracing, and device reads therefore changed merely by enabling observers | Only PRE fetches its sister opcode. Scheduled execution is allowed only when every byte inspected by preflight is explicitly callback-free; the single normal opcode fetch is bound to the current PC in an owner-held prepared operation and reused by execution, WAIT inspection, rendering, and tracing. PRE carries its fused length and bytes in the same proof, so observers cannot add bus reads or reinterpret an operand as an opcode |
 | Assembler PRE selection | Mode metadata could be lost and prefixes deduplicated by bytes rather than semantics | Preserve addressing provenance and verify all 16 two-operand PRE combinations |
-| 20-bit assembler literals | Values above `FFFFF` were emitted and silently decoded as a different semantic value | Text assembly rejects values above `FFFFF` and emits a canonical low-nibble high byte. Executable decoding is instruction-specific: the reported X/Y device load-to-push path fetches the full third byte but exposes only bits 19-0, while unverified control/address operands reject bits 23-20 |
-| Raw three-byte data | Rust treated the historical `IMem20` operand name as a universal 20-bit transfer, while both cores reused address-style `Imm20` for `MVP (k),lmn` | `MVP` preserves all 24 data bits and opcode `DC` has a distinct raw immediate. `C7 CMPP (m),(n)` compares raw three-byte images but its upper-nibble flags are not hardware-isolated. `EXP` rejects noncanonical upper nibbles until traced |
-| `CMPP` width split | Python and Rust used one 24-bit comparison for both `C7 (m),(n)` and `D7 (m),r3`, so cross-backend parity confirmed the same mistake | Keep `C7` at 24 bits; mask both operands and set flags at 20-bit width for `D7`, whose other operand is the 20-bit X/Y/U/S class. A discriminating `F00080` versus `000080` regression now prevents parity from hiding the distinction. The baseline emulator independently makes the same split, but remains only a best-guess against hardware |
+| 20-bit assembler literals | Values above `FFFFF` were emitted and silently decoded as a different semantic value | Text assembly rejects values above `FFFFF` and emits a canonical low-nibble high byte. Executable decoding is instruction-specific: X/Y/U/S register-immediate loads expose only bits 19-0; guarded 62/66/6A/72/7A, 88-8F, A8-AF, D0-D3, and D8-DB probes map tested upper nibble `8` to the low-20-bit data address. Unverified vectors and other untested absolute-memory families still reject bits 23-20 |
+| Raw three-byte data | Rust treated the historical `IMem20` operand name as a universal 20-bit transfer, while both cores reused address-style `Imm20` for `MVP (k),lmn`; `EXP` then snapshotted both complete triples before writing | `MVP` preserves all 24 data bits and opcode `DC` has a distinct raw immediate. Real-device probes establish raw 24-bit operands for `C7 CMPP (m),(n)` and both sides of `EXP`. The isolated ±1 overlap results contradict whole-triple snapshot behavior and require sequential-byte-exchange-equivalent final states; final state alone does not establish invisible micro-order |
+| `CMPP` width split | Python and Rust used one 24-bit comparison for both `C7 (m),(n)` and `D7 (m),r3`, then an intermediate audit incorrectly masked D7's memory operand to 20 bits | Keep `C7` as a 24-bit memory-to-memory comparison. For `D7`, compare the raw 24-bit memory image with the zero-extended 20-bit X/Y/U/S register and set flags at 24-bit width. Discriminating PC-E500 cases `F00080` versus `000080`, plus `0C5AA5`/`3C5AA5` against the same raw-loaded X, establish this split |
 | `56`/`5E` and `E3`/`EB` external modes | Unsupported external-address modes could be accepted, and direct operand encoding could emit bytes that the decoder rejected | Share encoded-mode validation between decode and encode; require offset modes for `56`/`5E` and post-increment/pre-decrement for `E3`/`EB`, including direct `Instruction` construction |
-| Register selectors | Exact `JP`/`CMPW`/`CMPP` forms and reserved selectors were too permissive; `JP A` also produced conflicting page semantics in Python and Rust; the assembler could emit values its own decoder rejected; an intermediate generic rule then rejected legal mixed-width `r3,r` arithmetic | Require exact `04..07` selectors for `JP X/Y/U/S`, exact low-three-bit selectors for `INC`/`DEC`, and opcode-specific `CMPW`/`CMPP` classes across Python encode/decode and Rust; preserve ROM-proven mixed-width forms such as `45 52` = `ADD Y, BA` |
+| Register selectors | Exact `JP`/`CMPW`/`CMPP` forms and reserved selectors were too permissive; `JP A` also produced conflicting page semantics in Python and Rust; the assembler could emit values its own decoder rejected; an intermediate generic rule then rejected legal mixed-width `r3,r` arithmetic | Require exact `04..07` selectors for `JP X/Y/U/S`, exact low-three-bit selectors for `INC`/`DEC`, and opcode-specific `CMPW`/`CMPP` classes across Python encode/decode and Rust; preserve ROM-proven mixed-width forms such as `45 52` = `ADD Y, BA`. For the BA/I pair, PC-E500 probes show selectors `01`, `03`, `21`, and canonical `23` match in the tested BA/I and seeded-`F=03` state, including observed event shape |
 | LLIL operand widths and masks | The mock evaluator accepted mixed-width near jumps, returns, dynamic IMEM addresses, `MV IL`, ROM-valid `FD 24`/`FD 42`, and `ED` exchanges that real Binary Ninja rejects; some control/address consumers retained unmodeled high bits | Emit explicit unsigned `ZERO_EXT`/`LOW_PART` conversions, snapshot both exchange directions, and apply the 8-bit IMEM or 20-bit external/control mask at every consumer; verify through a width-strict LLIL facade |
-| Control/address immediate high byte | Text assembly could turn an out-of-range literal into a self-fulfilling raw alias; table bytes at PC-E500 `F003A` were incorrectly treated as executed `CALLF` evidence | Keep `JPF`/`CALLF`, direct external addresses, and synthetic vectors canonical pending targeted hardware evidence; this restriction does not apply to `MV X/Y/U/S,lmn`, whose register consumer discards bits 23-20 |
-| Reset-vector selection | Python read the interrupt vector at `FFFFA` | Read the distinct reset-vector slot at `FFFFD`; whether software opcode `FF` exactly matches external/power-on reset, including stack and register effects, stays model-only |
-| Vector-transfer failure ordering | Software `IR`, RESET, and synthetic IRQ paths could push a frame, clear `IMR.IRM`, reset SFRs, or clear wrapper state before discovering a noncanonical vector, rejected destination, failed bus read, volatile mismatch, or late observer failure | For software `IR`, RESET, and Python/PCE synthetic delivery, require explicit callback-free metadata for each selected transfer, bind the one matching architectural vector fetch plus target length and memory provenance into a non-forgeable, one-shot prepared operation, and consume it before transfer mutation. The Python/PCE wrapper does not inspect the IRQ vector for HALT/OFF wake, masked status, an active handler, or a timer-only pass. Generic Rust `CoreRuntime` applies the narrower no-speculative-vector gate and defers a source first armed after that gate; this does not establish identical dormant-PC fetch or same-pass/next-pass ordering. Machine reset is stricter: the reset-vector and decoded target bytes must be declared immutable before RAM/LCD reset can begin. Destination `I`, stack, and other data-dependent checks remain the destination instruction's job, and vector targets that are themselves `IR`/RESET do not recurse during preflight |
+| Control/address immediate high byte | Text assembly could turn an out-of-range literal into a self-fulfilling raw alias; table bytes at PC-E500 `F003A` were incorrectly treated as executed `CALLF` evidence | Raw JPF/CALLF probes for every upper nibble `1..F` transfer to the same low-20-bit target as canonical form. Raw 62/66/6A/72/7A, 88-8F, A8-AF, D0-D3, and D8-DB forms with tested upper nibble `8` are likewise device-verified low-20-bit data-address aliases. Fresh text assembly remains canonical; untested absolute-memory families and synthetic vectors remain fail-closed rather than promoted by analogy. Register-immediate `MV X/Y/U/S,lmn` separately discards bits 23-20 |
+| Reset-vector selection | Python read the interrupt vector at `FFFFA` | Read the distinct reset-vector slot at `FFFFD`. Software-RESET capture verifies low-first reads through `FFFFF`, no system-stack frame, and the first target fetch. Detailed SFR/general-register retention remains manual-derived because reset ROM initialization starts immediately |
+| Vector-transfer failure ordering | Software `IR`, RESET, and synthetic IRQ paths could push a frame, clear `IMR.IRM`, reset SFRs, or clear wrapper state before discovering a noncanonical vector, rejected destination, failed bus read, volatile mismatch, or late observer failure | For software `IR`, RESET, and Python/PCE synthetic delivery, require explicit callback-free metadata for each selected transfer, bind the one matching architectural vector fetch plus target length and memory provenance into a non-forgeable, one-shot prepared operation, and consume it before transfer mutation. The Python/PCE wrapper does not inspect the IRQ vector on the HALT/OFF wake step, for masked status, with an active handler, or on a timer-only pass. On a following deliverable pass, both runtime paths preserve the measured opcode fetch at the saved/fall-through PC before frame writes and vector fetch; that discarded opcode is neither decoded nor executed. Generic Rust `CoreRuntime` additionally defers a source first armed after its no-speculative-vector gate. Machine reset is stricter: the reset-vector and decoded target bytes must be declared immutable before RAM/LCD reset can begin. Destination `I`, stack, and other data-dependent checks remain the destination instruction's job, and vector targets that are themselves `IR`/RESET do not recurse during preflight |
 | Software interrupt `IR` | The saved PC pointed after the opcode | Save the `IR` opcode address; the ROM dispatcher tests `FE` there and advances the saved frame |
-| Stacked `F` byte | Rust preserved six opaque upper bits while Python modeled only carry/zero; `POPS F` advanced `S` before its lazy validation node | Keep the one-byte stack layout and accept only the modeled `C`/`Z` image (`0..3`); snapshot and reject raw images with bits 2-7 before `S`, flags, or PC can mutate |
+| Stacked `F` byte | Rust preserved six opaque upper bits while Python modeled only carry/zero; `POPS F` advanced `S` before its lazy validation node; an initial quarantine also rejected arbitrary `POPU F`/`RETI` input | PC-E500 matrices establish `POPU F`, `POPS F`, and `RETI` as `F = raw & 03`, followed by their normal pointer/frame advance. Pushes and interrupt entry can therefore emit only the normalized architectural C/Z byte. Keep the one-byte frame field and snapshot each input once |
 | `TEST` | Some LLIL paths used a 24-bit operation for a byte instruction | Use byte-width logic |
 | `ADC`/`SBC`, `ADCL`/`SBCL` | Carry/borrow propagation could use an unbounded intermediate | Apply width wrapping at each arithmetic stage |
 | `EXL` | Only part of the `I`-byte exchange was modeled | Exchange exactly `I` bytes, with independent wrapped internal pointers |
 | `MVL` family | Several Rust composite forms copied one extra byte or only one byte | Execute exactly `I` ordered transfers, update both pointers, then clear `I` |
 | Decimal shifts | Direction, pointer walk, and carried nibble disagreed | `DSLL` starts at the LSB and decrements; `DSRL` starts at the MSB and increments |
-| Wide memory access | A word/pointer could spill outside 8-bit IMEM or 20-bit external memory, an overlapping store could mutate the register used to calculate later destination bytes, and bridge buses could collapse a wide store into one callback | Snapshot the complete destination and source, then load/store and invoke hardware/host hooks once per byte in architectural order with 8-bit IMEM or 20-bit external wrapping at every byte |
+| Wide memory access | A word/pointer could spill outside 8-bit IMEM or 20-bit external memory, an overlapping store could mutate the register used to calculate later destination bytes, and bridge buses could collapse a wide access into one callback | Fix effective bases before writes; fixed-width moves also fix their source values, while `EXP` applies its separately documented ordered byte-exchange semantics. Expand every wide load/store into ordered wrapped byte operations so hardware/host hooks run once per byte. Device captures verify wrapped IMEM byte mapping and external read bus order for the tested `MVW`/`MVP` and `[X++]` forms. Read-only CE1 overlap traces further verify that direct and both displaced `F1`/`F2`/`F3` modes fix their initial effective source and read two/three ordered external bytes from it before overlapping writes. An address-only write trace verifies all direct and displaced `F8`/`F9`/`FA`/`FB` modes select the expected effective destination and emit exactly one/two/three/I low-to-high write phases. These traces exposed and now prevent Rust's former non-boundary wide-callback collapse. The loaded gateware sampled and read every write as zero, so exact write data, partial visibility, boundary order, and invisible IMEM temporal order remain model contracts |
 | `CALL`/`CALLF` LLIL | The lifter performed the explicit wrapped stack-frame writes but represented the control-flow edge as a jump | Keep the explicit architectural frame writes and emit a Binary Ninja call edge; the mock evaluator treats that call node as control flow only so it cannot add a second synthetic frame |
 | Interrupt-frame boundary access | Synthetic delivery paths could read or write a five-byte system frame past the 20-bit external bus when `S < 5` | Snapshot the frame inputs and wrap every byte at `FFFFF -> 00000`; exact silicon bus order at that boundary remains hardware-trace work |
 | External pointers and control flow | Some paths advanced in a 24-bit space, while LLIL register consumers could retain a high nibble that the runtime facade masks | Mask effective addresses, pointer updates, register jumps, and far-return targets to 20 bits; near control flow explicitly widens its 16-bit component before page composition |
-| `PMDF` | Implemented as packed BCD | Use 8-bit wrapping binary pointer addition; flag preservation remains a model contract |
-| `TCL` | Could execute as a silent no-op | Fail closed until `LCC.STCL`/`LCC.MTCL` timer-phase effects are implemented and traced |
-| `I=0` counted instructions | Empty-block and 65,536-iteration interpretations had no decisive ROM or hardware evidence | Reject `ADCL`/`SBCL`/`DADL`/`DSBL`/`MVL`/`MVLD`/`EXL`/`DSLL`/`DSRL`/`WAIT` before architectural or timing mutation; require a real-hardware trace to choose semantics |
-| `WAIT` | Timing could be omitted by direct LLIL evaluation; irrelevant PRE could reach a different path | For nonzero `I`, use a WAIT intrinsic/decoded fast path for exact model cycles, fail closed without a working timing implementation, and reject PRE+WAIT as noncanonical |
-| Scheduler preflight | Device wrappers could advance timers before discovering that `TCL`, an `I=0` counted operation, an unfused/consecutive PRE, or another invalid encoding was quarantined | Decode and validate the pending instruction before cycle, timer, or ISR mutation attributable to scheduling it; preflight the replacement PC again after interrupt delivery, and repeat validation in each backend so direct callers also fail closed |
+| `PMDF` | Implemented as packed BCD | Use 8-bit wrapping binary pointer addition and preserve incoming `C`/`Z`; both immediate and A-source forms, wrap/zero cases, and deliberately contradictory incoming flags are verified on a PC-E500 |
+| `TCL` | Could execute as a silent no-op | Device traces establish independent main/sub divider-phase restart selected by `LCC.MTCL`/`LCC.STCL`, without clearing LCC or already-latched ISR; require the timer-phase-clear hook and fail closed if a host cannot implement it |
+| `I=0` counted block instructions | Empty-block and 65,536-iteration interpretations were both plausible | Device matrices establish 65,536 do-while iterations for `ADCL`/`SBCL`/`DADL`/`DSBL`/`MVL`/`MVLD`/`EXL`/`DSLL`/`DSRL`; both cores implement the effective count without unbounded host looping |
+| `WAIT` | Timing could be omitted by direct LLIL evaluation; irrelevant PRE could reach a different path; `I=0` was formerly quarantined without evidence | Use a WAIT intrinsic/decoded fast path with an effective count of `I` when nonzero and 65,536 when zero, fail closed without a working timing implementation, and reject PRE+WAIT as noncanonical. Device probes establish countdown length, `I=0`, all architectural C/Z images, the zero-count wrap, and interrupt-atomic execution with pending delivery at the next boundary after the fall-through fetch. Mapping host units to oscillator time remains machine timing, not an alternate instruction result |
+| Scheduler preflight | Device wrappers could advance timers before discovering that `TCL`, a quarantined `I=0` counted block operation, an unfused/consecutive PRE, or another invalid encoding had been reached | Decode and validate the pending instruction before cycle, timer, or ISR mutation attributable to scheduling it; preflight the replacement PC again after interrupt delivery, and repeat validation in each backend so direct callers also fail closed |
 | Host-authoritative PCE/native shadow | Some host-originated writes bypassed the Rust mirror, while native snapshot defaults could replace live host SFR/IRQ state | Treat the PCE memory image and its `IMR`/`ISR` bytes as authoritative; synchronize every host write into the native shadow, reject split host/native latch or scheduler state, and never let native defaults overwrite the host image. This is bridge-regression evidence (level 5), not hardware evidence |
 | Wide-write/callback atomicity | WAIT/timer writes could remain pending, retrying callback signatures after a body `TypeError` could invoke a side effect twice, and a later byte failure could leave native counters, mirror state, or trace ordering partially advanced | Invoke each callback once after arity inspection, flush deferred writes in order before reporting success, and roll back native CPU/device state, mirror/dirty queues, counters, and global trace ordering on failure. Because an external host byte may already have committed, record uncertain addresses and poison mutation until RESET rereads them from authoritative host memory |
 | Poisoned key APIs | Key injection/release could mutate native keyboard, IRQ, or mirror state and call the host after an earlier callback failure | Gate all four Rust key APIs while poisoned; make each key operation a mirror/keyboard/timer transaction, stop after the first failed callback, roll back native state, and retain the original poison reason. This is bridge-regression evidence (level 5), not hardware evidence |
@@ -135,10 +213,14 @@ not, by itself, distinguish an internal mask at `MV` from one at `PUSHU`; the
 architectural emulator model normalizes at the register write. The decoder
 therefore accepts the raw third-byte alias
 for register-load opcodes `0C..0F` and normalizes it to the effective 20-bit
-value. Text assembly still emits only canonical values. U and S share that
-architectural operand class, although an equally direct U/S upper-nibble
-capture remains queued. This result must not be generalized to `JPF`, `CALLF`,
-external-address operands, or interrupt vectors without their own probe.
+value. Text assembly still emits only canonical values. A later U probe found
+the same low-20-bit observable result through both comparison and U-to-Y/push
+consumers. A follow-up Y/S matrix found the same result through discriminating
+D7 comparisons and copy/serialization, so all four X/Y/U/S architectural
+register consumers are covered. The physical point at which bits 23-20
+disappear is unobservable. These results must not be generalized to `JPF`,
+`CALLF`, external-address operands, or interrupt vectors without their own
+probe.
 
 ## Emulator integrity boundaries
 
@@ -190,44 +272,64 @@ same instruction identity and interrupt-image fields; duplicate indices and
 missing events are errors.  These guarantees make failures visible, but a
 matching trace still establishes only cross-implementation agreement.
 
-IRQ-boundary parity remains a separate emulator-integrity follow-up. The
-narrowed generic Rust `CoreRuntime` gate proves that a step whose entry state
-cannot select an IRQ transfer does not speculatively inspect the IRQ vector,
-and that a source first armed after that gate is left for a later step. It does
-not prove that Python/PCE and `CoreRuntime` agree on HALT/OFF wake versus
-dormant-PC fetch or execution, on an entry-pending unmasked IRQ versus the
-current opcode, or on the acceptance boundary for key, ON-key, external, SIO,
-and timer sources. Those cases need small cross-runtime traces before scheduler
-lockstep is claimed; real-hardware traces are still required to promote the
-resulting model to silicon behavior.
+IRQ-boundary parity remains an emulator-integrity follow-up for source-specific
+peripheral edges. Hardware now establishes HALT/OFF fall-through resume and
+interrupt-atomic WAIT with delivery after the fall-through fetch. The narrowed
+generic Rust `CoreRuntime` gate additionally prevents speculative vector reads
+and leaves a source first armed after that gate for a later step. Key, ON-key,
+external, SIO, and timer re-latching still need small cross-runtime traces and,
+where electrical timing matters, source-specific device evidence; those are
+peripheral-scheduler questions rather than unresolved instruction semantics.
 
 ## Explicit model contracts
 
 These behaviors are deliberately testable, but a passing test must not be
 described as silicon proof:
 
-- For nonzero `I`, `WAIT` requests exactly `I` idle cycles in addition to the
-  opcode step, clears `I`, and preserves `C`/`Z`.
-- `PMDF` preserves arithmetic flags.
-- External/power-on reset and software opcode `FF` are not treated as proven
-  equivalents. Their UCR/USR/ISR/SCR/SSR/LCC mutations, stack behavior, and
-  general-register/flag retention are current manual-derived model contracts;
-  only the distinct reset-vector slot is established here.
-- HALT and OFF register mutations and wake sources are provisional.  The two
-  power states must remain distinguishable even where a host API exposes a
-  common `halted` boolean.  The Python/PCE model preserves pending status that
-  is not a wake source; OFF wakes only for ONKI, while HALT may wake for any
-  already asserted ISR source even if it is masked or host-side generation of
-  that source is disabled. In that wrapper, wake is an idle-step boundary: it
-  changes power/IRQ state without fetching the dormant PC, and an
-  already-unmasked IRQ may replace that saved PC on the next scheduling pass.
-- Multi-byte overlapping writes are ordered low byte first in the current
-  emulator contract, with the full destination and source snapshotted before
-  the first byte is written.
+- `WAIT` requests an effective host idle count of `I` when nonzero and 65,536
+  when zero, in addition to the opcode step in the emulator. Countdown length,
+  clearing I, architectural C/Z preservation, the zero-count wrap, and
+  interrupt-atomic delivery after the fall-through fetch are hardware-backed.
+  Mapping one host idle unit to oscillator time remains a machine-timing
+  contract. Both backends make one bounded timing-hook request rather than
+  simulating an unbounded host loop.
+- External/power-on reset and software opcode `FF` are not treated as identical
+  reset causes. Device capture proves software FF's low-first
+  `FFFFD..FFFFF` vector fetch, no interrupt frame, and first target fetch.
+  UCR/USR/ISR/SCR/SSR/LCC mutations and general-register/flag retention remain
+  manual-derived because reset-ROM initialization begins immediately.
+- HALT and OFF remain distinct power states even where a host API exposes a
+  common `halted` boolean. Device capture proves exact fall-through resume,
+  STI wake after HALT, and ordinary ON/BREAK wake after ROM-prepared OFF. The
+  Python/PCE policy that OFF wakes only for ONKI and HALT can wake for any
+  asserted ISR source is the deterministic peripheral integration contract for
+  source combinations not directly exercised on the connected unit.
+- An isolated PC-E500 matrix covers exact aliases and both ±1 directions for
+  `MVW`, `MVP`, `MVL`, `MVLD`, `EXL`, and `EXP`. Fixed-width move final states
+  are snapshot-equivalent; counted moves show direction-specific cascades;
+  and `EXL`/`EXP` are sequential-byte-exchange-equivalent. Overlapping `EXP`
+  contradicts whole-triple snapshot behavior. Counted I clears, fixed-width I
+  and seeded `F=03` survive, and comparative total-run timing matches within
+  one tick. Final state does not establish invisible IMEM micro-order;
+  tested BP-relative `MVW`/`MVP` self-overlaps also retain snapshot-equivalent
+  source and initial-destination selection after BP is overwritten, while
+  counted companions fix the tested BP, PX, BP+PX destination bases and PY
+  source base before iteration. A later read-only CE1 trace decisively verifies
+  that direct and both displaced `F1`/`F2`/`F3` modes fix their initial
+  effective source pointer and read two/three ordered bytes from it before
+  overlapping writes. A companion CE1 trace verifies every direct and
+  displaced `F8`/`F9`/`FA`/`FB` effective destination and its
+  one/two/three/I ascending write-address sequence. These captures exposed
+  Rust's former non-boundary wide-callback collapse; wide loads/stores now
+  expand to ordered wrapped bytes. The loaded gateware could not expose the
+  driven byte values, so write data and partial visibility remain model
+  contracts. Read-side
+  IMEM/external boundary wrapping is separately device-verified; write-side
+  boundary order remains model-only.
 - `F` occupies one byte in stack/interrupt frames, but only `C` and `Z` are
-  currently modeled.  Locally generated images are therefore `0..3`; incoming
-  images with any of bits 2-7 set fail closed before registers, stack pointers,
-  memory, or interrupt state can change.
+  architectural. `POPU F`, `POPS F`, and `RETI` are hardware-verified to
+  normalize arbitrary stack bytes with `raw & 03`; locally generated pushes
+  and interrupt frames therefore emit only `0..3`.
 
 ## Quarantined or hardware-trace work
 
@@ -236,71 +338,36 @@ O(1) host-timer arithmetic, and parity trace validation are emulator-integrity
 requirements.  They do not need to be promoted to ISA facts, and they do not
 resolve any silicon question below.
 
-The following cases must be cross-validated on a real SC62015 target before
-they are promoted to architecture facts:
+The paired private repository's 2026-09-01 closure record concludes that no
+remaining hardware row selects between competing architectural descriptions of
+a valid implemented opcode. The following residual work remains intentionally
+outside that closure:
 
-1. `TCL` timer-divider phase changes for every `LCC.STCL`/`LCC.MTCL`
-   combination.  Execution currently raises an error.
-2. Silicon behavior for `I=0` on every counted instruction, including `WAIT`.
-   All ten instruction families currently fail atomically before PC, `I`,
-   pointers, flags, memory, or timing mutation.
-3. For nonzero `I`, the total `1 + I` WAIT timing, when `I` clears, `C`/`Z`/`F`
-   preservation, timer and bus-countdown progression, and whether interrupts
-   are accepted during or only after the wait.
-4. Probe software opcode `FF` separately from external/power-on reset: vector
-   fetch and byte order, stack effects, resume PC, `S`/`U`/`F`/`C`/`Z`
-   retention, and SFR/timer mutations. For HALT and OFF, also capture resume
-   PC, flags, active clock domains, pending status, and masked/unmasked wake
-   sources.
-5. `PMDF` carry/zero flag preservation.
-6. Reserved `20`/`BF`, illegal `E3`/`EB` modes, unproven redundant PRE,
-   consecutive PRE, and reserved register-selector encodings. These currently
-   fail closed, including the disproved overlapping `23 48` stream at `F0002`.
-7. Whether ignored bytes in BP+PX/BP+PY encodings and `ED`/`FD` aliases have
-   observable silicon behavior.  Noncanonical ignored PRE selector bytes are
-   rejected; documented register-pair aliases remain decodable.
-8. Silicon behavior for a deliberately executed `JPF`/`CALLF`, direct external
-   address, or interrupt vector whose encoded high byte has bits 7-4 set.
-   Existing ROM sightings are table/data bytes, not executed proof, so those
-   control/address consumers currently reject the form. Register-immediate
-   opcodes `0C..0F` are excluded: X/Y captures already prove a low-20-bit
-   observable load-to-push path.
-9. Byte order and final state for self-overlapping `MVW`/`MVP` and other wide
-   writes, including whether source/destination addresses are snapshotted or
-   reread after each byte. Separately validate `MVL`/`MVLD`/`EXL` overlap,
-   pointer/`I` update order, cycle counts, bus ordering, and address-space
-   boundary crossings.
-10. Whether `POPU/POPS F`, `PUSHU/PUSHS F`, and interrupt entry/`RETI`
-   preserve, clear, or otherwise expose bits 2-7 of the byte-wide `F` image.
-   Both cores currently reject such raw images before any architectural
-   mutation rather than inventing normalization or retention semantics.
-11. Exact silicon behavior of `EXP (m),(n)` and `C7 CMPP (m),(n)` when either
-    source high byte has bits 7-4 set, plus a discriminating upper-nibble probe
-    for `D7 CMPP (m),r3`. The sibling `MVP` path preserves all three data bytes,
-    but neither stock ROM provides a credible executed `EXP` use site and no
-    capture isolates either comparison's flags. `EXP` therefore rejects either
-    nonzero upper nibble before its first write; `C7` remains a model-derived
-    raw three-byte comparison and `D7` a model-derived 20-bit comparison.
-12. ON-key electrical/status ordering: when SSR.ONK and ISR.ONKI assert and
-    clear relative to press/release, whether ONKI re-latches while masked or
-    in service, and how another pending source is selected after release.
-    Transactional host/native behavior is an emulator integrity rule only.
-13. System-interrupt frame bus order when `S < 5`, including whether each byte
-    wraps independently at `FFFFF -> 00000` and whether any partial write is
-    externally visible before vector fetch.
-14. Direct upper-nibble load/readback for U and S, plus an upper-bit-sensitive
-    ALU/compare probe for X/Y that can distinguish load-time normalization from
-    push-time truncation. U/S use the same 20-bit architectural register class,
-    so the emulator masks them identically, but current captures do not
-    independently exercise opcodes `0E` and `0F`.
-15. RETI entered with the delivered ISR bit deliberately still asserted. Both
-    stock ROMs acknowledge before RETI, so the emulator's no-implicit-ack rule
-    is a conservative, ROM-consistent model rather than an isolated silicon
-    result.
-16. Archive the raw FT600 JSON and exact probe source/configuration for every
-    capture report cited by the paired private audit, then re-run their
-    decoders. The checked-in event tables are detailed but cannot currently be
-    regenerated from this checkout alone.
+1. Reserved `20`/`BF`, reserved register selectors, and malformed mode/PRE
+   encodings. Device probes pin the accepted PRE aliases/boundary and show that
+   displacement-shaped `E3` is not a documented alias. All other malformed
+   cases remain fail-closed; silicon behavior here is not a valid-ISA claim.
+2. Synthetic interrupt/reset vectors with nonzero bits 23–20 and untested
+   absolute-memory opcode families. `JPF`/`CALLF` are resolved for every upper
+   nibble, and the named data-address families are resolved for tested nibble
+   `8`; untested consumers are not promoted by analogy.
+3. External partial-write visibility and invisible IMEM micro-order. Current
+   gateware establishes write addresses/count/order but not trustworthy write
+   data. Architectural values and effective-base rules are already covered by
+   device round trips and the documented instruction contract.
+4. A real interrupt-frame write with `S < 5`. Such a probe can corrupt low live
+   memory, so the cores use byte-wise 20-bit wrapping established independently
+   rather than claiming direct boundary-trace evidence.
+5. Detailed software/external/power-on RESET SFR retention. Software FF's
+   vector order, no-frame transfer, and target fetch are device-verified; reset
+   ROM code immediately overwrites SFRs, so remaining retention stays labeled
+   manual-derived.
+6. ON-key, general-key, timer-re-latch, peripheral-ready, debounce/repeat, and
+   asynchronous latency questions. These belong to device scheduling and
+   peripherals, not alternate meanings of HALT/OFF/WAIT/RETI.
+7. Preserve equivalent raw artifacts for any older cited report that still has
+   only a decoded event table. This is evidence reproducibility, not a silicon
+   semantic question.
 
 Static byte matches in a ROM are insufficient evidence: data and misaligned
 instruction streams contain opcode-looking bytes.  A control-flow xref,
@@ -318,6 +385,8 @@ cargo test --manifest-path sc62015/core/Cargo.toml --all-features
 cargo test --manifest-path sc62015/rustcore/Cargo.toml
 ```
 
-The private ROM-evidence repository contains exact decoder commands and
-addresses.  Those ROM observations establish use-site intent; the hardware
-trace queue above deliberately remains separate.
+The paired private ROM-evidence repository contains exact decoder commands,
+addresses, raw campaign artifacts, and the canonical hardware trace queue.
+Those ROM observations establish use-site intent; only rows backed by the
+archived device campaign or follow-up are described above as
+real-device-derived.

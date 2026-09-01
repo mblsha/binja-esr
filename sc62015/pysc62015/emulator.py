@@ -424,9 +424,8 @@ def validate_vector_transfer(
             f"Unfused or malformed PRE instruction at 0x{target:05X}"
         )
     if isinstance(instr, TCL):
-        raise NotImplementedError(
-            "TCL timer-clear side effects are not implemented; hardware trace required"
-        )
+        if not callable(getattr(memory, "clear_timer_phases", None)):
+            raise NotImplementedError("TCL requires a timer-phase-clear memory hook")
     return target
 
 
@@ -998,20 +997,6 @@ class Emulator:
             instr = self.decode_instruction(address, read_fn=read_fn)
         assert instr is not None, f"Failed to decode instruction at {address:04X}"
 
-        # Silicon behavior at I=0 is not established for any counted
-        # instruction (including WAIT).  Reject it before call-stack,
-        # pointer, flag, memory, or timing side effects.  The lifted forms
-        # carry the same validation intrinsic so direct LLIL evaluation
-        # cannot bypass this dispatch guard.
-        if (
-            isinstance(instr, I_COUNTED_INSTRUCTIONS)
-            and (self.regs.get(RegisterName.I) & 0xFFFF) == 0
-        ):
-            raise NotImplementedError(
-                "SC62015 I=0 counted-instruction semantics require "
-                "real-hardware tracing"
-            )
-
         # The decoder already fetched and cached the instruction bytes. Re-read
         # of the opcode is observable on callback-backed buses and can consume
         # a device value twice, so use the decoded opcode identity directly.
@@ -1052,14 +1037,11 @@ class Emulator:
                 "prepared SC62015 vector transfer does not match the current instruction"
             )
 
-        # TCL has timer-phase side effects controlled by LCC.STCL/MTCL.  Until
-        # the peripheral hook is implemented and hardware-traced, stop before
-        # advancing PC rather than silently executing it as a NOP.
         if isinstance(instr, TCL):
-            raise NotImplementedError(
-                "TCL timer-clear side effects are not implemented; "
-                "hardware trace required"
-            )
+            if not callable(getattr(self.memory, "clear_timer_phases", None)):
+                raise NotImplementedError(
+                    "TCL requires a timer-phase-clear memory hook"
+                )
 
         # Vector-bearing synchronous transfers must fail before the generic
         # execution path is marked side-effecting.  Their lifted forms repeat
@@ -1141,7 +1123,8 @@ class Emulator:
             assert current_instr_length is not None, (
                 "InstructionInfo.length was not set by analyze()"
             )
-            wait_cycles = self.regs.get(RegisterName.I) & 0xFFFF
+            initial_i = self.regs.get(RegisterName.I) & 0xFFFF
+            wait_cycles = initial_i if initial_i != 0 else 0x10000
             self._execution_may_have_side_effects = True
             wait_hook(int(wait_cycles))
             # Advance PC only after timing has been accounted for (we return

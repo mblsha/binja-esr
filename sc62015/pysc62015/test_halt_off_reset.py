@@ -42,7 +42,7 @@ def test_reset_disabled_starts_in_running_power_state():
 
 
 def test_halt_model_contract():
-    """Pin the provisional HALT register model; this is not hardware proof."""
+    """Pin the documented HALT state observed by the connected PC-E500."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -79,7 +79,7 @@ def test_halt_model_contract():
 
 
 def test_off_model_contract():
-    """Pin the provisional OFF register model and keep it distinct from HALT."""
+    """Pin documented OFF state while keeping it distinct from HALT."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -116,7 +116,7 @@ def test_off_model_contract():
 
 
 def test_reset_model_contract_and_distinct_vector_slot():
-    """Pin the synthetic reset model and its distinct vector-slot contract."""
+    """Pin manual SFR state plus the device-verified reset-vector contract."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -194,7 +194,7 @@ def test_reset_model_contract_and_distinct_vector_slot():
 
 
 def test_power_on_reset_model_contract():
-    """Pin the provisional power-on register model and reset-vector fetch."""
+    """Pin the manual power-on state and device-verified reset-vector fetch."""
     memory, _ = create_memory()
 
     # Set up initial values
@@ -401,7 +401,7 @@ def test_vector_static_preflight_does_not_recurse_or_apply_i_dependent_checks(
     (
         (bytes.fromhex("20"), InvalidInstruction, "opcode 0x20"),
         (bytes.fromhex("313100"), InvalidInstruction, "PRE"),
-        (bytes.fromhex("CE"), NotImplementedError, "TCL timer-clear"),
+        (bytes.fromhex("CE"), NotImplementedError, "timer-phase-clear memory hook"),
     ),
 )
 def test_vector_static_preflight_rejects_invalid_pre_and_tcl_targets(

@@ -72,10 +72,6 @@ class SC62015(Architecture):
         "OFF": IntrinsicInfo(inputs=[], outputs=[]),
         "RESET": IntrinsicInfo(inputs=[], outputs=[]),
         "VALIDATE_F": IntrinsicInfo(inputs=[Type.int(1, False)], outputs=[]),
-        "VALIDATE_EXP_HIGH_NIBBLE": IntrinsicInfo(
-            inputs=[Type.int(3, False), Type.int(3, False)], outputs=[]
-        ),
-        "VALIDATE_I_COUNT": IntrinsicInfo(inputs=[Type.int(2, False)], outputs=[]),
         "VALIDATE_VECTOR_TRANSFER": IntrinsicInfo(
             inputs=[
                 Type.int(3, False),

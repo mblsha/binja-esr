@@ -569,12 +569,17 @@ def test_llama_present_broken_preflight_peek_does_not_fall_back() -> None:
         raw_cpu.execute_instruction(0)
 
 
-def test_llama_rejected_data_preflight_never_uses_normal_read_callback() -> None:
+def test_llama_exp_preflight_does_not_peek_mutable_operand_data() -> None:
     class CountingMemory:
         def __init__(self) -> None:
             self.raw = bytearray(ADDRESS_SPACE_SIZE)
             self.raw[:4] = bytes.fromhex("32C22050")  # PRE (n),(n); EXP (20),(50)
-            self.raw[INTERNAL_MEMORY_START + 0x22] = 0xF0
+            self.raw[INTERNAL_MEMORY_START + 0x20 : INTERNAL_MEMORY_START + 0x23] = (
+                bytes.fromhex("1122F0")
+            )
+            self.raw[INTERNAL_MEMORY_START + 0x50 : INTERNAL_MEMORY_START + 0x53] = (
+                bytes.fromhex("334410")
+            )
             self.normal_reads: list[int] = []
             self.preflight_reads: list[int] = []
 
@@ -594,11 +599,18 @@ def test_llama_rejected_data_preflight_never_uses_normal_read_callback() -> None
     memory = CountingMemory()
     raw_cpu = RawLlamaCPU(memory=memory, reset_on_init=False)
 
-    with pytest.raises(RuntimeError, match="EXP upper-nibble behavior"):
-        raw_cpu.execute_instruction(0)
+    raw_cpu.execute_instruction(0)
 
-    assert memory.normal_reads == [0]
-    assert INTERNAL_MEMORY_START + 0x22 in memory.preflight_reads
+    assert memory.raw[
+        INTERNAL_MEMORY_START + 0x20 : INTERNAL_MEMORY_START + 0x23
+    ] == bytes.fromhex("334410")
+    assert memory.raw[
+        INTERNAL_MEMORY_START + 0x50 : INTERNAL_MEMORY_START + 0x53
+    ] == bytes.fromhex("1122F0")
+    assert INTERNAL_MEMORY_START + 0x22 not in memory.preflight_reads
+    assert INTERNAL_MEMORY_START + 0x52 not in memory.preflight_reads
+    assert INTERNAL_MEMORY_START + 0x22 in memory.normal_reads
+    assert INTERNAL_MEMORY_START + 0x52 in memory.normal_reads
 
 
 def test_llama_facade_render_decode_does_not_duplicate_instruction_fetch() -> None:

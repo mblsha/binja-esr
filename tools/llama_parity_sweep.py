@@ -47,16 +47,13 @@ from sc62015.pysc62015.instr.opcodes import (
 )
 
 STACK_SEED = 0x80000
-# These opcodes are supposed to reject on both backends.  0x20/0xBF are
-# reserved encodings; TCL (0xCE) is deliberately quarantined until its timer
-# side effects are implemented from hardware evidence.
+# These opcodes are supposed to reject on this minimal bus. 0x20/0xBF are
+# reserved encodings; TCL (0xCE) is hardware-defined but this sweep's
+# LoggingMemory intentionally has no atomic timer-phase-clear hook.
 EXPECTED_REJECTION_OPCODES = frozenset(
     {0x20, 0xBF, 0xCE, *range(0x21, 0x28), *range(0x30, 0x38)}
 )
-FAIL_CLOSED_CONTRACT_MARKERS = (
-    "SC62015 I=0 counted-instruction semantics require real-hardware tracing",
-    "TCL timer-clear side effects are not implemented",
-)
+FAIL_CLOSED_CONTRACT_MARKERS = ("TCL requires a timer-phase-clear",)
 
 
 class LoggingMemory(Memory):

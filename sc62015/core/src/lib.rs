@@ -1253,6 +1253,7 @@ impl CoreRuntime {
             host_write: Option<*mut (dyn FnMut(u32, u8) + Send)>,
             iq7000_clock_seed: Option<*const iq7000::Iq7000ClockSeed>,
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
+            timer_ptr: *mut TimerContext,
             onk_level: bool,
             #[allow(dead_code)]
             cycle: u64,
@@ -1581,6 +1582,21 @@ impl CoreRuntime {
                 // CoreRuntime applies WAIT timing after execution so timer,
                 // keyboard, and metadata updates share one outer-step path.
             }
+            fn supports_timer_phase_clear(&self) -> bool {
+                !self.timer_ptr.is_null()
+            }
+            fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
+                unsafe {
+                    if let Some(timer) = self.timer_ptr.as_mut() {
+                        if clear_mti {
+                            timer.next_mti = self.cycle.wrapping_add(timer.mti_period);
+                        }
+                        if clear_sti {
+                            timer.next_sti = self.cycle.wrapping_add(timer.sti_period);
+                        }
+                    }
+                }
+            }
         }
 
         for _ in 0..instructions {
@@ -1647,6 +1663,7 @@ impl CoreRuntime {
                         .as_ref()
                         .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
                     iq7000_rtc,
+                    timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level: self.onk_level,
                     cycle: self.metadata.cycle_count,
                     pc,
@@ -2036,6 +2053,7 @@ impl CoreRuntime {
                             .as_ref()
                             .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
                         iq7000_rtc,
+                        timer_ptr: self.timer.as_mut() as *mut TimerContext,
                         onk_level: self.onk_level,
                         cycle: self.metadata.cycle_count,
                         pc: pc_before,
@@ -2543,14 +2561,13 @@ impl CoreRuntime {
     fn push_stack(&mut self, reg: RegName, value: u32, bits: u8) {
         let bytes = bits.div_ceil(8);
         let mask = mask_for(reg);
-        let sp = self.state.get_reg(reg) & mask;
-        let new_sp = sp.wrapping_sub(bytes as u32) & mask;
-        for i in 0..bytes {
+        let mut sp = self.state.get_reg(reg) & mask;
+        for i in (0..bytes).rev() {
+            sp = sp.wrapping_sub(1) & mask;
             let byte = (value >> (8 * i)) & 0xFF;
-            let address = new_sp.wrapping_add(i as u32) & mask;
-            let _ = self.memory.store(address, 8, byte);
+            let _ = self.memory.store(sp, 8, byte);
         }
-        self.state.set_reg(reg, new_sp);
+        self.state.set_reg(reg, sp);
     }
 
     fn deliver_pending_irq(&mut self) -> Result<()> {
@@ -2996,6 +3013,7 @@ fn irq_source_priority(name: &str) -> u8 {
 mod tests {
     use super::*;
     use crate::llama::opcodes::RegName;
+    use crate::memory::IMEM_LCC_OFFSET;
     use crate::perfetto::perfetto_test_guard;
     use std::fs;
 
@@ -5577,7 +5595,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_with_zero_i_fails_before_runtime_mutation() {
+    fn hw002_wait_with_zero_i_advances_full_wrap_and_preserves_flags() {
         let mut rt = CoreRuntime::new();
         rt.memory.write_external_slice(0, &[0xEF]);
         rt.state.set_pc(0);
@@ -5585,21 +5603,19 @@ mod tests {
         rt.state.set_reg(RegName::FC, 1);
         rt.state.set_reg(RegName::FZ, 1);
 
-        let err = rt.step(1).expect_err("WAIT I=0 must be quarantined");
+        rt.step(1).expect("HW-002 WAIT I=0 must execute");
 
-        assert!(err
-            .to_string()
-            .contains(crate::llama::eval::ZERO_I_COUNT_ERROR));
-        assert_eq!(rt.metadata.cycle_count, 0);
+        assert_eq!(rt.metadata.cycle_count, 0x1_0001);
+        assert_eq!(rt.metadata.instruction_count, 1);
         assert_eq!(rt.state.get_reg(RegName::I), 0);
         assert_eq!(rt.state.get_reg(RegName::FC), 1);
         assert_eq!(rt.state.get_reg(RegName::FZ), 1);
-        assert_eq!(rt.state.pc(), 0);
+        assert_eq!(rt.state.pc(), 1);
     }
 
     #[test]
     fn quarantined_opcodes_fail_before_scheduler_or_level_mutation() {
-        for opcode in [0x20, 0xBF, 0xCE, 0xEF] {
+        for opcode in [0x20, 0xBF] {
             let mut rt = CoreRuntime::new();
             rt.memory.write_external_byte(0, opcode);
             rt.state.set_pc(0);
@@ -5627,6 +5643,35 @@ mod tests {
             assert_eq!(rt.timer.next_sti, 0, "opcode 0x{opcode:02X}");
             assert_eq!(rt.memory.memory_read_count(), reads_before);
             assert_eq!(rt.memory.memory_write_count(), writes_before);
+        }
+    }
+
+    #[test]
+    fn hw001_tcl_restarts_selected_timer_phases_without_clearing_status() {
+        for (lcc, clear_mti, clear_sti) in [
+            (0x00_u8, false, false),
+            (0x01, true, false),
+            (0x02, false, true),
+            (0x03, true, true),
+        ] {
+            let mut rt = CoreRuntime::new();
+            rt.memory.write_external_byte(0, 0xCE);
+            rt.memory.write_internal_byte(IMEM_LCC_OFFSET, lcc);
+            rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0xA5);
+            rt.state.set_pc(0);
+            *rt.timer = TimerContext::new(true, 10, 20);
+            rt.timer.next_mti = 77;
+            rt.timer.next_sti = 88;
+
+            rt.step(1).expect("silicon-verified TCL must execute");
+
+            assert_eq!(rt.state.pc(), 1);
+            assert_eq!(rt.metadata.instruction_count, 1);
+            assert_eq!(rt.metadata.cycle_count, 1);
+            assert_eq!(rt.timer.next_mti, if clear_mti { 10 } else { 77 });
+            assert_eq!(rt.timer.next_sti, if clear_sti { 20 } else { 88 });
+            assert_eq!(rt.memory.read_internal_byte(IMEM_LCC_OFFSET), Some(lcc));
+            assert_eq!(rt.memory.read_internal_byte(IMEM_ISR_OFFSET), Some(0xA5));
         }
     }
 
@@ -5662,11 +5707,7 @@ mod tests {
             ("JP narrow selector", &[0x11, 0x00]),
             ("E3 invalid mode", &[0xE3, 0x10, 0x00]),
             ("EB invalid mode", &[0xEB, 0x10, 0x00]),
-            ("ignored BP+PX selector", &[0x24, 0xA0, 0x01]),
-            (
-                "absolute external upper nibble",
-                &[0x62, 0x34, 0x12, 0xF0, 0x00],
-            ),
+            ("unverified BP+PY selector", &[0x21, 0xC8, 0x00, 0x01]),
         ];
 
         for &(name, bytes) in cases {
@@ -5823,101 +5864,96 @@ mod tests {
     }
 
     #[test]
-    fn data_dependent_failures_preflight_before_scheduler_mutation() {
-        for opcode in [0xC2, 0x3E, 0x5F, 0x01] {
-            let mut rt = CoreRuntime::new();
-            rt.state.set_pc(0);
-            rt.state.set_reg(RegName::U, 0x00180);
-            rt.state.set_reg(RegName::S, 0x00190);
-            rt.state.set_reg(RegName::FC, 1);
-            rt.state.set_reg(RegName::FZ, 1);
-            rt.state.set_reg(RegName::IMR, 0x55);
-            rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x55);
-            match opcode {
-                0xC2 => {
-                    rt.memory.write_external_slice(0, &[0xC2, 0x20, 0x30]);
-                    rt.memory.write_internal_byte(0x20, 0x11);
-                    rt.memory.write_internal_byte(0x21, 0x22);
-                    rt.memory.write_internal_byte(0x22, 0xA3);
-                    rt.memory.write_internal_byte(0x30, 0x44);
-                    rt.memory.write_internal_byte(0x31, 0x55);
-                    rt.memory.write_internal_byte(0x32, 0x06);
-                }
-                0x3E => {
-                    rt.memory.write_external_byte(0, 0x3E);
-                    rt.memory.write_external_byte(0x00180, 0xFC);
-                }
-                0x5F => {
-                    rt.memory.write_external_byte(0, 0x5F);
-                    rt.memory.write_external_byte(0x00190, 0xFC);
-                }
-                0x01 => {
-                    rt.memory.write_external_byte(0, 0x01);
-                    rt.memory.write_external_byte(0x00190, 0xA5);
-                    rt.memory.write_external_byte(0x00191, 0xFC);
-                }
-                _ => unreachable!(),
-            }
-            *rt.timer = TimerContext::new(true, 1, 1);
-            rt.timer.next_mti = 0;
-            rt.timer.next_sti = 0;
-            rt.onk_level = true;
-            rt.external_interrupt_level = true;
-            let reads_before = rt.memory.memory_read_count();
-            let writes_before = rt.memory.memory_write_count();
-            let u_before = rt.state.get_reg(RegName::U);
-            let s_before = rt.state.get_reg(RegName::S);
-            let imr_before = rt
-                .memory
-                .read_internal_byte_silent(IMEM_IMR_OFFSET)
-                .unwrap_or(0);
-            let isr_before = rt
-                .memory
-                .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                .unwrap_or(0);
+    fn reti_stacked_f_upper_bits_normalize_through_scheduler() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::U, 0x00180);
+        rt.state.set_reg(RegName::S, 0x00190);
+        rt.state.set_reg(RegName::FC, 1);
+        rt.state.set_reg(RegName::FZ, 1);
+        rt.state.set_reg(RegName::IMR, 0x55);
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x55);
+        rt.memory.write_external_byte(0, 0x01);
+        rt.memory.write_external_byte(0x00190, 0xA5);
+        rt.memory.write_external_byte(0x00191, 0xFC);
+        rt.memory.write_external_byte(0x00192, 0x12);
+        rt.memory.write_external_byte(0x00193, 0x34);
+        rt.memory.write_external_byte(0x00194, 0x05);
+        *rt.timer = TimerContext::new(true, 1, 1);
+        rt.timer.next_mti = 100;
+        rt.timer.next_sti = 100;
 
-            let error = rt
-                .step(1)
-                .expect_err("invalid EXP/F image must fail in preflight");
+        rt.step(1).expect("RETI accepts and normalizes stacked F");
 
-            if opcode == 0xC2 {
-                assert!(error
-                    .to_string()
-                    .contains(crate::llama::eval::EXP_UPPER_NIBBLE_ERROR));
-            } else {
-                assert!(error.to_string().contains("unsupported SC62015 F image"));
-            }
-            assert_eq!(rt.metadata.cycle_count, 0, "opcode {opcode:02X}");
-            assert_eq!(rt.metadata.instruction_count, 0, "opcode {opcode:02X}");
-            assert_eq!(rt.state.pc(), 0, "opcode {opcode:02X}");
-            assert_eq!(
-                rt.state.get_reg(RegName::U),
-                u_before,
-                "opcode {opcode:02X}"
-            );
-            assert_eq!(
-                rt.state.get_reg(RegName::S),
-                s_before,
-                "opcode {opcode:02X}"
-            );
-            assert_eq!(rt.state.get_reg(RegName::FC), 1, "opcode {opcode:02X}");
-            assert_eq!(rt.state.get_reg(RegName::FZ), 1, "opcode {opcode:02X}");
-            assert_eq!(
-                rt.memory.read_internal_byte_silent(IMEM_IMR_OFFSET),
-                Some(imr_before),
-                "opcode {opcode:02X}"
-            );
-            assert_eq!(
-                rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
-                Some(isr_before),
-                "opcode {opcode:02X}"
-            );
-            assert_eq!(rt.timer.next_mti, 0, "opcode {opcode:02X}");
-            assert_eq!(rt.timer.next_sti, 0, "opcode {opcode:02X}");
-            assert!(!rt.timer.irq_pending, "opcode {opcode:02X}");
-            assert_eq!(rt.memory.memory_read_count(), reads_before);
-            assert_eq!(rt.memory.memory_write_count(), writes_before);
+        assert_eq!(rt.metadata.instruction_count, 1);
+        assert_eq!(rt.state.pc(), 0x53412);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x00195);
+        assert_eq!(rt.state.get_reg(RegName::F), 0);
+        assert_eq!(rt.state.get_reg(RegName::IMR), 0xA5);
+        assert_eq!(
+            rt.memory.read_internal_byte_silent(IMEM_IMR_OFFSET),
+            Some(0xA5)
+        );
+    }
+
+    #[test]
+    fn hardware_resolved_data_paths_execute_through_scheduler() {
+        let mut popu = CoreRuntime::new();
+        popu.state.set_pc(0);
+        popu.state.set_reg(RegName::U, 0x00180);
+        popu.state.set_reg(RegName::F, 0x03);
+        popu.memory.write_external_byte(0, 0x3E);
+        popu.memory.write_external_byte(0x00180, 0xFC);
+
+        popu.step(1).expect("POPU F upper bits normalize");
+
+        assert_eq!(popu.metadata.instruction_count, 1);
+        assert_eq!(popu.state.pc(), 1);
+        assert_eq!(popu.state.get_reg(RegName::U), 0x00181);
+        assert_eq!(popu.state.get_reg(RegName::F), 0);
+
+        let mut pops = CoreRuntime::new();
+        pops.state.set_pc(0);
+        pops.state.set_reg(RegName::S, 0x00180);
+        pops.state.set_reg(RegName::F, 0x03);
+        pops.memory.write_external_byte(0, 0x5F);
+        pops.memory.write_external_byte(0x00180, 0xA5);
+
+        pops.step(1).expect("POPS F upper bits normalize");
+
+        assert_eq!(pops.metadata.instruction_count, 1);
+        assert_eq!(pops.state.pc(), 1);
+        assert_eq!(pops.state.get_reg(RegName::S), 0x00181);
+        assert_eq!(pops.state.get_reg(RegName::F), 0x01);
+
+        let mut exp = CoreRuntime::new();
+        exp.state.set_pc(0);
+        exp.state.set_reg(RegName::F, 0x03);
+        exp.memory.write_external_slice(0, &[0xC2, 0x20, 0x30]);
+        for (offset, value) in [0x11, 0x22, 0xF0].into_iter().enumerate() {
+            exp.memory.write_internal_byte(0x20 + offset as u32, value);
         }
+        for (offset, value) in [0x44, 0x55, 0x10].into_iter().enumerate() {
+            exp.memory.write_internal_byte(0x30 + offset as u32, value);
+        }
+
+        exp.step(1).expect("EXP exchanges raw 24-bit triples");
+
+        assert_eq!(exp.metadata.instruction_count, 1);
+        assert_eq!(exp.state.pc(), 3);
+        assert_eq!(exp.state.get_reg(RegName::F), 0x03);
+        assert_eq!(
+            (0..3)
+                .map(|offset| exp.memory.read_internal_byte_silent(0x20 + offset))
+                .collect::<Vec<_>>(),
+            vec![Some(0x44), Some(0x55), Some(0x10)]
+        );
+        assert_eq!(
+            (0..3)
+                .map(|offset| exp.memory.read_internal_byte_silent(0x30 + offset))
+                .collect::<Vec<_>>(),
+            vec![Some(0x11), Some(0x22), Some(0xF0)]
+        );
     }
 
     #[test]

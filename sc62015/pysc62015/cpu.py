@@ -7,7 +7,6 @@ from importlib import import_module
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Tuple, cast
 
 from .emulator import (
-    I_COUNTED_INSTRUCTIONS,
     Emulator,
     InstructionEvalInfo,
     RegisterName,
@@ -15,26 +14,17 @@ from .emulator import (
     validate_vector_transfer,
     validate_vector_transfer_stability,
 )
-from .constants import INTERNAL_MEMORY_START, validate_f_image
 from .instr import (
-    EX,
     IR,
     RESET,
-    POPS,
-    POPU,
-    RETI,
     Instruction,
     InvalidInstruction,
     PRE,
     TCL,
 )
 from .instr.opcodes import (
-    AddressingMode,
     ENTRY_POINT_ADDR,
-    IMem20,
-    IMEMRegisters,
     INTERRUPT_VECTOR_ADDR,
-    RegF,
 )
 from .stepper import CPURegistersSnapshot, CPUStepResult, CPUStepper
 
@@ -264,19 +254,11 @@ class CPU:
             raise InvalidInstruction(
                 f"Unfused or malformed PRE instruction at 0x{address & 0xFFFFF:05X}"
             )
-        if (
-            isinstance(instr, I_COUNTED_INSTRUCTIONS)
-            and (self.regs.get(RegisterName.I) & 0xFFFF) == 0
-        ):
-            raise NotImplementedError(
-                "SC62015 I=0 counted-instruction semantics require "
-                "real-hardware tracing"
-            )
         if isinstance(instr, TCL):
-            raise NotImplementedError(
-                "TCL timer-clear side effects are not implemented; "
-                "hardware trace required"
-            )
+            if not callable(getattr(self.memory, "clear_timer_phases", None)):
+                raise NotImplementedError(
+                    "TCL requires a timer-phase-clear memory hook"
+                )
 
         if isinstance(instr, IR):
             self.preflight_vector_transfer(INTERRUPT_VECTOR_ADDR, source_pc=address)
@@ -286,68 +268,6 @@ class CPU:
         if not validate_data_dependent:
             return instr
 
-        if isinstance(instr, EX) and instr.name() == "EXP":
-            operands = tuple(instr.operands())
-            modes = instr._addressing_modes()
-            if len(operands) != 2 or not all(
-                isinstance(operand, IMem20) for operand in operands
-            ):
-                raise RuntimeError("malformed EXP operand contract")
-
-            def imem_offset(operand: IMem20, mode: AddressingMode) -> int:
-                if operand.value is None:
-                    raise RuntimeError("decoded EXP selector is missing")
-                selector = int(operand.value) & 0xFF
-
-                def imem_register(register: IMEMRegisters) -> int:
-                    return peek(INTERNAL_MEMORY_START + int(register))
-
-                if mode == AddressingMode.N:
-                    return selector
-                if mode == AddressingMode.BP_N:
-                    return (imem_register(IMEMRegisters.BP) + selector) & 0xFF
-                if mode == AddressingMode.PX_N:
-                    return (imem_register(IMEMRegisters.PX) + selector) & 0xFF
-                if mode == AddressingMode.PY_N:
-                    return (imem_register(IMEMRegisters.PY) + selector) & 0xFF
-                if mode == AddressingMode.BP_PX:
-                    return (
-                        imem_register(IMEMRegisters.BP)
-                        + imem_register(IMEMRegisters.PX)
-                    ) & 0xFF
-                if mode == AddressingMode.BP_PY:
-                    return (
-                        imem_register(IMEMRegisters.BP)
-                        + imem_register(IMEMRegisters.PY)
-                    ) & 0xFF
-                raise RuntimeError(f"unsupported EXP addressing mode {mode!r}")
-
-            values = []
-            for operand, mode in zip(operands, modes):
-                assert isinstance(operand, IMem20)
-                offset = imem_offset(operand, mode)
-                value = 0
-                for byte_index in range(3):
-                    byte_offset = (offset + byte_index) & 0xFF
-                    value |= peek(INTERNAL_MEMORY_START + byte_offset) << (
-                        byte_index * 8
-                    )
-                values.append(value)
-            if any(value & 0xF00000 for value in values):
-                raise NotImplementedError(
-                    "SC62015 EXP high-nibble behavior requires real-hardware tracing"
-                )
-
-        if isinstance(instr, (POPU, POPS)) and isinstance(instr.reg(), RegF):
-            stack_register = (
-                RegisterName.U if isinstance(instr, POPU) else RegisterName.S
-            )
-            stack_address = self.regs.get(stack_register) & 0xFFFFF
-            validate_f_image(peek(stack_address))
-
-        if isinstance(instr, RETI):
-            stack_address = self.regs.get(RegisterName.S) & 0xFFFFF
-            validate_f_image(peek((stack_address + 1) & 0xFFFFF))
         return instr
 
     def preflight_vector_transfer(

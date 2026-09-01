@@ -163,16 +163,6 @@ def test_run_case_classifies_two_sided_quarantined_tcl_rejection(monkeypatch) ->
     assert result.expected_error
 
 
-def test_fail_closed_i_zero_wrappers_are_semantically_equivalent() -> None:
-    marker = "SC62015 I=0 counted-instruction semantics require real-hardware tracing"
-
-    assert llama_parity_sweep._matching_expected_rejection(
-        0x54,
-        f"NotImplementedError: {marker}",
-        f"RuntimeError: llama execute: {marker}",
-    )
-
-
 def test_expected_rejection_does_not_hide_arbitrary_two_sided_errors() -> None:
     assert not llama_parity_sweep._matching_expected_rejection(
         0x20,
@@ -180,8 +170,8 @@ def test_expected_rejection_does_not_hide_arbitrary_two_sided_errors() -> None:
         "RuntimeError: llama execute: different bug",
     )
     assert not llama_parity_sweep._matching_expected_rejection(
-        0x54,
-        "NotImplementedError: SC62015 I=0 counted-instruction semantics require real-hardware tracing",
+        0xCE,
+        "NotImplementedError: TCL requires a timer-phase-clear memory hook",
         None,
     )
 

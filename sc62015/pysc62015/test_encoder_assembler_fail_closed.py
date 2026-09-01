@@ -12,6 +12,7 @@ from .instr import (
     EMemReg,
     EMemRegMode,
     IMem8,
+    Imm20,
     ImmOffset,
     InvalidInstruction,
     Reg3,
@@ -120,11 +121,14 @@ def test_emem_imem_offset_arity_is_exact(composite: bool, missing: bool) -> None
 
 
 def test_imm20_encoder_rejects_value_high_nibble_disagreement() -> None:
-    instr = _decode("03341205")
-    (target,) = tuple(instr.operands())
-    setattr(target, "value", 0x61234)
+    # JPF/CALLF now use FarControlImm20 and intentionally canonicalize the
+    # hardware-verified raw upper-nibble aliases. Keep this invariant focused
+    # on generic, still-strict Imm20 operands.
+    target = Imm20()
+    target.value = 0x61234
+    target.extra_hi = 0x05
     with pytest.raises(InvalidInstruction, match="disagrees with encoded high byte"):
-        encode(instr, 0)
+        target.encode(Encoder(), 0)
 
 
 def test_reg3_encoder_rejects_semantic_selector_disagreement() -> None:

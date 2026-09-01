@@ -157,37 +157,55 @@ def test_ir_stacks_modeled_f_image(backend: str, f_input: int) -> None:
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
 @pytest.mark.parametrize("f_input", [0x04, 0x80, 0xA4, 0xFC, 0xFF])
-@pytest.mark.parametrize(
-    ("opcode", "stack_register"),
-    [
-        (0x3E, RegisterName.U),  # POPU F
-        (0x5F, RegisterName.S),  # POPS F
-    ],
-)
-def test_pop_f_rejects_unverified_image_before_advancing_stack(
-    backend: str, f_input: int, opcode: int, stack_register: RegisterName
+def test_popu_f_normalizes_upper_bits_to_carry_and_zero(
+    backend: str, f_input: int
 ) -> None:
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
 
     memory = _make_memory(0, 0, (0, 0, 0), 0x100)
-    memory._raw[0] = opcode
+    memory._raw[0] = 0x3E
     memory._raw[0x100] = f_input
     cpu = CPU(memory, reset_on_init=False, backend=backend)
-    cpu.regs.set(stack_register, 0x100)
+    cpu.regs.set(RegisterName.U, 0x100)
     cpu.regs.set(RegisterName.F, 0x01)
 
-    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
-        cpu.execute_instruction(0)
+    cpu.execute_instruction(0)
 
-    assert cpu.regs.get(stack_register) == 0x100
-    assert cpu.regs.get(RegisterName.F) == 0x01
-    assert cpu.regs.get(RegisterName.PC) == 0
+    assert cpu.regs.get(RegisterName.U) == 0x101
+    assert cpu.regs.get(RegisterName.F) == (f_input & 0x03)
+    assert cpu.regs.get(RegisterName.FC) == (f_input & 0x01)
+    assert cpu.regs.get(RegisterName.FZ) == ((f_input >> 1) & 0x01)
+    assert cpu.regs.get(RegisterName.PC) == 1
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])
-@pytest.mark.parametrize("f_input", [0x04, 0x80, 0xA4, 0xFC, 0xFF])
-def test_reti_rejects_unverified_f_before_any_architectural_write(
+@pytest.mark.parametrize("f_input", [0x00, 0x03, 0x04, 0xA5, 0xFC, 0xFF])
+def test_pops_f_normalizes_upper_bits_to_carry_and_zero(
+    backend: str, f_input: int
+) -> None:
+    if backend == "llama":
+        assert "llama" in available_backends(), "LLAMA backend not available"
+
+    memory = _make_memory(0, 0, (0, 0, 0), 0x100)
+    memory._raw[0] = 0x5F
+    memory._raw[0x100] = f_input
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.S, 0x100)
+    cpu.regs.set(RegisterName.F, 0x01)
+
+    cpu.execute_instruction(0)
+
+    assert cpu.regs.get(RegisterName.S) == 0x101
+    assert cpu.regs.get(RegisterName.F) == (f_input & 0x03)
+    assert cpu.regs.get(RegisterName.FC) == (f_input & 0x01)
+    assert cpu.regs.get(RegisterName.FZ) == ((f_input >> 1) & 0x01)
+    assert cpu.regs.get(RegisterName.PC) == 1
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize("f_input", [0x00, 0x03, 0x04, 0xA5, 0xFC, 0xFF])
+def test_reti_normalizes_stacked_f_to_carry_and_zero(
     backend: str, f_input: int
 ) -> None:
     if backend == "llama":
@@ -202,10 +220,11 @@ def test_reti_rejects_unverified_f_before_any_architectural_write(
     cpu.regs.set(RegisterName.S, sp)
     cpu.regs.set(RegisterName.F, 0x02)
 
-    with pytest.raises(RuntimeError, match="bits 2-7 require real-hardware tracing"):
-        cpu.execute_instruction(0)
+    cpu.execute_instruction(0)
 
-    assert cpu.regs.get(RegisterName.PC) == 0
-    assert cpu.regs.get(RegisterName.S) == sp
-    assert cpu.regs.get(RegisterName.F) == 0x02
-    assert memory._raw[imr_addr] == 0x5A
+    assert cpu.regs.get(RegisterName.PC) == 0x53412
+    assert cpu.regs.get(RegisterName.S) == sp + 5
+    assert cpu.regs.get(RegisterName.F) == (f_input & 0x03)
+    assert cpu.regs.get(RegisterName.FC) == (f_input & 0x01)
+    assert cpu.regs.get(RegisterName.FZ) == ((f_input >> 1) & 0x01)
+    assert memory._raw[imr_addr] == 0xA5

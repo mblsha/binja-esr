@@ -10,7 +10,7 @@
 use super::{
     dispatch,
     opcodes::{InstrKind, OpcodeEntry, OperandKind, RegName},
-    state::{mask_for, validate_f_image, LlamaState, PowerState},
+    state::{mask_for, LlamaState, PowerState},
 };
 use crate::{
     memory::{
@@ -133,12 +133,9 @@ fn reject_unknown() -> Result<u8, &'static str> {
     Err("invalid or reserved opcode")
 }
 
-pub const ZERO_I_COUNT_ERROR: &str =
-    "SC62015 I=0 counted-instruction semantics require real-hardware tracing";
-pub const TCL_UNIMPLEMENTED_ERROR: &str = "TCL timer-clear side effects are not implemented";
+pub const TCL_UNIMPLEMENTED_ERROR: &str = "TCL requires a timer-phase-clear bus";
 pub const ENCODED_20BIT_UPPER_NIBBLE_ERROR: &str =
     "encoded 20-bit operand has reserved upper-nibble bits";
-pub const EXP_UPPER_NIBBLE_ERROR: &str = "EXP upper-nibble behavior requires real-hardware tracing";
 pub const SILENT_PEEK_UNAVAILABLE_ERROR: &str =
     "side-effect-free instruction preflight memory is unavailable";
 pub const VECTOR_UPPER_NIBBLE_ERROR: &str =
@@ -188,19 +185,26 @@ impl ValidatedVectorTransfer {
     }
 }
 
-fn is_i_counted_entry(entry: &OpcodeEntry) -> bool {
-    matches!(
-        entry.name,
-        "ADCL" | "SBCL" | "DADL" | "DSBL" | "MVL" | "MVLD" | "EXL" | "DSLL" | "DSRL" | "WAIT"
-    )
-}
-
-fn validated_i_count(state: &LlamaState) -> Result<u32, &'static str> {
+fn effective_i_count(state: &LlamaState) -> u32 {
     let count = state.get_reg(RegName::I) & mask_for(RegName::I);
     if count == 0 {
-        Err(ZERO_I_COUNT_ERROR)
+        // PC-E500 HW-002 measured a 16-bit do-while countdown for every
+        // counted family: I=0 means 65,536 iterations.
+        mask_for(RegName::I) + 1
     } else {
-        Ok(count)
+        count
+    }
+}
+
+fn wait_cycle_count(state: &LlamaState) -> u32 {
+    let initial_i = state.get_reg(RegName::I) & mask_for(RegName::I);
+    if initial_i == 0 {
+        // PC-E500 HW-002 observed the complete 16-bit do-while countdown:
+        // 65,536 idle bus cycles, then I wrapped back to zero and execution
+        // continued. These are scheduler cycles, not architectural reads.
+        mask_for(RegName::I) + 1
+    } else {
+        initial_i
     }
 }
 
@@ -301,6 +305,12 @@ pub trait LlamaBus {
     fn supports_wait_cycles(&self) -> bool {
         false
     }
+    /// Whether TCL can restart the main/sub timer phases atomically.
+    fn supports_timer_phase_clear(&self) -> bool {
+        false
+    }
+    /// Restart the selected timer phases at the bus's current cycle.
+    fn clear_timer_phases(&mut self, _clear_sti: bool, _clear_mti: bool) {}
     /// Optional timer snapshot for perfetto tracing (ticks since last MTI/STI fire).
     fn timer_trace(&mut self) -> Option<TimerTrace> {
         None
@@ -358,6 +368,10 @@ impl<B: LlamaBus> LlamaBus for SilentPreflightBus<'_, B> {
 
     fn instruction_byte_is_stable(&self, addr: u32) -> bool {
         self.inner.instruction_byte_is_stable(addr)
+    }
+
+    fn supports_timer_phase_clear(&self) -> bool {
+        self.inner.supports_timer_phase_clear()
     }
 
     fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
@@ -478,15 +492,14 @@ fn validate_canonical_pre(
     match pre_selector_count(entry) {
         0 => Err("PRE prefix has no addressable internal-memory operand"),
         1 => {
-            let canonical = match modes.first {
-                AddressingMode::N => 0x30,
-                AddressingMode::PxN => 0x34,
-                AddressingMode::BpPx => 0x24,
-                AddressingMode::BpN | AddressingMode::PyN | AddressingMode::BpPy => {
-                    return Err("noncanonical PRE prefix for one internal-memory operand")
-                }
+            let proven = match modes.first {
+                AddressingMode::BpN => matches!(prefix_opcode, 0x22),
+                AddressingMode::N => matches!(prefix_opcode, 0x30..=0x33),
+                AddressingMode::PxN => matches!(prefix_opcode, 0x34 | 0x36),
+                AddressingMode::BpPx => matches!(prefix_opcode, 0x24 | 0x26),
+                AddressingMode::PyN | AddressingMode::BpPy => false,
             };
-            if prefix_opcode == canonical {
+            if proven {
                 Ok(())
             } else {
                 Err("noncanonical PRE prefix for one internal-memory operand")
@@ -498,8 +511,8 @@ fn validate_canonical_pre(
 }
 
 fn validate_imem_selector(mode: AddressingMode, raw: u8) -> Result<(), &'static str> {
-    if matches!(mode, AddressingMode::BpPx | AddressingMode::BpPy) && raw != 0 {
-        Err("nonzero selector byte is invalid for BP+PX/BP+PY addressing")
+    if mode == AddressingMode::BpPy && raw != 0 {
+        Err("nonzero selector byte is invalid for unverified BP+PY addressing")
     } else {
         Ok(())
     }
@@ -771,37 +784,40 @@ impl LlamaExecutor {
         let mut entry = self.lookup(opcode);
         let mut prefix_len = 0u8;
         let mut pre_modes_opt: Option<PreModes> = None;
+        let mut effective_pre_opcode = None;
 
         while let Some(resolved) = entry {
             if resolved.kind != InstrKind::Pre {
                 break;
             }
-            if prefix_len != 0 {
-                return Err("consecutive PRE prefixes are invalid");
+            if prefix_len >= 2 {
+                return Err("more than two consecutive PRE prefixes are unverified");
             }
-            let pre_modes = pre_modes_for(opcode).ok_or("unknown PRE opcode")?;
+            let pre_modes = pre_modes_for(resolved.opcode).ok_or("unknown PRE opcode")?;
             exec_pc = exec_pc.wrapping_add(1) & mask_for(RegName::PC);
             let next_opcode = Self::fetch_byte(bus, exec_pc);
             if bus.unavailable {
                 return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
             }
-            prefix_len = 1;
+            prefix_len = prefix_len.saturating_add(1);
             pre_modes_opt = Some(pre_modes);
+            effective_pre_opcode = Some(resolved.opcode);
             entry = self.lookup(next_opcode);
         }
 
         let resolved = entry.ok_or("invalid or reserved opcode")?;
         if let Some(pre_modes) = pre_modes_opt.as_ref() {
-            validate_canonical_pre(opcode, pre_modes, resolved)?;
+            validate_canonical_pre(
+                effective_pre_opcode.ok_or("missing PRE opcode")?,
+                pre_modes,
+                resolved,
+            )?;
         }
         if resolved.kind == InstrKind::Unknown {
             return Err("invalid or reserved opcode");
         }
-        if resolved.kind == InstrKind::Tcl {
+        if resolved.kind == InstrKind::Tcl && !bus.supports_timer_phase_clear() {
             return Err(TCL_UNIMPLEMENTED_ERROR);
-        }
-        if validate_data_dependent && is_i_counted_entry(resolved) {
-            validated_i_count(state)?;
         }
         if resolved.kind == InstrKind::Wait && !bus.supports_wait_cycles() {
             return Err("WAIT requires a cycle-capable bus");
@@ -836,52 +852,12 @@ impl LlamaExecutor {
         }
 
         // A vector destination is checked only for instruction forms that can
-        // be rejected without reading mutable architectural data. EXP and
-        // stack-image checks remain the destination instruction's job.
+        // be rejected without reading mutable architectural data. Stack-image
+        // checks remain the destination instruction's job.
         if !validate_data_dependent {
             return Ok(instruction_len);
         }
 
-        if resolved.opcode == 0xC2 {
-            let (first, second) = decoded
-                .mem
-                .zip(decoded.mem2)
-                .ok_or("EXP requires two internal-memory operands")?;
-            let first_value = Self::load_wrapped_silent(bus, first.addr, first.bits);
-            let second_value = Self::load_wrapped_silent(bus, second.addr, second.bits);
-            if bus.unavailable {
-                return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
-            }
-            if (first_value | second_value) & 0xF0_0000 != 0 {
-                return Err(EXP_UPPER_NIBBLE_ERROR);
-            }
-        }
-
-        if matches!(resolved.kind, InstrKind::PopU | InstrKind::PopS)
-            && matches!(resolved.operands.first(), Some(OperandKind::RegF))
-        {
-            let stack = if resolved.kind == InstrKind::PopU {
-                RegName::U
-            } else {
-                RegName::S
-            };
-            let sp = state.get_reg(stack) & mask_for(stack);
-            let f = bus.peek_byte_silent(sp).unwrap_or(0);
-            if bus.unavailable {
-                return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
-            }
-            validate_f_image(u32::from(f))?;
-        }
-
-        if resolved.kind == InstrKind::RetI {
-            let sp = state.get_reg(RegName::S) & mask_for(RegName::S);
-            let f_addr = sp.wrapping_add(1) & mask_for(RegName::S);
-            let f = bus.peek_byte_silent(f_addr).unwrap_or(0);
-            if bus.unavailable {
-                return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
-            }
-            validate_f_image(u32::from(f))?;
-        }
         Ok(instruction_len)
     }
 
@@ -950,18 +926,18 @@ impl LlamaExecutor {
     ) {
         let bytes = bits.div_ceil(8);
         let mask = mask_for(sp_reg);
-        let new_sp = state.get_reg(sp_reg).wrapping_sub(bytes as u32) & mask;
-        for i in 0..bytes {
-            let addr = new_sp.wrapping_add(i as u32) & mask;
+        let mut sp = state.get_reg(sp_reg) & mask;
+        for i in (0..bytes).rev() {
+            sp = sp.wrapping_sub(1) & mask;
             let shift = if big_endian {
                 8 * (bytes.saturating_sub(1) - i)
             } else {
                 8 * i
             };
             let byte = (value >> shift) & 0xFF;
-            Self::store_traced(bus, addr, 8, byte);
+            Self::store_traced(bus, sp, 8, byte);
         }
-        state.set_reg(sp_reg, new_sp);
+        state.set_reg(sp_reg, sp);
     }
 
     fn pop_stack<B: LlamaBus>(
@@ -1133,16 +1109,15 @@ impl LlamaExecutor {
 
     fn store_traced<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8, value: u32) {
         let bytes = bits.div_ceil(8).max(1);
-        if Self::access_crosses_boundary(addr, bytes) {
-            for index in 0..bytes {
-                let byte_addr = Self::advance_internal_addr(addr, index as u32);
-                let byte = (value >> (8 * index)) & 0xFF;
-                bus.store(byte_addr, 8, byte);
-                Self::trace_mem_write(byte_addr, 8, byte);
-            }
-        } else {
-            bus.store(addr, bits, value);
-            Self::trace_mem_write(addr, bits, value);
+        // SC62015 memory transfers are observable as ordered byte accesses,
+        // including when a wide operand does not cross an address boundary.
+        // Splitting here also prevents a byte-wide host callback from silently
+        // receiving only the low byte of a word or pointer store.
+        for index in 0..bytes {
+            let byte_addr = Self::advance_internal_addr(addr, index as u32);
+            let byte = (value >> (8 * index)) & 0xFF;
+            bus.store(byte_addr, 8, byte);
+            Self::trace_mem_write(byte_addr, 8, byte);
         }
     }
 
@@ -1220,9 +1195,29 @@ impl LlamaExecutor {
     fn fetch_register_20bit<B: LlamaBus>(bus: &mut B, addr: u32) -> u32 {
         // X/Y hardware captures execute a high byte of 0x3C and subsequently
         // push 0x0C. The register-load opcodes consume three bytes but retain
-        // bits 19-0. Do not generalize this silicon result to JPF/CALLF or an
-        // external address operand, which still use fetch_encoded_20bit.
+        // bits 19-0. Do not generalize this silicon result to vectors or
+        // arbitrary external-address operands. Separately measured HW-009
+        // opcode families have their own explicitly scoped masked fetches.
         Self::fetch_imm(bus, addr, 24) & mask_for(RegName::X)
+    }
+
+    fn fetch_hw009_far_control_address<B: LlamaBus>(bus: &mut B, addr: u32) -> u32 {
+        // PC-E500 HW-009 executed otherwise-identical JPF/CALLF pairs with
+        // operand high bytes 0x01 and 0x81. Both reached 0x101E0; CALLF also
+        // produced the same return frame and RETF path. Only these two far
+        // control opcodes inherit that masking result here.
+        Self::fetch_imm(bus, addr, 24) & mask_for(RegName::PC)
+    }
+
+    fn fetch_hw009_masked_data_address<B: LlamaBus>(bus: &mut B, addr: u32) -> u32 {
+        // PC-E500 HW-009 executed 62/66/6A/72/7A with encoded high byte 0x84
+        // like their 0x04 controls, the complete 88-8F direct-read block with
+        // high byte 0x81 like 0x01, every A8-AF direct store to encoded
+        // 0x8406D0 like 0x0406D0, and fixed/counted D0-D3/D8-DB transfers in
+        // canonical/noncanonical pairs. These prove only the named
+        // data-address consumers mask bits 23-20. Other absolute-memory
+        // families and control-flow operands remain fail-closed.
+        Self::fetch_imm(bus, addr, 24) & mask_for(RegName::PC)
     }
 
     fn read_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
@@ -1244,37 +1239,15 @@ impl LlamaExecutor {
         (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr)
     }
 
-    fn access_crosses_boundary(addr: u32, bytes: u8) -> bool {
-        if bytes <= 1 {
-            return false;
-        }
-        if Self::is_internal_addr(addr) {
-            let offset = addr - INTERNAL_MEMORY_START;
-            offset + u32::from(bytes) > 0x100
-        } else {
-            (addr & mask_for(RegName::X)) + u32::from(bytes) > mask_for(RegName::X) + 1
-        }
-    }
-
     fn load_wrapped<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
         let bytes = bits.div_ceil(8).max(1);
-        if !Self::access_crosses_boundary(addr, bytes) {
-            return bus.load(addr, bits) & Self::mask_for_width(bits);
-        }
+        // PC-E500 HW-007 observes F1/F2 pointer-source reads as one bus access
+        // per byte even away from a wrap boundary. Always splitting also makes
+        // byte-wide host callbacks see the complete architectural access.
         let mut value = 0u32;
         for index in 0..bytes {
             let byte_addr = Self::advance_internal_addr(addr, index as u32);
             value |= (bus.load(byte_addr, 8) & 0xFF) << (8 * index);
-        }
-        value & Self::mask_for_width(bits)
-    }
-
-    fn load_wrapped_silent<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
-        let bytes = bits.div_ceil(8).max(1);
-        let mut value = 0u32;
-        for index in 0..bytes {
-            let byte_addr = Self::advance_internal_addr(addr, u32::from(index));
-            value |= u32::from(bus.peek_byte_silent(byte_addr).unwrap_or(0)) << (8 * index);
         }
         value & Self::mask_for_width(bits)
     }
@@ -1595,7 +1568,9 @@ impl LlamaExecutor {
             match op {
                 OperandKind::Imm(bits) => {
                     let val = if *bits == 20 {
-                        if matches!(entry.opcode, 0x0C..=0x0F) {
+                        if matches!(entry.opcode, 0x03 | 0x05) {
+                            Self::fetch_hw009_far_control_address(bus, pc + offset)
+                        } else if matches!(entry.opcode, 0x0C..=0x0F) {
                             Self::fetch_register_20bit(bus, pc + offset)
                         } else {
                             Self::fetch_encoded_20bit(bus, pc + offset)?
@@ -1656,7 +1631,22 @@ impl LlamaExecutor {
                 }
                 OperandKind::EMemAddrWidth(bytes) | OperandKind::EMemAddrWidthOp(bytes) => {
                     let bits = Self::bits_from_bytes(*bytes);
-                    let base = Self::fetch_encoded_20bit(bus, pc + offset)?;
+                    let base = if matches!(
+                        entry.opcode,
+                        0x62
+                            | 0x66
+                            | 0x6A
+                            | 0x72
+                            | 0x7A
+                            | 0x88..=0x8F
+                            | 0xA8..=0xAF
+                            | 0xD0..=0xD3
+                            | 0xD8..=0xDB
+                    ) {
+                        Self::fetch_hw009_masked_data_address(bus, pc + offset)
+                    } else {
+                        Self::fetch_encoded_20bit(bus, pc + offset)?
+                    };
                     let slot = if decoded.mem.is_none() {
                         &mut decoded.mem
                     } else {
@@ -1996,7 +1986,7 @@ impl LlamaExecutor {
         let prev_fc = state.get_reg(RegName::FC);
         let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
         if matches!(entry.kind, InstrKind::Mvl | InstrKind::Mvld) {
-            let length = validated_i_count(state)?;
+            let length = effective_i_count(state);
             let (mem_dst, mem_src) = decoded
                 .mem
                 .zip(decoded.mem2)
@@ -2552,7 +2542,8 @@ impl LlamaExecutor {
             .unwrap_or(mem_dst.bits);
         let mask_dst = Self::mask_for_width(mem_dst.bits);
         let mask_src = Self::mask_for_width(src_bits);
-        let length = validated_i_count(state)?;
+        let initial_i_zero = state.get_reg(RegName::I) & mask_for(RegName::I) == 0;
+        let length = effective_i_count(state);
         let dst_step_signed = mem_dst
             .side_effect
             .map(|(reg, new_val)| {
@@ -2613,7 +2604,15 @@ impl LlamaExecutor {
         state.set_reg(RegName::FC, if carry { 1 } else { 0 });
         state.set_reg(
             RegName::FZ,
-            if (overall_zero & mask_dst) == 0 { 1 } else { 0 },
+            if !subtract && initial_i_zero {
+                // HW-002 measured Z=0 for all-zero ADCL with I=0. SBCL
+                // retains the ordinary aggregate-zero result.
+                0
+            } else if (overall_zero & mask_dst) == 0 {
+                1
+            } else {
+                0
+            },
         );
         let start_pc = state.pc();
         if state.pc() == start_pc {
@@ -2701,6 +2700,7 @@ impl LlamaExecutor {
         let mut exec_opcode = opcode;
         let mut prefix_len = 0u8;
         let mut pre_modes_opt: Option<PreModes> = None;
+        let mut effective_pre_opcode = None;
         let mut pc_override = None;
         let mut entry = self.lookup(exec_opcode);
 
@@ -2708,10 +2708,11 @@ impl LlamaExecutor {
             if e.kind != InstrKind::Pre {
                 break;
             }
-            if prefix_len != 0 {
-                return Err("consecutive PRE prefixes are invalid");
+            if prefix_len >= 2 {
+                return Err("more than two consecutive PRE prefixes are unverified");
             }
             let pre_modes = pre_modes_for(exec_opcode).ok_or("unknown PRE opcode")?;
+            effective_pre_opcode = Some(exec_opcode);
             let next_pc = exec_pc.wrapping_add(1) & mask_for(RegName::PC);
             let next_opcode = Self::fetch_byte(bus, next_pc);
             exec_opcode = next_opcode;
@@ -2723,7 +2724,11 @@ impl LlamaExecutor {
         }
 
         if let (Some(pre_modes), Some(resolved_entry)) = (pre_modes_opt.as_ref(), entry) {
-            validate_canonical_pre(opcode, pre_modes, resolved_entry)?;
+            validate_canonical_pre(
+                effective_pre_opcode.ok_or("missing PRE opcode")?,
+                pre_modes,
+                resolved_entry,
+            )?;
         }
 
         // Reject reserved and hardware-quarantined behavior before even
@@ -2733,13 +2738,9 @@ impl LlamaExecutor {
         if resolved_entry.kind == InstrKind::Unknown {
             return reject_unknown();
         }
-        if resolved_entry.kind == InstrKind::Tcl {
+        if resolved_entry.kind == InstrKind::Tcl && !bus.supports_timer_phase_clear() {
             return Err(TCL_UNIMPLEMENTED_ERROR);
         }
-        if is_i_counted_entry(resolved_entry) {
-            validated_i_count(state)?;
-        }
-
         // Finish the architectural vector fetch before reserving trace state
         // or synchronizing register mirrors. execute_with receives the exact
         // validated value so IR/RESET cannot re-read a volatile bus later.
@@ -2940,7 +2941,7 @@ impl LlamaExecutor {
                 Ok(1 + prefix_len)
             }
             InstrKind::Wait => {
-                let wait_cycles = validated_i_count(state)?;
+                let wait_cycles = wait_cycle_count(state);
                 if !bus.supports_wait_cycles() {
                     return Err("WAIT requires a cycle-capable bus");
                 }
@@ -2987,7 +2988,7 @@ impl LlamaExecutor {
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let transfer = decoded.transfer.ok_or("missing transfer operand")?;
                 if entry.kind == InstrKind::Mvl {
-                    let length = validated_i_count(state)?;
+                    let length = effective_i_count(state);
                     let step = transfer.bits.div_ceil(8) as i32;
                     let mut src_addr = transfer.src_addr;
                     let mut dst_addr = transfer.dst_addr;
@@ -3105,7 +3106,8 @@ impl LlamaExecutor {
                 } else {
                     None
                 };
-                let length = validated_i_count(state)?;
+                let initial_i_zero = state.get_reg(RegName::I) & mask_for(RegName::I) == 0;
+                let length = effective_i_count(state);
                 let mut carry = match entry.kind {
                     InstrKind::Dadl => {
                         state.set_reg(RegName::FC, 0);
@@ -3149,7 +3151,11 @@ impl LlamaExecutor {
                 let zero_mask = Self::mask_for_width(mem_dst.bits);
                 state.set_reg(
                     RegName::FZ,
-                    if (overall_zero & zero_mask) == 0 {
+                    if entry.kind == InstrKind::Dadl && initial_i_zero {
+                        // HW-002 measured Z=0 for all-zero DADL with I=0;
+                        // DSBL retains the ordinary aggregate-zero result.
+                        0
+                    } else if (overall_zero & zero_mask) == 0 {
                         1
                     } else {
                         0
@@ -3240,7 +3246,8 @@ impl LlamaExecutor {
                 if mem.bits != 8 {
                     return Err("DSLL/DSRL only support byte operands");
                 }
-                let length = validated_i_count(state)?;
+                let initial_i_zero = state.get_reg(RegName::I) & mask_for(RegName::I) == 0;
+                let length = effective_i_count(state);
                 let mut addr = mem.addr;
                 let is_left = entry.kind == InstrKind::Dsll;
                 let mut carry_nibble: u8 = 0;
@@ -3275,7 +3282,17 @@ impl LlamaExecutor {
                     }
                 }
                 state.set_reg(RegName::I, 0);
-                state.set_reg(RegName::FZ, if overall_zero == 0 { 1 } else { 0 });
+                state.set_reg(
+                    RegName::FZ,
+                    if initial_i_zero {
+                        // HW-002 measured Z=0 for an all-zero full-ring shift.
+                        0
+                    } else if overall_zero == 0 {
+                        1
+                    } else {
+                        0
+                    },
+                );
                 let start_pc = state.pc();
                 if state.pc() == start_pc {
                     state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -3453,9 +3470,14 @@ impl LlamaExecutor {
                 Ok(instr_len)
             }
             InstrKind::Tcl => {
-                // TCL conditionally resets clock-generator timer phases from
-                // LCC.STCL/MTCL. Advancing as a NOP would fabricate timing.
-                Err(TCL_UNIMPLEMENTED_ERROR)
+                if !bus.supports_timer_phase_clear() {
+                    return Err(TCL_UNIMPLEMENTED_ERROR);
+                }
+                let lcc = bus.load(INTERNAL_MEMORY_START + IMEM_LCC_OFFSET, 8) & 0xFF;
+                bus.clear_timer_phases(lcc & 0x02 != 0, lcc & 0x01 != 0);
+                let len = prefix_len + Self::estimated_length(entry);
+                state.set_pc(state.pc().wrapping_add(u32::from(len)));
+                Ok(len)
             }
             InstrKind::JpAbs => {
                 // Absolute jump; operand may be 16-bit (low bits) or 20-bit.
@@ -3772,8 +3794,9 @@ impl LlamaExecutor {
                 let _sp_before = sp;
                 let imr = bus.load(sp, 8) & 0xFF;
                 sp = sp.wrapping_add(1) & mask_s;
-                let f = bus.load(sp, 8) & 0xFF;
-                validate_f_image(f)?;
+                // Silicon accepts all eight stacked bits but only restores the
+                // architecturally modeled carry/zero pair.
+                let f = bus.load(sp, 8) & 0x03;
                 sp = sp.wrapping_add(1) & mask_s;
                 let pc_lo = bus.load(sp, 8) & 0xFF;
                 let pc_mid = bus.load(sp.wrapping_add(1) & mask_s, 8) & 0xFF;
@@ -3876,20 +3899,9 @@ impl LlamaExecutor {
                 } else {
                     RegName::S
                 };
-                let value = if reg == RegName::F {
-                    // Reject an unverified raw F image before advancing the
-                    // stack pointer or changing either modeled flag.
-                    let sp = state.get_reg(sp_reg) & mask_for(sp_reg);
-                    let value = Self::load_wrapped(bus, sp, bits);
-                    validate_f_image(value)?;
-                    state.set_reg(
-                        sp_reg,
-                        sp.wrapping_add(u32::from(bits.div_ceil(8))) & mask_for(sp_reg),
-                    );
-                    value
-                } else {
-                    Self::pop_stack(state, bus, sp_reg, bits, false)
-                };
+                // LlamaState masks RegName::F to C/Z, matching the measured
+                // POPU and POPS normalization behavior.
+                let value = Self::pop_stack(state, bus, sp_reg, bits, false);
                 state.set_reg(reg, value);
                 if reg == RegName::IMR {
                     Self::store_traced(
@@ -3985,17 +3997,13 @@ impl LlamaExecutor {
                 Ok(decoded.len)
             }
             InstrKind::Cmpw | InstrKind::Cmpp => {
-                // C6/D6 compare 16-bit words. C7 compares two raw three-byte
-                // images, while D7 compares a 20-bit pointer image with the
-                // 20-bit X/Y/U/S register class. The C7/D7 split matches their
-                // distinct baseline-emulator accessors; D7 upper-nibble
-                // behavior still needs a dedicated hardware probe.
+                // C6/D6 compare 16-bit words. C7 and D7 compare three-byte
+                // values. D7's memory operand retains all 24 bits while its
+                // architectural X/Y/U/S operand is zero-extended from 20 bits.
                 let decoded =
                     self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
                 let bits = if entry.kind == InstrKind::Cmpw {
                     16
-                } else if entry.opcode == 0xD7 {
-                    20
                 } else {
                     24
                 };
@@ -4010,9 +4018,9 @@ impl LlamaExecutor {
                     rhs = state.get_reg(r2) & mask;
                 } else if let Some(r) = decoded.reg3 {
                     if let Some(mem) = decoded.mem {
-                        // IMem20, Reg3 form: the first operand (memory) is the left-hand side.
+                        // IMem(24), Reg3 form: memory is the left-hand side.
                         lhs = Self::load_wrapped(bus, mem.addr, bits) & mask;
-                        rhs = state.get_reg(r) & mask;
+                        rhs = state.get_reg(r) & mask_for(r);
                     } else {
                         lhs = state.get_reg(r) & mask;
                     }
@@ -4035,7 +4043,7 @@ impl LlamaExecutor {
                     let bits = m1.bits.min(m2.bits);
                     let mut addr1 = m1.addr;
                     let mut addr2 = m2.addr;
-                    let length = validated_i_count(state)?;
+                    let length = effective_i_count(state);
                     for _ in 0..length {
                         let v1 = Self::load_wrapped(bus, addr1, bits);
                         let v2 = Self::load_wrapped(bus, addr2, bits);
@@ -4045,6 +4053,29 @@ impl LlamaExecutor {
                         addr2 = Self::advance_internal_addr_signed(addr2, 1);
                     }
                     state.set_reg(RegName::I, 0);
+                    let start_pc = state.pc();
+                    if state.pc() == start_pc {
+                        state.set_pc(start_pc.wrapping_add(decoded.len as u32));
+                    }
+                    return Ok(decoded.len);
+                }
+                if entry.opcode == 0xC2 {
+                    let (m1, m2) = decoded
+                        .mem
+                        .zip(decoded.mem2)
+                        .ok_or("EXP requires two internal-memory operands")?;
+                    let mut addr1 = m1.addr;
+                    let mut addr2 = m2.addr;
+                    // PC-E500 exact/+1/-1 captures establish sequential
+                    // pairwise byte exchange, not whole-triple snapshots.
+                    for _ in 0..3 {
+                        let v1 = Self::load_wrapped(bus, addr1, 8);
+                        let v2 = Self::load_wrapped(bus, addr2, 8);
+                        Self::store_traced(bus, addr1, 8, v2);
+                        Self::store_traced(bus, addr2, 8, v1);
+                        addr1 = Self::advance_internal_addr_signed(addr1, 1);
+                        addr2 = Self::advance_internal_addr_signed(addr2, 1);
+                    }
                     let start_pc = state.pc();
                     if state.pc() == start_pc {
                         state.set_pc(start_pc.wrapping_add(decoded.len as u32));
@@ -4078,9 +4109,6 @@ impl LlamaExecutor {
                     let bits = m1.bits.min(m2.bits);
                     let v1 = Self::load_wrapped(bus, m1.addr, bits);
                     let v2 = Self::load_wrapped(bus, m2.addr, bits);
-                    if entry.opcode == 0xC2 && ((v1 | v2) & 0xF0_0000) != 0 {
-                        return Err(EXP_UPPER_NIBBLE_ERROR);
-                    }
                     Self::store_traced(bus, m1.addr, bits, v2);
                     Self::store_traced(bus, m2.addr, bits, v1);
                     let start_pc = state.pc();
@@ -4332,12 +4360,10 @@ mod tests {
         let cases: &[&[u8]] = &[
             &[0x30, 0x00],             // NOP has no IMEM selector
             &[0x30, 0xEF],             // WAIT has no IMEM selector
-            &[0x30, 0xCE],             // quarantined TCL has no IMEM selector
+            &[0x30, 0xCE],             // TCL has no IMEM selector
             &[0x30, 0xDE],             // HALT has no IMEM selector
             &[0x30, 0xDF],             // OFF has no IMEM selector
             &[0x30, 0xFF],             // RESET has no IMEM selector
-            &[0x22, 0x65, 0x12, 0x07], // PRE22's first mode is the default
-            &[0x32, 0xA0, 0x10],       // PRE2 is irrelevant to a lone selector
             &[0x32, 0xFE],             // misaligned apparent PRE+IR
             &[0x23, 0x07, 0x00, 0x00], // misaligned apparent PRE+JP
             &[0x36, 0x01],             // redundant PRE+RETI
@@ -4366,9 +4392,8 @@ mod tests {
     }
 
     #[test]
-    fn ignored_bp_px_or_bp_py_selector_bytes_must_be_zero() {
+    fn unverified_bp_py_selector_bytes_must_be_zero() {
         let cases: &[&[u8]] = &[
-            &[0x24, 0xA0, 0x01],       // BP+PX lone selector
             &[0x21, 0xC8, 0x00, 0x01], // BP+PY second selector
         ];
 
@@ -4389,18 +4414,72 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_pre_prefixes_fail_closed() {
+    fn two_consecutive_pre_prefixes_use_the_second_latch() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
-        let mut bus = MemBus::with_size(4);
-        bus.mem[..3].copy_from_slice(&[0x30, 0x31, 0x00]);
+        let mut bus = MemBus::with_size(0x100);
+        bus.mem[..4].copy_from_slice(&[0x30, 0x31, 0xA0, 0x05]);
+        state.set_reg(RegName::A, 0xE0);
+
+        let len = exec
+            .execute(0x30, &mut state, &mut bus)
+            .expect("the measured two-PRE form must execute");
+
+        assert_eq!(len, 4);
+        assert_eq!(state.pc(), 4);
+        assert_eq!(bus.mem[0x05], 0xE0);
+    }
+
+    #[test]
+    fn three_consecutive_pre_prefixes_remain_unverified() {
+        let mut exec = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        let mut bus = MemBus::with_size(8);
+        bus.mem[..5].copy_from_slice(&[0x30, 0x31, 0x32, 0xA0, 0x05]);
 
         let err = exec
             .execute(0x30, &mut state, &mut bus)
-            .expect_err("a second PRE must be rejected");
+            .expect_err("three PRE prefixes were not measured");
 
-        assert_eq!(err, "consecutive PRE prefixes are invalid");
+        assert_eq!(err, "more than two consecutive PRE prefixes are unverified");
         assert_eq!(state.pc(), 0);
+    }
+
+    #[test]
+    fn measured_single_selector_pre_aliases_execute() {
+        for bytes in [
+            [0x30_u8, 0xA0, 0x05],
+            [0x31, 0xA0, 0x05],
+            [0x32, 0xA0, 0x05],
+            [0x33, 0xA0, 0x05],
+            [0x34, 0xA0, 0x05],
+            [0x36, 0xA0, 0x05],
+            [0x24, 0xA0, 0x05],
+            [0x26, 0xA0, 0x05],
+            [0x22, 0xA0, 0x05],
+        ] {
+            let mut exec = LlamaExecutor::new();
+            let mut state = LlamaState::new();
+            let mut bus = MemBus::with_size(0x100);
+            bus.mem[..3].copy_from_slice(&bytes);
+            bus.mem[IMEM_BP_OFFSET as usize] = 0x10;
+            bus.mem[IMEM_PX_OFFSET as usize] = 0x20;
+            state.set_reg(RegName::A, u32::from(bytes[0]));
+
+            let len = exec
+                .execute(bytes[0], &mut state, &mut bus)
+                .expect("silicon-proven one-selector PRE alias");
+
+            let expected = match bytes[0] {
+                0x30..=0x33 => 0x05,
+                0x34 | 0x36 => 0x25,
+                0x24 | 0x26 => 0x30,
+                0x22 => 0x15,
+                _ => unreachable!(),
+            };
+            assert_eq!(len, 3);
+            assert_eq!(bus.mem[expected], bytes[0]);
+        }
     }
 
     #[test]
@@ -4616,6 +4695,7 @@ mod tests {
 
     struct OffsetBus {
         data: HashMap<u32, u8>,
+        reads: Vec<u32>,
         writes: Vec<(u32, u8)>,
     }
 
@@ -4623,6 +4703,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 data: HashMap::new(),
+                reads: Vec::new(),
                 writes: Vec::new(),
             }
         }
@@ -4638,6 +4719,7 @@ mod tests {
 
     impl LlamaBus for OffsetBus {
         fn load(&mut self, addr: u32, _bits: u8) -> u32 {
+            self.reads.push(addr);
             *self.data.get(&addr).unwrap_or(&0) as u32
         }
         fn store(&mut self, addr: u32, _bits: u8, value: u32) {
@@ -4879,6 +4961,226 @@ mod tests {
     }
 
     #[test]
+    fn mvl_f3_snapshots_external_pointer_before_overlapping_destination_writes() {
+        // Hardware evidence: PC-E500 runs 20260831-175849-0001 through
+        // 20260831-175854-0003 and 20260831-181618-0002 through
+        // 20260831-181621-0003.  The FT600 bus trace observed sequential CE1
+        // reads from the initial effective pointer even while each destination
+        // write overwrote part of that pointer in IMEM.
+        let cases = [
+            (
+                vec![0xF3, 0x00, 0x40, 0x40],
+                3,
+                vec![0x40680, 0x40681, 0x40682],
+            ),
+            (
+                vec![0xF3, 0x00, 0x3F, 0x40],
+                3,
+                vec![0x40680, 0x40681, 0x40682],
+            ),
+            (vec![0xF3, 0x00, 0x41, 0x40], 2, vec![0x40680, 0x40681]),
+            (
+                vec![0xF3, 0x80, 0x40, 0x40, 0x10],
+                3,
+                vec![0x40690, 0x40691, 0x40692],
+            ),
+            (
+                vec![0xF3, 0xC0, 0x40, 0x40, 0x10],
+                3,
+                vec![0x40670, 0x40671, 0x40672],
+            ),
+        ];
+
+        for (program, count, expected_external_reads) in cases {
+            let seed = [
+                (INTERNAL_MEMORY_START + 0x3F, 0xFF),
+                (INTERNAL_MEMORY_START + 0x40, 0x80),
+                (INTERNAL_MEMORY_START + 0x41, 0x06),
+                (INTERNAL_MEMORY_START + 0x42, 0x04),
+                (INTERNAL_MEMORY_START + 0x43, 0xFF),
+            ];
+            let (bus, state, consumed) = run_composite_mvl_case(0, &program, count, &[], &seed);
+            let external_reads: Vec<u32> = bus
+                .reads
+                .iter()
+                .copied()
+                .filter(|address| (0x40000..=0x7FFFF).contains(address))
+                .collect();
+
+            assert_eq!(usize::from(consumed), program.len());
+            assert_eq!(state.get_reg(RegName::I), 0);
+            assert_eq!(external_reads, expected_external_reads);
+        }
+    }
+
+    #[test]
+    fn fixed_width_external_pointer_moves_snapshot_before_overlapping_writes() {
+        // Hardware evidence: PC-E500 runs 20260831-181830-0001 and
+        // 20260831-181832-0002 plus displaced runs 20260831-184053-0001
+        // through 20260831-184100-0004.
+        let cases = [
+            (
+                vec![0xF1, 0x00, 0x40, 0x40],
+                vec![0x40680, 0x40681],
+                [0x00, 0x00, 0x04],
+            ),
+            (
+                vec![0xF2, 0x00, 0x40, 0x40],
+                vec![0x40680, 0x40681, 0x40682],
+                [0x00, 0x00, 0x00],
+            ),
+            (
+                vec![0xF1, 0x80, 0x40, 0x40, 0x10],
+                vec![0x40690, 0x40691],
+                [0x00, 0x00, 0x04],
+            ),
+            (
+                vec![0xF1, 0xC0, 0x40, 0x40, 0x10],
+                vec![0x40670, 0x40671],
+                [0x00, 0x00, 0x04],
+            ),
+            (
+                vec![0xF2, 0x80, 0x40, 0x40, 0x10],
+                vec![0x40690, 0x40691, 0x40692],
+                [0x00, 0x00, 0x00],
+            ),
+            (
+                vec![0xF2, 0xC0, 0x40, 0x40, 0x10],
+                vec![0x40670, 0x40671, 0x40672],
+                [0x00, 0x00, 0x00],
+            ),
+        ];
+
+        for (program, expected_external_reads, expected_pointer) in cases {
+            let seed = [
+                (INTERNAL_MEMORY_START + 0x40, 0x80),
+                (INTERNAL_MEMORY_START + 0x41, 0x06),
+                (INTERNAL_MEMORY_START + 0x42, 0x04),
+            ];
+            let (bus, state, consumed) = run_composite_mvl_case(0, &program, 0x5AA5, &[], &seed);
+            let external_reads: Vec<u32> = bus
+                .reads
+                .iter()
+                .copied()
+                .filter(|address| (0x40000..=0x7FFFF).contains(address))
+                .collect();
+            let pointer_after = [
+                *bus.data.get(&(INTERNAL_MEMORY_START + 0x40)).unwrap(),
+                *bus.data.get(&(INTERNAL_MEMORY_START + 0x41)).unwrap(),
+                *bus.data.get(&(INTERNAL_MEMORY_START + 0x42)).unwrap(),
+            ];
+
+            assert_eq!(usize::from(consumed), program.len());
+            assert_eq!(state.get_reg(RegName::I), 0x5AA5);
+            assert_eq!(external_reads, expected_external_reads);
+            assert_eq!(pointer_after, expected_pointer);
+        }
+    }
+
+    #[test]
+    fn external_pointer_destinations_emit_hardware_write_address_order() {
+        // Hardware evidence: PC-E500 direct runs 20260831-190602-0001 through
+        // 20260831-190609-0004 and displaced runs 20260831-191516-0001 through
+        // 20260831-191531-0008 observed exactly 1/2/3/4 low-to-high CE1 write
+        // phases for every valid F8/F9/FA/FB pointer mode. The loaded gateware
+        // did not preserve or expose write data, so byte values here remain an
+        // ISA contract.
+        let cases = [
+            (vec![0xF8, 0x00, 0x40, 0x60], 0x5AA5, vec![(0x406A0, 0xA5)]),
+            (
+                vec![0xF9, 0x00, 0x40, 0x60],
+                0x5AA5,
+                vec![(0x406A0, 0xA5), (0x406A1, 0x5A)],
+            ),
+            (
+                vec![0xFA, 0x00, 0x40, 0x60],
+                0x5AA5,
+                vec![(0x406A0, 0xA5), (0x406A1, 0x5A), (0x406A2, 0x3C)],
+            ),
+            (
+                vec![0xFB, 0x00, 0x40, 0x60],
+                4,
+                vec![
+                    (0x406A0, 0xA5),
+                    (0x406A1, 0x5A),
+                    (0x406A2, 0x3C),
+                    (0x406A3, 0xC3),
+                ],
+            ),
+            (
+                vec![0xF8, 0x80, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x406B0, 0xA5)],
+            ),
+            (
+                vec![0xF8, 0xC0, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x40690, 0xA5)],
+            ),
+            (
+                vec![0xF9, 0x80, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x406B0, 0xA5), (0x406B1, 0x5A)],
+            ),
+            (
+                vec![0xF9, 0xC0, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x40690, 0xA5), (0x40691, 0x5A)],
+            ),
+            (
+                vec![0xFA, 0x80, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x406B0, 0xA5), (0x406B1, 0x5A), (0x406B2, 0x3C)],
+            ),
+            (
+                vec![0xFA, 0xC0, 0x40, 0x60, 0x10],
+                0x5AA5,
+                vec![(0x40690, 0xA5), (0x40691, 0x5A), (0x40692, 0x3C)],
+            ),
+            (
+                vec![0xFB, 0x80, 0x40, 0x60, 0x10],
+                4,
+                vec![
+                    (0x406B0, 0xA5),
+                    (0x406B1, 0x5A),
+                    (0x406B2, 0x3C),
+                    (0x406B3, 0xC3),
+                ],
+            ),
+            (
+                vec![0xFB, 0xC0, 0x40, 0x60, 0x10],
+                4,
+                vec![
+                    (0x40690, 0xA5),
+                    (0x40691, 0x5A),
+                    (0x40692, 0x3C),
+                    (0x40693, 0xC3),
+                ],
+            ),
+        ];
+
+        for (program, count, expected_writes) in cases {
+            let seed = [
+                (INTERNAL_MEMORY_START + 0x40, 0xA0),
+                (INTERNAL_MEMORY_START + 0x41, 0x06),
+                (INTERNAL_MEMORY_START + 0x42, 0x04),
+                (INTERNAL_MEMORY_START + 0x60, 0xA5),
+                (INTERNAL_MEMORY_START + 0x61, 0x5A),
+                (INTERNAL_MEMORY_START + 0x62, 0x3C),
+                (INTERNAL_MEMORY_START + 0x63, 0xC3),
+            ];
+            let (bus, state, consumed) = run_composite_mvl_case(0, &program, count, &[], &seed);
+
+            assert_eq!(usize::from(consumed), program.len());
+            assert_eq!(
+                state.get_reg(RegName::I),
+                if program[0] == 0xFB { 0 } else { count }
+            );
+            assert_eq!(bus.writes, expected_writes);
+        }
+    }
+
+    #[test]
     fn mvl_fb_copies_exact_i_internal_to_external_pointer() {
         // MVL [(F0)],(D0) with [(F0)] = 0x00500.
         let program = [0xFB, 0x00, 0xF0, 0xD0];
@@ -5052,7 +5354,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_i_zero_fails_before_timing_or_state_mutation() {
+    fn hw002_wait_i_zero_consumes_full_16bit_wrap() {
         let mut exec = LlamaExecutor::new();
         let mut state = LlamaState::new();
         let mut bus = WaitBus { spins: 0, calls: 0 };
@@ -5062,16 +5364,16 @@ mod tests {
         state.set_reg(RegName::FZ, 1);
         state.set_reg(RegName::S, 0x45678);
 
-        let err = exec.execute(0xEF, &mut state, &mut bus).unwrap_err();
+        let len = exec.execute(0xEF, &mut state, &mut bus).unwrap();
 
-        assert_eq!(err, ZERO_I_COUNT_ERROR);
-        assert_eq!(state.pc(), 0x34567);
+        assert_eq!(len, 1);
+        assert_eq!(state.pc(), 0x34568);
         assert_eq!(state.get_reg(RegName::I), 0);
         assert_eq!(state.get_reg(RegName::FC), 1);
         assert_eq!(state.get_reg(RegName::FZ), 1);
         assert_eq!(state.get_reg(RegName::S), 0x45678);
-        assert_eq!(bus.calls, 0);
-        assert_eq!(bus.spins, 0);
+        assert_eq!(bus.calls, 1);
+        assert_eq!(bus.spins, 0x1_0000);
     }
 
     struct MemBus {
@@ -5253,25 +5555,53 @@ mod tests {
     }
 
     #[test]
-    fn exp_upper_nibble_fails_before_writes_or_control_flow_mutation() {
+    fn exp_exchanges_all_24_bits_and_preserves_flags() {
         let mut bus = MemBus::with_size(0x200);
         let pc = 0x100;
         bus.mem[pc] = 0xC2;
         bus.mem[pc + 1] = 0x20;
         bus.mem[pc + 2] = 0x30;
         bus.mem[0x20..0x23].copy_from_slice(&[0x11, 0x22, 0xA3]);
-        bus.mem[0x30..0x33].copy_from_slice(&[0x44, 0x55, 0x06]);
-        let before = bus.mem.clone();
+        bus.mem[0x30..0x33].copy_from_slice(&[0x44, 0x55, 0xB6]);
         let mut state = LlamaState::new();
         state.set_pc(pc as u32);
+        state.set_reg(RegName::F, 0x03);
         let mut exec = LlamaExecutor::new();
 
-        let error = exec.execute(0xC2, &mut state, &mut bus).unwrap_err();
+        let len = exec.execute(0xC2, &mut state, &mut bus).unwrap();
 
-        assert!(error.contains("real-hardware tracing"));
-        assert_eq!(state.pc(), pc as u32);
-        assert_eq!(bus.mem, before);
-        assert!(bus.writes.is_empty());
+        assert_eq!(len, 3);
+        assert_eq!(state.pc(), pc as u32 + 3);
+        assert_eq!(&bus.mem[0x20..0x23], &[0x44, 0x55, 0xB6]);
+        assert_eq!(&bus.mem[0x30..0x33], &[0x11, 0x22, 0xA3]);
+        assert_eq!(state.get_reg(RegName::F), 0x03);
+    }
+
+    #[test]
+    fn exp_overlap_matches_pc_e500_pairwise_byte_order() {
+        for (first, second, expected) in [
+            (0x40, 0x40, [0xA1, 0xB2, 0xC3, 0xD4, 0xE5]),
+            (0x41, 0x40, [0xB2, 0xC3, 0xD4, 0xA1, 0xE5]),
+            (0x40, 0x41, [0xB2, 0xC3, 0xD4, 0xA1, 0xE5]),
+        ] {
+            let mut bus = MemBus::with_size(0x200);
+            let pc = 0x100;
+            bus.mem[pc..pc + 4].copy_from_slice(&[0x32, 0xC2, first, second]);
+            bus.mem[0x40..0x45].copy_from_slice(&[0xA1, 0xB2, 0xC3, 0xD4, 0xE5]);
+            let mut state = LlamaState::new();
+            state.set_pc(pc as u32);
+            state.set_reg(RegName::I, 0x5AA5);
+            state.set_reg(RegName::F, 0x03);
+            let mut exec = LlamaExecutor::new();
+
+            let len = exec.execute(0x32, &mut state, &mut bus).unwrap();
+
+            assert_eq!(len, 4);
+            assert_eq!(state.pc(), pc as u32 + 4);
+            assert_eq!(&bus.mem[0x40..0x45], &expected);
+            assert_eq!(state.get_reg(RegName::I), 0x5AA5);
+            assert_eq!(state.get_reg(RegName::F), 0x03);
+        }
     }
 
     #[test]
@@ -5432,10 +5762,10 @@ mod tests {
     }
 
     #[test]
-    fn cmpp_imem_reg_masks_the_memory_image_to_20_bits() {
+    fn cmpp_imem_reg_compares_raw24_memory_with_zero_extended_register() {
         // D7 04 10: CMPP (BP+10), X. The memory image is 0xF00080,
-        // while X is 0x000080. A 20-bit comparison is equal; the previous
-        // self-confirming 24-bit model incorrectly left Z clear.
+        // while X is 0x000080. Hardware compares the full memory triple with
+        // the zero-extended 20-bit register, so the operands are unequal.
         let mut bus = MemBus {
             mem: vec![0xFF; 0x40],
             writes: Vec::new(),
@@ -5456,9 +5786,13 @@ mod tests {
         assert_eq!(
             state.get_reg(RegName::FC) & 1,
             0,
-            "equal operands must not borrow"
+            "the larger raw memory image must not borrow"
         );
-        assert_eq!(state.get_reg(RegName::FZ) & 1, 1, "20-bit values are equal");
+        assert_eq!(
+            state.get_reg(RegName::FZ) & 1,
+            0,
+            "raw 24-bit values differ"
+        );
     }
 
     #[test]
@@ -5627,8 +5961,8 @@ mod tests {
     }
 
     #[test]
-    fn reti_rejects_unverified_f_before_mutation() {
-        for f_saved in [0x04_u8, 0x80, 0xA4, 0xFC, 0xFF] {
+    fn reti_normalizes_stacked_f_to_carry_and_zero() {
+        for f_saved in [0x00_u8, 0x03, 0x04, 0xA5, 0xFC, 0xFF] {
             let mut exec = LlamaExecutor::new();
             let mut state = LlamaState::new();
             let mut bus = MemBus::with_size((INTERNAL_MEMORY_START as usize) + 0x200);
@@ -5642,39 +5976,54 @@ mod tests {
             state.set_reg(RegName::F, 0x02);
             state.call_depth_inc();
 
-            let error = exec.execute(0x01, &mut state, &mut bus).unwrap_err();
+            exec.execute(0x01, &mut state, &mut bus).unwrap();
 
-            assert!(error.contains("bits 2-7 require real-hardware tracing"));
-            assert_eq!(state.get_reg(RegName::S), sp_start);
-            assert_eq!(state.get_reg(RegName::F), 0x02);
-            assert_eq!(state.pc(), 0);
-            assert_eq!(state.call_depth(), 1);
+            assert_eq!(state.get_reg(RegName::S), sp_start + 5);
+            assert_eq!(state.get_reg(RegName::F), u32::from(f_saved & 0x03));
+            assert_eq!(state.pc(), 0x53412);
+            assert_eq!(state.call_depth(), 0);
             assert_eq!(
                 bus.mem[MemBus::translate(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET)],
-                0x5A
+                0xA5
             );
         }
     }
 
     #[test]
-    fn pop_f_rejects_unverified_image_before_advancing_stack() {
-        for (opcode, stack_reg) in [(0x3E_u8, RegName::U), (0x5F, RegName::S)] {
-            for f_saved in [0x04_u8, 0x80, 0xA4, 0xFC, 0xFF] {
-                let mut exec = LlamaExecutor::new();
-                let mut state = LlamaState::new();
-                let mut bus = MemBus::with_size(0x400);
-                bus.mem[0] = opcode;
-                bus.mem[0x200] = f_saved;
-                state.set_reg(stack_reg, 0x200);
-                state.set_reg(RegName::F, 0x01);
+    fn popu_f_normalizes_upper_bits_to_carry_and_zero() {
+        for f_saved in [0x04_u8, 0x80, 0xA4, 0xFC, 0xFF] {
+            let mut exec = LlamaExecutor::new();
+            let mut state = LlamaState::new();
+            let mut bus = MemBus::with_size(0x400);
+            bus.mem[0] = 0x3E;
+            bus.mem[0x200] = f_saved;
+            state.set_reg(RegName::U, 0x200);
+            state.set_reg(RegName::F, 0x01);
 
-                let error = exec.execute(opcode, &mut state, &mut bus).unwrap_err();
+            exec.execute(0x3E, &mut state, &mut bus).unwrap();
 
-                assert!(error.contains("bits 2-7 require real-hardware tracing"));
-                assert_eq!(state.get_reg(stack_reg), 0x200);
-                assert_eq!(state.get_reg(RegName::F), 0x01);
-                assert_eq!(state.pc(), 0);
-            }
+            assert_eq!(state.get_reg(RegName::U), 0x201);
+            assert_eq!(state.get_reg(RegName::F), u32::from(f_saved & 0x03));
+            assert_eq!(state.pc(), 1);
+        }
+    }
+
+    #[test]
+    fn pops_f_normalizes_upper_bits_to_carry_and_zero() {
+        for f_saved in [0x00_u8, 0x03, 0x04, 0xA5, 0xFC, 0xFF] {
+            let mut exec = LlamaExecutor::new();
+            let mut state = LlamaState::new();
+            let mut bus = MemBus::with_size(0x400);
+            bus.mem[0] = 0x5F;
+            bus.mem[0x200] = f_saved;
+            state.set_reg(RegName::S, 0x200);
+            state.set_reg(RegName::F, 0x01);
+
+            exec.execute(0x5F, &mut state, &mut bus).unwrap();
+
+            assert_eq!(state.get_reg(RegName::S), 0x201);
+            assert_eq!(state.get_reg(RegName::F), u32::from(f_saved & 0x03));
+            assert_eq!(state.pc(), 1);
         }
     }
 
@@ -5761,26 +6110,28 @@ mod tests {
     }
 
     #[test]
-    fn mvl_zero_count_predec_forms_fail_before_pointer_side_effects() {
+    fn hw002_mvl_zero_count_predec_forms_run_full_count() {
         for opcode in [0xE3, 0xEB] {
-            let mut bus = MemBus::with_size(0x200);
-            bus.mem[..3].copy_from_slice(&[opcode, 0x37, 0x20]);
+            let code_base = 0x1000usize;
+            let mut bus = MemBus::with_size(0x2000);
+            bus.mem[code_base..code_base + 3].copy_from_slice(&[opcode, 0x37, 0x20]);
             let mut state = LlamaState::new();
+            state.set_pc(code_base as u32);
             state.set_reg(RegName::I, 0);
             state.set_reg(RegName::S, 0x80000);
-            state.set_reg(RegName::FC, 1);
+            state.set_reg(RegName::FC, 0);
             state.set_reg(RegName::FZ, 1);
             let mut exec = LlamaExecutor::new();
 
-            let err = exec.execute(opcode, &mut state, &mut bus).unwrap_err();
+            let len = exec.execute(opcode, &mut state, &mut bus).unwrap();
 
-            assert_eq!(err, ZERO_I_COUNT_ERROR);
-            assert_eq!(state.pc(), 0);
+            assert_eq!(len, 3);
+            assert_eq!(state.pc(), code_base as u32 + 3);
             assert_eq!(state.get_reg(RegName::I), 0);
-            assert_eq!(state.get_reg(RegName::S), 0x80000);
-            assert_eq!(state.get_reg(RegName::FC), 1);
+            assert_eq!(state.get_reg(RegName::S), 0x70000);
+            assert_eq!(state.get_reg(RegName::FC), 0);
             assert_eq!(state.get_reg(RegName::FZ), 1);
-            assert!(bus.writes.is_empty());
+            assert_eq!(bus.writes.len(), 0x10000);
         }
     }
 
@@ -6022,8 +6373,9 @@ mod tests {
     }
 
     #[test]
-    fn call_stack_is_little_endian() {
-        // CALL pushes return address low byte first (little-endian).
+    fn call_stack_is_little_endian_with_measured_descending_write_order() {
+        // The final frame is little-endian at S, but PC-E500 hardware writes
+        // high byte first while pre-decrementing S once per byte.
         let mut bus = MemBus::with_size(0x80);
         let mut state = LlamaState::new();
         state.set_reg(RegName::S, 0x40);
@@ -6035,6 +6387,10 @@ mod tests {
         assert_eq!(bus.mem[sp], 0x45); // low byte first
         assert_eq!(bus.mem[sp + 1], 0x23);
         assert_eq!(bus.mem[sp + 2], 0x01); // high byte last
+        assert_eq!(
+            bus.writes,
+            vec![(0x3F, 8, 0x01), (0x3E, 8, 0x23), (0x3D, 8, 0x45)]
+        );
 
         let popped = LlamaExecutor::pop_stack(&mut state, &mut bus, RegName::S, 24, false);
         assert_eq!(popped, ret);
@@ -6042,41 +6398,37 @@ mod tests {
     }
 
     #[test]
-    fn control_flow_20bit_immediates_reject_reserved_upper_nibble_before_mutation() {
+    fn hw009_far_control_masks_every_encoded_upper_nibble() {
         for opcode in [0x03, 0x05] {
-            let mut bus = MemBus::with_size(0x200);
-            bus.mem[..4].copy_from_slice(&[opcode, 0x3A, 0x07, 0x7C]);
-            let mut state = LlamaState::new();
-            state.set_reg(RegName::X, 0x11111);
-            state.set_reg(RegName::Y, 0x22222);
-            state.set_reg(RegName::U, 0x00180);
-            state.set_reg(RegName::S, 0x00190);
-            let before = [
-                state.get_reg(RegName::X),
-                state.get_reg(RegName::Y),
-                state.get_reg(RegName::U),
-                state.get_reg(RegName::S),
-            ];
-            let mut exec = LlamaExecutor::new();
+            for upper_nibble in 0..=0x0F {
+                let mut bus = MemBus::with_size(0x200);
+                bus.mem[..4].copy_from_slice(&[opcode, 0x80, 0x00, upper_nibble << 4]);
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::S, 0x00190);
+                let mut exec = LlamaExecutor::new();
 
-            let error = exec
-                .execute(opcode, &mut state, &mut bus)
-                .expect_err("reserved upper nibble must fail closed");
+                let len = exec
+                    .execute(opcode, &mut state, &mut bus)
+                    .expect("all hardware-measured far-control aliases must execute");
 
-            assert_eq!(error, ENCODED_20BIT_UPPER_NIBBLE_ERROR);
-            assert_eq!(state.pc(), 0, "opcode {opcode:02X}");
-            assert_eq!(
-                [
-                    state.get_reg(RegName::X),
-                    state.get_reg(RegName::Y),
-                    state.get_reg(RegName::U),
-                    state.get_reg(RegName::S),
-                ],
-                before,
-                "opcode {opcode:02X}"
-            );
-            assert_eq!(state.call_depth(), 0, "opcode {opcode:02X}");
-            assert!(bus.writes.is_empty(), "opcode {opcode:02X}");
+                assert_eq!(len, 4, "opcode {opcode:02X}, upper {upper_nibble:X}");
+                assert_eq!(
+                    state.pc(),
+                    0x80,
+                    "opcode {opcode:02X}, upper {upper_nibble:X}"
+                );
+                if opcode == 0x03 {
+                    assert_eq!(state.get_reg(RegName::S), 0x190);
+                    assert!(bus.writes.is_empty());
+                } else {
+                    assert_eq!(state.get_reg(RegName::S), 0x18D);
+                    assert_eq!(
+                        bus.writes,
+                        vec![(0x18F, 8, 0x00), (0x18E, 8, 0x00), (0x18D, 8, 0x04)]
+                    );
+                    assert_eq!(state.call_depth(), 1);
+                }
+            }
         }
     }
 
@@ -6105,38 +6457,190 @@ mod tests {
     }
 
     #[test]
-    fn absolute_external_operands_reject_reserved_upper_nibble() {
-        let mut cases = Vec::new();
-        for opcode in [0x62, 0x66, 0x6A, 0x72, 0x7A] {
-            cases.push((opcode, vec![opcode, 0x34, 0x12, 0xF0, 0x00]));
-        }
-        for opcode in 0x88..=0x8F {
-            cases.push((opcode, vec![opcode, 0x34, 0x12, 0xF0]));
-        }
-        for opcode in 0xA8..=0xAF {
-            cases.push((opcode, vec![opcode, 0x34, 0x12, 0xF0]));
-        }
-        for opcode in 0xD0..=0xD3 {
-            cases.push((opcode, vec![opcode, 0x00, 0x34, 0x12, 0xF0]));
-        }
-        for opcode in 0xD8..=0xDB {
-            cases.push((opcode, vec![opcode, 0x34, 0x12, 0xF0, 0x00]));
-        }
+    fn hw009_88_8f_direct_reads_discard_address_upper_nibble() {
+        for (opcode, register, expected) in [
+            (0x88, RegName::A, 0xA5),
+            (0x89, RegName::IL, 0xA5),
+            (0x8A, RegName::BA, 0x5AA5),
+            (0x8B, RegName::I, 0x5AA5),
+            (0x8C, RegName::X, 0xC5AA5),
+            (0x8D, RegName::Y, 0xC5AA5),
+            (0x8E, RegName::U, 0xC5AA5),
+            (0x8F, RegName::S, 0xC5AA5),
+        ] {
+            for high in [0x81, 0x01] {
+                let mut bus = MemBus::with_size(0x1_0200);
+                bus.mem[..5].copy_from_slice(&[opcode, 0xF0, 0x01, high, 0x00]);
+                bus.mem[0x1_01F0..0x1_01F3].copy_from_slice(&[0xA5, 0x5A, 0x3C]);
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::F, 0x03);
+                let mut exec = LlamaExecutor::new();
 
-        for (opcode, bytes) in cases {
-            let mut bus = MemBus::with_size(0x200);
-            bus.mem[..bytes.len()].copy_from_slice(&bytes);
-            let mut state = LlamaState::new();
-            state.set_reg(RegName::I, 1);
-            let exec = LlamaExecutor::new();
+                exec.validate_before_scheduling(opcode, &state, &mut bus)
+                    .expect("HW-009 88-8F address alias must pass preflight");
+                let len = exec
+                    .execute(opcode, &mut state, &mut bus)
+                    .expect("HW-009 88-8F address alias must execute");
 
-            let error = exec
-                .validate_before_scheduling(opcode, &state, &mut bus)
-                .expect_err("absolute external address must be canonical");
+                assert_eq!(len, 4, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(
+                    state.get_reg(register),
+                    expected,
+                    "opcode {opcode:02X}, high {high:02X}"
+                );
+                assert_eq!(state.get_reg(RegName::F), 0x03, "opcode {opcode:02X}");
+                assert_eq!(state.pc(), 4, "opcode {opcode:02X}, high {high:02X}");
 
-            assert_eq!(error, ENCODED_20BIT_UPPER_NIBBLE_ERROR, "{opcode:02X}");
-            assert_eq!(state.pc(), 0, "opcode {opcode:02X}");
-            assert!(bus.writes.is_empty(), "opcode {opcode:02X}");
+                exec.execute(0x00, &mut state, &mut bus)
+                    .expect("following NOP must execute");
+                assert_eq!(state.pc(), 5, "opcode {opcode:02X}, high {high:02X}");
+            }
+        }
+    }
+
+    #[test]
+    fn hw009_absolute_byte_ops_discard_address_upper_nibble() {
+        for (opcode, immediate, writes) in [
+            (0x62, 0x00, false),
+            (0x66, 0xFF, false),
+            (0x6A, 0x00, true),
+            (0x72, 0xFF, true),
+            (0x7A, 0x00, true),
+        ] {
+            for high in [0x84, 0x04] {
+                let mut bus = MemBus::with_size(0x4_0700);
+                bus.mem[..6].copy_from_slice(&[opcode, 0xD0, 0x06, high, immediate, 0x00]);
+                bus.mem[0x4_06D0] = 0xA5;
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::F, 0x03);
+                let mut exec = LlamaExecutor::new();
+
+                exec.validate_before_scheduling(opcode, &state, &mut bus)
+                    .expect("HW-009 absolute-byte address alias must pass preflight");
+                let len = exec
+                    .execute(opcode, &mut state, &mut bus)
+                    .expect("HW-009 absolute-byte address alias must execute");
+
+                assert_eq!(len, 5, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(state.pc(), 5, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(bus.mem[0x4_06D0], 0xA5, "opcode {opcode:02X}");
+                if writes {
+                    assert_eq!(bus.writes, vec![(0x4_06D0, 8, 0xA5)]);
+                } else {
+                    assert!(bus.writes.is_empty(), "opcode {opcode:02X}");
+                }
+
+                exec.execute(0x00, &mut state, &mut bus)
+                    .expect("following NOP must execute");
+                assert_eq!(state.pc(), 6, "opcode {opcode:02X}, high {high:02X}");
+            }
+        }
+    }
+
+    #[test]
+    fn hw009_a8_af_direct_writes_discard_address_upper_nibble() {
+        for (opcode, register, value, width) in [
+            (0xA8, RegName::A, 0xA5, 1_u32),
+            (0xA9, RegName::IL, 0xA5, 1),
+            (0xAA, RegName::BA, 0x5AA5, 2),
+            (0xAB, RegName::I, 0x5AA5, 2),
+            (0xAC, RegName::X, 0xC3C5A, 3),
+            (0xAD, RegName::Y, 0xC3C5A, 3),
+            (0xAE, RegName::U, 0xC3C5A, 3),
+            (0xAF, RegName::S, 0xC3C5A, 3),
+        ] {
+            for high in [0x84, 0x04] {
+                let mut bus = MemBus::with_size(0x4_0700);
+                bus.mem[..5].copy_from_slice(&[opcode, 0xD0, 0x06, high, 0x00]);
+                let mut state = LlamaState::new();
+                state.set_reg(register, value);
+                let mut exec = LlamaExecutor::new();
+
+                exec.validate_before_scheduling(opcode, &state, &mut bus)
+                    .expect("HW-009 A8-AF address alias must pass preflight");
+                let len = exec
+                    .execute(opcode, &mut state, &mut bus)
+                    .expect("HW-009 A8-AF address alias must execute");
+
+                assert_eq!(len, 4, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(state.pc(), 4, "opcode {opcode:02X}, high {high:02X}");
+                let expected: Vec<_> = (0..width)
+                    .map(|index| (0x4_06D0 + index, 8, (value >> (8 * index)) & 0xFF))
+                    .collect();
+                assert_eq!(bus.writes, expected, "opcode {opcode:02X}, high {high:02X}");
+
+                exec.execute(0x00, &mut state, &mut bus)
+                    .expect("following NOP must execute");
+                assert_eq!(state.pc(), 5, "opcode {opcode:02X}, high {high:02X}");
+            }
+        }
+    }
+
+    #[test]
+    fn hw009_absolute_transfers_discard_address_upper_nibble() {
+        let sentinel = [0xA5, 0x5A, 0x3C];
+        for (opcode, transfer_len, counted, to_external) in [
+            (0xD0, 1_usize, false, false),
+            (0xD1, 2, false, false),
+            (0xD2, 3, false, false),
+            (0xD3, 3, true, false),
+            (0xD8, 1, false, true),
+            (0xD9, 2, false, true),
+            (0xDA, 3, false, true),
+            (0xDB, 3, true, true),
+        ] {
+            for high in if to_external {
+                [0x84, 0x04]
+            } else {
+                [0x81, 0x01]
+            } {
+                let mut bus = MemBus::with_size(0x4_0700);
+                if to_external {
+                    bus.mem[..6].copy_from_slice(&[opcode, 0xD0, 0x06, high, 0x60, 0x00]);
+                    bus.mem[0x60..0x63].copy_from_slice(&sentinel);
+                } else {
+                    bus.mem[..6].copy_from_slice(&[opcode, 0x60, 0xF0, 0x01, high, 0x00]);
+                    bus.mem[0x1_01F0..0x1_01F3].copy_from_slice(&sentinel);
+                    bus.mem[0x60..0x63].copy_from_slice(&[0x11, 0x22, 0x33]);
+                }
+                bus.mem[IMEM_BP_OFFSET as usize] = 0;
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::I, if counted { 3 } else { 0x5AA5 });
+                state.set_reg(RegName::F, 0x03);
+                let mut exec = LlamaExecutor::new();
+
+                exec.validate_before_scheduling(opcode, &state, &mut bus)
+                    .expect("HW-009 D0-D3/D8-DB alias must pass preflight");
+                let len = exec
+                    .execute(opcode, &mut state, &mut bus)
+                    .expect("HW-009 D0-D3/D8-DB alias must execute");
+
+                assert_eq!(len, 5, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(state.pc(), 5, "opcode {opcode:02X}, high {high:02X}");
+                assert_eq!(
+                    state.get_reg(RegName::I),
+                    if counted { 0 } else { 0x5AA5 },
+                    "opcode {opcode:02X}, high {high:02X}"
+                );
+                assert_eq!(state.get_reg(RegName::F), 0x03, "opcode {opcode:02X}");
+                if to_external {
+                    assert_eq!(
+                        &bus.mem[0x4_06D0..0x4_06D0 + transfer_len],
+                        &sentinel[..transfer_len],
+                        "opcode {opcode:02X}, high {high:02X}"
+                    );
+                } else {
+                    assert_eq!(
+                        &bus.mem[0x60..0x60 + transfer_len],
+                        &sentinel[..transfer_len],
+                        "opcode {opcode:02X}, high {high:02X}"
+                    );
+                }
+
+                exec.execute(0x00, &mut state, &mut bus)
+                    .expect("following NOP must execute");
+                assert_eq!(state.pc(), 6, "opcode {opcode:02X}, high {high:02X}");
+            }
         }
     }
 
@@ -6829,69 +7333,48 @@ mod tests {
     }
 
     #[test]
-    fn i_zero_counted_instruction_matrix_fails_atomically() {
-        let cases: &[(&str, &[u8])] = &[
-            ("ADCL mem,mem", &[0x54, 0x10, 0x20]),
-            ("ADCL mem,A", &[0x55, 0x10]),
-            ("SBCL mem,mem", &[0x5C, 0x10, 0x20]),
-            ("SBCL mem,A", &[0x5D, 0x10]),
-            ("DADL mem,mem", &[0xC4, 0x10, 0x20]),
-            ("DADL mem,A", &[0xC5, 0x10]),
-            ("DSBL mem,mem", &[0xD4, 0x10, 0x20]),
-            ("DSBL mem,A", &[0xD5, 0x10]),
-            ("MVL reg source", &[0x56, 0x84, 0x12, 0x34]),
-            ("MVL reg destination", &[0x5E, 0x84, 0xAB, 0xCD]),
-            ("MVL mem,mem", &[0xCB, 0x10, 0x20]),
-            ("MVL absolute source", &[0xD3, 0x00, 0x00, 0x00, 0x00]),
-            ("MVL absolute destination", &[0xDB, 0x00, 0x00, 0x00, 0x00]),
-            ("MVL predec source", &[0xE3, 0x37, 0x20]),
-            ("MVL predec destination", &[0xEB, 0x37, 0x20]),
-            ("MVL pointer source", &[0xF3, 0x00, 0xAB, 0xCD]),
-            ("MVL pointer destination", &[0xFB, 0x00, 0xAB, 0xCD]),
-            ("MVLD", &[0xCF, 0x10, 0x20]),
-            ("EXL", &[0xC3, 0x10, 0x20]),
-            ("DSLL", &[0xEC, 0x10]),
-            ("DSRL", &[0xFC, 0x10]),
-            ("WAIT", &[0xEF]),
+    fn hw002_i_zero_counted_instruction_matrix_matches_hardware() {
+        let cases: &[(&str, &[u8], u32, usize)] = &[
+            ("ADCL", &[0x54, 0x10, 0x20], 0, 1),
+            ("SBCL", &[0x5C, 0x10, 0x20], 1, 1),
+            ("DADL", &[0xC4, 0x10, 0x20], 0, 1),
+            ("DSBL", &[0xD4, 0x10, 0x20], 1, 1),
+            ("MVL", &[0xCB, 0x10, 0x20], 1, 1),
+            ("MVLD", &[0xCF, 0x10, 0x20], 1, 1),
+            ("EXL", &[0xC3, 0x10, 0x20], 1, 2),
+            ("DSLL", &[0xEC, 0x10], 0, 1),
+            ("DSRL", &[0xFC, 0x10], 0, 1),
         ];
 
-        for &(name, program) in cases {
-            for (carry, zero) in [(0, 0), (1, 1)] {
-                let mut bus = MemBus::with_size(0x200);
-                bus.mem[..program.len()].copy_from_slice(program);
-                bus.mem[0x10] = 0x12;
-                bus.mem[0x20] = 0x34;
-                bus.mem[IMEM_BP_OFFSET as usize] = 0x40;
-                bus.mem[IMEM_PX_OFFSET as usize] = 0x50;
-                bus.mem[IMEM_PY_OFFSET as usize] = 0x60;
-                bus.mem[IMEM_IMR_OFFSET as usize] = 0x5A;
-                let memory_before = bus.mem.clone();
-                let mut state = LlamaState::new();
-                state.set_reg(RegName::I, 0);
-                state.set_reg(RegName::FC, carry);
-                state.set_reg(RegName::FZ, zero);
-                state.set_reg(RegName::X, 0x12345);
-                state.set_reg(RegName::Y, 0x23456);
-                state.set_reg(RegName::U, 0x34567);
-                state.set_reg(RegName::S, 0x45678);
-                state.set_reg(RegName::IMR, 0xA5);
-                let mut exec = LlamaExecutor::new();
+        for &(name, program, expected_fz, write_multiplier) in cases {
+            let code_base = 0x1000usize;
+            let mut bus = MemBus::with_size(0x2000);
+            bus.mem[code_base..code_base + program.len()].copy_from_slice(program);
+            let mut state = LlamaState::new();
+            state.set_pc(code_base as u32);
+            state.set_reg(RegName::I, 0);
+            state.set_reg(RegName::FC, 0);
+            state.set_reg(RegName::FZ, 1);
+            let mut exec = LlamaExecutor::new();
 
-                let err = exec.execute(program[0], &mut state, &mut bus).unwrap_err();
+            let len = exec.execute(program[0], &mut state, &mut bus).unwrap();
 
-                assert_eq!(err, ZERO_I_COUNT_ERROR, "program {name}");
-                assert_eq!(state.pc(), 0, "program {name}");
-                assert_eq!(state.get_reg(RegName::I), 0);
-                assert_eq!(state.get_reg(RegName::FC), carry);
-                assert_eq!(state.get_reg(RegName::FZ), zero);
-                assert_eq!(state.get_reg(RegName::X), 0x12345);
-                assert_eq!(state.get_reg(RegName::Y), 0x23456);
-                assert_eq!(state.get_reg(RegName::U), 0x34567);
-                assert_eq!(state.get_reg(RegName::S), 0x45678);
-                assert_eq!(state.get_reg(RegName::IMR), 0xA5);
-                assert!(bus.writes.is_empty(), "program {name} wrote memory");
-                assert_eq!(bus.mem, memory_before, "program {name} changed memory");
-            }
+            assert_eq!(usize::from(len), program.len(), "program {name}");
+            assert_eq!(
+                state.pc(),
+                code_base as u32 + program.len() as u32,
+                "program {name}"
+            );
+            assert_eq!(state.get_reg(RegName::I), 0, "program {name}");
+            assert_eq!(state.get_reg(RegName::FC), 0, "program {name}");
+            assert_eq!(state.get_reg(RegName::FZ), expected_fz, "program {name}");
+            assert_eq!(
+                bus.writes.len(),
+                0x1_0000 * write_multiplier,
+                "program {name}"
+            );
+            assert_eq!(bus.mem[0x10], 0, "program {name}");
+            assert_eq!(bus.mem[0x20], 0, "program {name}");
         }
     }
 
@@ -6971,26 +7454,6 @@ mod tests {
         bus.mem[0x20] = 0x20;
         exec.execute(0x20, &mut state, &mut bus)
             .expect_err("reserved opcode");
-        assert_eq!(perfetto_last_pc(), pc_before);
-        assert_eq!(perfetto_last_call_stack(), stack_before);
-        assert_eq!(perfetto_instr_context(), None);
-
-        state.set_pc(0x30);
-        bus.mem[0x30..0x33].copy_from_slice(&[0xC2, 0x80, 0x90]);
-        bus.mem[0x80..0x83].copy_from_slice(&[0x11, 0x22, 0xA3]);
-        bus.mem[0x90..0x93].copy_from_slice(&[0x44, 0x55, 0x06]);
-        exec.execute(0xC2, &mut state, &mut bus)
-            .expect_err("EXP upper nibble");
-        assert_eq!(perfetto_last_pc(), pc_before);
-        assert_eq!(perfetto_last_call_stack(), stack_before);
-        assert_eq!(perfetto_instr_context(), None);
-
-        state.set_pc(0x40);
-        state.set_reg(RegName::U, 0xA0);
-        bus.mem[0x40] = 0x3E;
-        bus.mem[0xA0] = 0xFC;
-        exec.execute(0x3E, &mut state, &mut bus)
-            .expect_err("POPU F upper bits");
         assert_eq!(perfetto_last_pc(), pc_before);
         assert_eq!(perfetto_last_call_stack(), stack_before);
         assert_eq!(perfetto_instr_context(), None);
