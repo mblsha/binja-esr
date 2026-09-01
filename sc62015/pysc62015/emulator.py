@@ -1072,12 +1072,16 @@ class Emulator:
             instr.analyze(info, address)
             self._execution_may_have_side_effects = True
             saved_pc = address & PC_MASK
-            s = (self.regs.get(RegisterName.S) - 3) & PC_MASK
-            self.regs.set(RegisterName.S, s)
-            for byte_index in range(3):
+            # Hardware pre-decrements S for every byte and writes the saved PC
+            # high-to-low.  Keep that observable bus order here; subtracting
+            # the full width first and filling the final little-endian image
+            # produces the same bytes but reverses callback/peripheral writes.
+            for byte_index in reversed(range(3)):
+                s = (self.regs.get(RegisterName.S) - 1) & PC_MASK
+                self.regs.set(RegisterName.S, s)
                 _write_byte_with_pc(
                     self.memory,
-                    (s + byte_index) & PC_MASK,
+                    s,
                     (saved_pc >> (8 * byte_index)) & 0xFF,
                     saved_pc,
                 )
