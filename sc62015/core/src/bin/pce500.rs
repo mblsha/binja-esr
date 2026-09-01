@@ -4067,6 +4067,14 @@ fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &Stand
     !irq_replaces_pc
 }
 
+fn fetch_replaced_irq_opcode(state: &LlamaState, bus: &mut StandaloneBus) -> u8 {
+    let pc = state.pc() & ADDRESS_MASK;
+    // Hardware performs exactly one architectural opcode fetch at the saved
+    // PC before an already-selected interrupt writes its frame. The byte is
+    // discarded, so it must not be decoded or silently stability-checked.
+    bus.load(pc, 8) as u8
+}
+
 fn preflight_and_tick_instruction(
     executor: &AsyncLlamaExecutor,
     opcode: u8,
@@ -4980,6 +4988,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             if bus.irq_pending() {
                 // S is a 20-bit external pointer. Interrupt-frame bytes wrap
                 // independently at FFFFF -> 00000 even when S starts below 5.
+                let _discarded_opcode = fetch_replaced_irq_opcode(&state, &mut bus);
                 if let Err(error) = bus.deliver_irq(&mut state) {
                     eprintln!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
                     break;
@@ -5885,6 +5894,60 @@ mod tests {
             current_instruction_requires_silent_preflight(&state, &bus),
             "a masked wake source leaves the resumed PC executable"
         );
+    }
+
+    #[test]
+    fn selected_irq_fetches_discarded_callback_opcode_once_without_preflight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut bus = test_standalone_bus();
+        let current_pc = 0x02000;
+        let handler_pc = 0x03000;
+        let mut state = LlamaState::new();
+        state.set_pc(current_pc);
+        state.set_reg(RegName::S, 0x00400);
+        bus.memory.write_external_byte(current_pc, 0x20);
+        bus.memory.write_external_byte(handler_pc, 0x00);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR, handler_pc as u8);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, (handler_pc >> 8) as u8);
+        bus.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, (handler_pc >> 16) as u8);
+        bus.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        bus.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        bus.irq_pending = true;
+        bus.timer.irq_pending = true;
+        bus.last_irq_src = Some("KEY".to_string());
+        bus.memory.set_python_ranges(vec![(current_pc, current_pc)]);
+
+        let architectural_reads = Arc::new(AtomicUsize::new(0));
+        let silent_peeks = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::clone(&architectural_reads);
+        bus.host_read = Some(Box::new(move |addr| {
+            assert_eq!(addr, current_pc);
+            read_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x20)
+        }));
+        let peek_count = Arc::clone(&silent_peeks);
+        bus.host_peek = Some(Box::new(move |addr| {
+            assert_eq!(addr, current_pc);
+            peek_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x20)
+        }));
+
+        assert!(!current_instruction_requires_silent_preflight(&state, &bus));
+        assert_eq!(fetch_replaced_irq_opcode(&state, &mut bus), 0x20);
+        bus.deliver_irq(&mut state)
+            .expect("selected IRQ must replace a reserved callback opcode");
+
+        assert_eq!(architectural_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(silent_peeks.load(Ordering::Relaxed), 0);
+        assert_eq!(state.pc(), handler_pc);
+        assert_eq!(state.get_reg(RegName::S), 0x003FB);
+        assert!(bus.in_interrupt);
     }
 
     #[test]

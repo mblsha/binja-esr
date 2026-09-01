@@ -1671,10 +1671,10 @@ impl CoreRuntime {
                     state_ptr: &self.state as *const LlamaState,
                 };
                 // Fully validate the current instruction through the silent
-                // bus first. A malformed current encoding takes precedence
-                // even when the IRQ destination aliases it, and must consume
-                // zero architectural reads.
-                let silent_prepared_opcode = if should_preflight {
+                // bus only when it can execute on this slot. An IRQ selected
+                // at entry replaces that PC after one discarded architectural
+                // opcode fetch, so its operands and encoding are irrelevant.
+                let silent_prepared_opcode = if should_preflight && !irq_transfer_selected {
                     let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
                         CoreError::Other(format!(
                         "preflight opcode at 0x{pc:05X}: side-effect-free memory is unavailable"
@@ -1758,7 +1758,16 @@ impl CoreRuntime {
                     }
                 }
 
-                if let Some(silent_opcode) = silent_prepared_opcode {
+                if irq_transfer_selected {
+                    // PC-E500 captures show one architectural fetch at the
+                    // saved/fall-through PC before an already-selected IRQ
+                    // writes its frame.  The fetched byte is discarded: do
+                    // not decode it, reject reserved values, or require a
+                    // callback-backed byte to remain stable across the
+                    // scheduler boundary.
+                    let _discarded_opcode = bus.load(pc, 8) as u8;
+                    None
+                } else if let Some(silent_opcode) = silent_prepared_opcode {
                     let opcode = bus.load(pc, 8) as u8;
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
@@ -1794,6 +1803,30 @@ impl CoreRuntime {
                     None
                 }
             };
+            if irq_transfer_selected {
+                // IRQ entry consumes this CoreRuntime scheduling slot. The
+                // handler instruction is prepared on the next slot, matching
+                // the runtime's established step/count contract while the
+                // replaced current PC is never decoded or executed.
+                // Materialize any level/latch state that the side-effect-free
+                // entry decision included before committing delivery.
+                self.refresh_on_key_interrupt_level();
+                self.refresh_external_interrupt_level();
+                self.refresh_sio_interrupts();
+                self.refresh_key_irq_latch();
+                self.arm_pending_irq_from_isr();
+                self.deliver_pending_irq()?;
+                let mut guard = PERFETTO_TRACER.enter();
+                guard.with_some(|tracer| {
+                    tracer.update_counters(
+                        self.metadata.instruction_count,
+                        self.state.call_depth(),
+                        self.memory.memory_read_count(),
+                        self.memory.memory_write_count(),
+                    );
+                });
+                continue;
+            }
             if self.state.is_off() {
                 if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
                     // Hardware wake filtering is not evidence that ignored
@@ -1981,9 +2014,6 @@ impl CoreRuntime {
                         }
                         // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
                         self.refresh_key_irq_latch();
-                    }
-                    if irq_transfer_selected {
-                        self.deliver_pending_irq()?;
                     }
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
@@ -2231,9 +2261,6 @@ impl CoreRuntime {
                         in_interrupt: in_interrupt_before,
                         irq_source: irq_source_before,
                     });
-                }
-                if irq_transfer_selected {
-                    self.deliver_pending_irq()?;
                 }
                 let mut guard = PERFETTO_TRACER.enter();
                 guard.with_some(|tracer| {
@@ -4574,6 +4601,60 @@ mod tests {
         assert_eq!(rt.metadata.instruction_count, instruction_before);
         assert!(!rt.timer.in_interrupt);
         assert!(rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn selected_irq_fetches_discarded_callback_opcode_once_without_preflight() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let mut rt = CoreRuntime::new();
+        let current_pc = 0x02000;
+        let handler_pc = 0x03000;
+        rt.state.set_pc(current_pc);
+        rt.state.set_reg(RegName::S, 0x00400);
+        rt.memory.write_external_byte(current_pc, 0x20);
+        rt.memory.write_external_byte(handler_pc, 0x00);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR, handler_pc as u8);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, (handler_pc >> 8) as u8);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, (handler_pc >> 16) as u8);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_ONK);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.onk_level = true;
+        rt.memory.set_python_ranges(vec![(current_pc, current_pc)]);
+
+        let architectural_reads = Arc::new(AtomicUsize::new(0));
+        let silent_peeks = Arc::new(AtomicUsize::new(0));
+        let read_count = Arc::clone(&architectural_reads);
+        rt.set_host_read(move |addr| {
+            assert_eq!(addr, current_pc);
+            read_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x20)
+        });
+        let peek_count = Arc::clone(&silent_peeks);
+        rt.set_host_peek(move |addr| {
+            assert_eq!(addr, current_pc);
+            peek_count.fetch_add(1, Ordering::Relaxed);
+            Some(0x20)
+        });
+
+        rt.step(1)
+            .expect("selected IRQ must replace a reserved callback opcode");
+
+        assert_eq!(architectural_reads.load(Ordering::Relaxed), 1);
+        assert_eq!(silent_peeks.load(Ordering::Relaxed), 0);
+        assert_eq!(rt.metadata.instruction_count, 0);
+        assert_eq!(rt.state.pc(), handler_pc);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x003FB);
+        assert!(rt.timer.in_interrupt);
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0
+        );
     }
 
     #[test]
