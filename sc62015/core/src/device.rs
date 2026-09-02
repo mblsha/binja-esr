@@ -2,6 +2,7 @@
 // PY_SOURCE: pce500/run_pce500.py
 
 use crate::iq7000;
+use crate::keyboard::KeyboardMatrix;
 use crate::lcd::create_lcd;
 use crate::lcd::{Iq7000LcdController, LcdController, LcdHal, LcdKind};
 use crate::lcd_text::{
@@ -10,7 +11,7 @@ use crate::lcd_text::{
 };
 use crate::pce500;
 use crate::timer::TimerContext;
-use crate::{CoreRuntime, Result};
+use crate::{CoreRuntime, MemoryImage, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
@@ -23,6 +24,52 @@ pub struct DeviceSpec {
     pub font_base_addr: Option<u32>,
     pub text_decoder: Option<DeviceTextDecoderKind>,
     pub timer: DeviceTimerProfile,
+    pub internal_ram_mirror: bool,
+    pub keyboard: DeviceKeyboardProfile,
+    pub sio_stub: bool,
+    pub default_memory_card: DeviceMemoryCardProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceKeyboardProfile {
+    pub columns_active_high: bool,
+    pub fifo_mirroring: bool,
+    pub keyi_on_any_press: bool,
+    pub raw_kil: bool,
+    pub press_threshold: u8,
+}
+
+impl DeviceKeyboardProfile {
+    pub fn apply(self, keyboard: &mut KeyboardMatrix) {
+        keyboard.set_columns_active_high(self.columns_active_high);
+        keyboard.set_fifo_mirroring(self.fifo_mirroring);
+        keyboard.set_keyi_on_any_press(self.keyi_on_any_press);
+        keyboard.set_raw_kil(self.raw_kil);
+        keyboard.set_press_threshold(self.press_threshold);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMemoryCardProfile {
+    Absent,
+    BlankWritable64KiB,
+}
+
+impl DeviceMemoryCardProfile {
+    pub fn is_present(self) -> bool {
+        matches!(self, Self::BlankWritable64KiB)
+    }
+
+    pub fn apply(self, memory: &mut MemoryImage) -> Result<()> {
+        match self {
+            Self::Absent => memory.set_memory_card_slot_present(false),
+            Self::BlankWritable64KiB => {
+                memory.set_memory_card_slot_present(true);
+                memory.load_memory_card(&vec![0; 65_536])?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +196,16 @@ impl DeviceModel {
                     sti_period: pce500::DEFAULT_STI_PERIOD,
                     provenance: TimerProfileProvenance::PcE500CompatibilityFallback,
                 },
+                internal_ram_mirror: false,
+                keyboard: DeviceKeyboardProfile {
+                    columns_active_high: true,
+                    fifo_mirroring: false,
+                    keyi_on_any_press: true,
+                    raw_kil: true,
+                    press_threshold: 6,
+                },
+                sio_stub: false,
+                default_memory_card: DeviceMemoryCardProfile::Absent,
             },
             Self::PcE500 => DeviceSpec {
                 label: "pc-e500",
@@ -164,6 +221,16 @@ impl DeviceModel {
                     sti_period: pce500::DEFAULT_STI_PERIOD,
                     provenance: TimerProfileProvenance::PcE500BoardEstimate,
                 },
+                internal_ram_mirror: true,
+                keyboard: DeviceKeyboardProfile {
+                    columns_active_high: true,
+                    fifo_mirroring: true,
+                    keyi_on_any_press: false,
+                    raw_kil: false,
+                    press_threshold: 1,
+                },
+                sio_stub: true,
+                default_memory_card: DeviceMemoryCardProfile::BlankWritable64KiB,
             },
             Self::PcE500Jp => DeviceSpec {
                 label: "pc-e500-jp",
@@ -179,6 +246,16 @@ impl DeviceModel {
                     sti_period: pce500::DEFAULT_STI_PERIOD,
                     provenance: TimerProfileProvenance::PcE500BoardEstimate,
                 },
+                internal_ram_mirror: true,
+                keyboard: DeviceKeyboardProfile {
+                    columns_active_high: true,
+                    fifo_mirroring: true,
+                    keyi_on_any_press: false,
+                    raw_kil: false,
+                    press_threshold: 1,
+                },
+                sio_stub: true,
+                default_memory_card: DeviceMemoryCardProfile::BlankWritable64KiB,
             },
         }
     }
@@ -232,6 +309,14 @@ impl DeviceModel {
         self.spec().timer
     }
 
+    pub fn default_memory_card_profile(self) -> DeviceMemoryCardProfile {
+        self.spec().default_memory_card
+    }
+
+    pub fn configure_keyboard(self, keyboard: &mut KeyboardMatrix) {
+        self.spec().keyboard.apply(keyboard);
+    }
+
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self)?;
         *rt.timer = self.timer_profile().new_context(true);
@@ -240,30 +325,19 @@ impl DeviceModel {
             configure_lcd_char_tracing(lcd, *self, rom);
         }
         if let Some(kb) = rt.keyboard.as_mut() {
-            kb.set_columns_active_high(true);
-            if matches!(self, Self::Iq7000) {
-                kb.disable_fifo_mirroring();
-                kb.set_keyi_on_any_press(true);
-                kb.set_raw_kil(true);
-            }
+            self.configure_keyboard(kb);
         }
-        match self {
+        rt.sio = None;
+        let result = match self {
             Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
-            Self::PcE500 => {
-                let res = pce500::load_pce500_rom_window(rt, rom);
-                if res.is_ok() {
-                    rt.enable_sio_stub();
-                }
-                res
-            }
-            Self::PcE500Jp => {
-                let res = pce500::load_pce500_system_image(rt, rom);
-                if res.is_ok() {
-                    rt.enable_sio_stub();
-                }
-                res
-            }
+            Self::PcE500 => pce500::load_pce500_rom_window(rt, rom),
+            Self::PcE500Jp => pce500::load_pce500_system_image(rt, rom),
+        };
+        result?;
+        if self.spec().sio_stub {
+            rt.enable_sio_stub();
         }
+        self.default_memory_card_profile().apply(&mut rt.memory)
     }
 }
 
@@ -291,6 +365,7 @@ impl DeviceTextDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MemoryCardMode;
 
     #[test]
     fn timer_profiles_preserve_model_specific_provenance() {
@@ -324,5 +399,56 @@ mod tests {
             assert_eq!(runtime.timer.mti_period, expected.mti_period);
             assert_eq!(runtime.timer.sti_period, expected.sti_period);
         }
+    }
+
+    #[test]
+    fn complete_profiles_do_not_leak_pc_devices_into_iq7000() {
+        let mut runtime =
+            CoreRuntime::for_model(DeviceModel::Iq7000, &[]).expect("construct IQ-7000 runtime");
+        let iq_keyboard = runtime
+            .keyboard
+            .as_ref()
+            .expect("IQ-7000 keyboard")
+            .snapshot_state();
+        assert!(!iq_keyboard.emit_events);
+        assert!(iq_keyboard.keyi_on_any_press);
+        assert!(iq_keyboard.raw_kil);
+        assert!(runtime.sio.is_none());
+        assert_eq!(
+            runtime
+                .memory
+                .memory_card_snapshot()
+                .expect("IQ-7000 card snapshot")
+                .expect("configured IQ-7000 slot")
+                .mode,
+            MemoryCardMode::Absent
+        );
+
+        DeviceModel::PcE500
+            .configure_runtime(&mut runtime, &[])
+            .expect("switch to PC-E500");
+        let pc_keyboard = runtime
+            .keyboard
+            .as_ref()
+            .expect("PC-E500 keyboard")
+            .snapshot_state();
+        assert!(pc_keyboard.emit_events);
+        assert!(!pc_keyboard.keyi_on_any_press);
+        assert!(!pc_keyboard.raw_kil);
+        assert!(runtime.sio.is_some());
+        assert_eq!(
+            runtime
+                .memory
+                .memory_card_snapshot()
+                .expect("PC-E500 card snapshot")
+                .expect("configured PC-E500 slot")
+                .mode,
+            MemoryCardMode::Present
+        );
+
+        DeviceModel::Iq7000
+            .configure_runtime(&mut runtime, &[])
+            .expect("switch back to IQ-7000");
+        assert!(runtime.sio.is_none());
     }
 }
