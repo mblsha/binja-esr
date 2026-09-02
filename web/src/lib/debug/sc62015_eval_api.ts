@@ -41,6 +41,7 @@ export type CallArtifacts = {
 		trace: { pc: number; call_stack: { len: number; frames: number[] } };
 	}>;
 	probe_samples: ProbeSample[];
+	stubs_used?: Array<{ id: number; pc: number; hits: number }>;
 	perfetto_trace_b64?: string | null;
 	report: {
 		reason: string;
@@ -63,6 +64,7 @@ export type CallHandle = {
 		memoryBlocks: MemoryWriteBlock[];
 		lcdWrites: CallArtifacts['lcd_writes'];
 		probeSamples: ProbeSample[];
+		stubsUsed: NonNullable<CallArtifacts['stubs_used']>;
 		perfettoTraceB64: string | null;
 		result: CallArtifacts['report'];
 		infoLog: string[];
@@ -731,6 +733,11 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				artifacts.lcd_writes.length
 					? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
 					: 'No LCD writes captured.',
+				artifacts.stubs_used?.length
+					? `Used ${artifacts.stubs_used.length} stub(s): ${artifacts.stubs_used
+							.map((stub) => `#${stub.id}@0x${stub.pc.toString(16).toUpperCase()}×${stub.hits}`)
+							.join(', ')}.`
+					: '',
 				artifacts.perfetto_trace_b64
 					? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).`
 					: '',
@@ -747,6 +754,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					memoryBlocks,
 					lcdWrites: artifacts.lcd_writes,
 					probeSamples: artifacts.probe_samples ?? [],
+					stubsUsed: artifacts.stubs_used ?? [],
 					perfettoTraceB64: artifacts.perfetto_trace_b64 ?? null,
 					result: artifacts.report,
 					infoLog,
