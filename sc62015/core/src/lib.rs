@@ -413,6 +413,7 @@ pub struct CoreRuntime {
     iq7000_rtc: Option<iq7000::Iq7000RtcPeripheral>,
     onk_level: bool,
     external_interrupt_level: bool,
+    poisoned: Option<String>,
 }
 
 struct DeviceRuntimeSettings {
@@ -457,6 +458,7 @@ impl CoreRuntime {
             iq7000_rtc: None,
             onk_level: false,
             external_interrupt_level: false,
+            poisoned: None,
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -588,8 +590,12 @@ impl CoreRuntime {
             rtc_active: self.iq7000_rtc.is_some(),
             pc: self.state.pc() & ADDRESS_MASK,
         };
-        crate::llama::eval::power_on_reset(&mut bus, &mut self.state)
-            .map_err(|error| CoreError::Other(format!("power-on reset: {error}")))
+        let result = crate::llama::eval::power_on_reset(&mut bus, &mut self.state)
+            .map_err(|error| CoreError::Other(format!("power-on reset: {error}")));
+        if result.is_ok() {
+            self.poisoned = None;
+        }
+        result
     }
 
     /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
@@ -1236,6 +1242,12 @@ impl CoreRuntime {
     }
 
     pub fn step(&mut self, instructions: usize) -> Result<()> {
+        if let Some(reason) = self.poisoned.as_deref() {
+            return Err(CoreError::Other(format!(
+                "SC62015 CoreRuntime is poisoned after a failed side-effecting operation; \
+                 power-on reset required: {reason}"
+            )));
+        }
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
@@ -2275,6 +2287,9 @@ impl CoreRuntime {
 
         self.memory.validate_snapshot_overlay_contract()?;
         let mut active = Vec::new();
+        if self.poisoned.is_some() {
+            active.push("poisoned fail-stop runtime state");
+        }
         if self.sio.is_some() {
             active.push("SIO queues/line/timing state");
         }
@@ -2831,7 +2846,7 @@ impl CoreRuntime {
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
         record_stack_write(imr_addr, 8, cleared_imr as u32);
 
-        let vec = {
+        let vector_result = {
             let host_read = self
                 .host_read
                 .as_mut()
@@ -2853,7 +2868,21 @@ impl CoreRuntime {
             };
             vector_transfer
                 .consume_after_architectural_fetch(INTERRUPT_VECTOR_ADDR, &self.state, &mut bus)
-                .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))?
+                .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))
+        };
+        let vec = match vector_result {
+            Ok(vec) => vec,
+            Err(error) => {
+                // HW-014 establishes that the architectural vector read occurs
+                // after the complete frame and IMR.IRM clear. Those writes are
+                // already observable and cannot be rolled back safely, so a
+                // failed transfer must prevent a second frame from being
+                // manufactured on a later step.
+                if self.poisoned.is_none() {
+                    self.poisoned = Some(error.to_string());
+                }
+                return Err(error);
+            }
         };
 
         // Emit a single delivery marker (matches Python tracer).
@@ -4103,6 +4132,64 @@ mod tests {
         assert_eq!(rt.timer.last_fired.as_deref(), Some("ONK"));
         assert!(rt.timer.delivered_masks.is_empty());
         assert_eq!(rt.timer.irq_total, 0);
+        assert!(rt.poisoned.is_none());
+    }
+
+    #[test]
+    fn post_frame_irq_vector_failure_poisons_until_power_on_reset() {
+        let mut rt = CoreRuntime::new();
+        let source_pc = 0x012345;
+        rt.state.set_reg(RegName::PC, source_pc);
+        // The three PC frame writes land on the IRQ vector itself. The
+        // architectural post-frame fetch therefore observes source_pc rather
+        // than the silently validated handler target.
+        rt.state.set_reg(RegName::S, 0x0FFFFD);
+        rt.state.set_reg(RegName::F, 0x03);
+        rt.memory.write_external_byte(source_pc, 0x00); // valid NOP target
+        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x02);
+        rt.memory
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
+        rt.memory.write_external_byte(0x00200, 0x00);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+
+        let error = rt
+            .step(1)
+            .expect_err("post-frame vector mismatch must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains(crate::llama::eval::VECTOR_CHANGED_DURING_PREFLIGHT_ERROR));
+        assert_eq!(rt.state.get_reg(RegName::PC), source_pc);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x0FFFF8);
+        assert_eq!(rt.memory.read_internal_byte(IMEM_IMR_OFFSET), Some(IMR_KEY));
+        assert_eq!(
+            [
+                rt.memory.load(INTERRUPT_VECTOR_ADDR, 8).unwrap() as u8,
+                rt.memory.load(INTERRUPT_VECTOR_ADDR + 1, 8).unwrap() as u8,
+                rt.memory.load(INTERRUPT_VECTOR_ADDR + 2, 8).unwrap() as u8,
+            ],
+            [0x45, 0x23, 0x01]
+        );
+        assert!(rt.poisoned.is_some());
+
+        let registers_after_failure = collect_registers(&rt.state);
+        let writes_after_failure = rt.memory.memory_write_count();
+        let retry = rt.step(1).expect_err("poison must block another frame");
+        assert!(retry.to_string().contains("poisoned"));
+        assert_eq!(collect_registers(&rt.state), registers_after_failure);
+        assert_eq!(rt.memory.memory_write_count(), writes_after_failure);
+
+        // External reset is the recovery boundary. The untouched reset vector
+        // resolves to zero in this fixture, where a NOP is available.
+        rt.power_on_reset().expect("power-on reset clears poison");
+        assert!(rt.poisoned.is_none());
+        rt.step(1).expect("execution resumes after reset");
     }
 
     #[test]
