@@ -1967,39 +1967,7 @@ impl CoreRuntime {
                     let prev_cycle = self.metadata.cycle_count;
                     let new_cycle = prev_cycle.wrapping_add(1);
                     self.metadata.cycle_count = new_cycle;
-                    let kb_irq_enabled = self.timer.kb_irq_enabled;
-                    let mirror_pce500_fifo = matches!(
-                        self.device_model(),
-                        DeviceModel::PcE500 | DeviceModel::PcE500Jp
-                    );
-                    let _ = self.timer.tick_timers_with_keyboard(
-                        &mut self.memory,
-                        new_cycle,
-                        |mem| {
-                            if let Some(kb) = self.keyboard.as_mut() {
-                                // Parity: always count/key-latch events even when IRQs are masked.
-                                let events = kb.scan_tick(mem, true);
-                                if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                    let drained = if mirror_pce500_fifo {
-                                        kb.drain_fifo_to_pce500_iocs_workspace(mem, kb_irq_enabled)
-                                    } else {
-                                        0
-                                    };
-                                    if drained == 0 {
-                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                    }
-                                }
-                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                            } else {
-                                (0, false, None)
-                            }
-                        },
-                        Some(self.state.get_reg(RegName::Y)),
-                        Some(self.state.get_reg(RegName::PC)),
-                    );
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        self.timer.irq_isr = isr;
-                    }
+                    self.tick_timers_and_keyboard(new_cycle);
                     self.refresh_raw_key_irq_level();
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
@@ -2151,45 +2119,12 @@ impl CoreRuntime {
                 let prev_cycle = self.metadata.cycle_count;
                 let new_cycle = prev_cycle.wrapping_add(cycle_increment);
                 if run_timer_cycles {
-                    let mirror_pce500_fifo = matches!(
-                        self.device_model(),
-                        DeviceModel::PcE500 | DeviceModel::PcE500Jp
-                    );
-                    for cyc in prev_cycle + 1..=new_cycle {
-                        let kb_irq_enabled = self.timer.kb_irq_enabled;
-                        let _ = self.timer.tick_timers_with_keyboard(
-                            &mut self.memory,
-                            cyc,
-                            |mem| {
-                                if let Some(kb) = self.keyboard.as_mut() {
-                                    // Parity: always count/key-latch events even when IRQs are masked.
-                                    let events = kb.scan_tick(mem, true);
-                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                        let drained = if mirror_pce500_fifo {
-                                            kb.drain_fifo_to_pce500_iocs_workspace(
-                                                mem,
-                                                kb_irq_enabled,
-                                            )
-                                        } else {
-                                            0
-                                        };
-                                        if drained == 0 {
-                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                        }
-                                    }
-                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                } else {
-                                    (0, false, None)
-                                }
-                            },
-                            Some(self.state.get_reg(RegName::Y)),
-                            Some(self.state.get_reg(RegName::PC)),
-                        );
-                        // Timer status mirrors are independent of raw KEYI,
-                        // which is sampled at instruction boundaries.
-                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                            self.timer.irq_isr = isr;
-                        }
+                    let mut timer_cycle = prev_cycle;
+                    while let Some(fire_cycle) =
+                        self.timer.next_fire_cycle_in_span(timer_cycle, new_cycle)
+                    {
+                        self.tick_timers_and_keyboard(fire_cycle);
+                        timer_cycle = fire_cycle;
                     }
                 }
                 self.metadata.cycle_count = new_cycle;

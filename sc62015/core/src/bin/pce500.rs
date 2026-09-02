@@ -2022,10 +2022,15 @@ impl StandaloneBus {
     }
 
     fn advance_cycles(&mut self, cycles: u64) {
-        for _ in 0..cycles {
-            self.cycle_count = self.cycle_count.wrapping_add(1);
-            self.tick_timers_only(self.cycle_count);
+        let end_cycle = self.cycle_count.wrapping_add(cycles);
+        while let Some(fire_cycle) = self
+            .timer
+            .next_fire_cycle_in_span(self.cycle_count, end_cycle)
+        {
+            self.cycle_count = fire_cycle;
+            self.tick_timers_only(fire_cycle);
         }
+        self.cycle_count = end_cycle;
     }
 
     fn finalize_instruction(&mut self) {
