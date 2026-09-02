@@ -270,38 +270,28 @@ impl KeyboardMatrix {
         self.raw_kil = enabled;
     }
 
+    #[inline]
+    fn active_column_mask(&self) -> u16 {
+        let columns = u16::from(self.kol) | (u16::from(self.koh) << 8);
+        if self.columns_active_high {
+            columns
+        } else {
+            !columns
+        }
+    }
+
     pub fn active_columns(&self) -> Vec<u8> {
-        let mut cols = Vec::new();
-        for col in 0..8 {
-            let bit = (self.kol >> col) & 1;
-            let active = if self.columns_active_high {
-                bit == 1
-            } else {
-                bit == 0
-            };
-            if active {
-                cols.push(col);
-            }
-        }
-        for col in 0..8 {
-            let bit = (self.koh >> col) & 1;
-            let active = if self.columns_active_high {
-                bit == 1
-            } else {
-                bit == 0
-            };
-            if active {
-                cols.push(col + 8);
-            }
-        }
-        cols
+        let mask = self.active_column_mask();
+        (0..COLUMN_COUNT as u8)
+            .filter(|column| mask & (1 << column) != 0)
+            .collect()
     }
 
     pub fn compute_kil(&self, allow_pending: bool) -> u8 {
         let mut value = 0u8;
-        let active = self.active_columns();
+        let active = self.active_column_mask();
         for state in &self.states {
-            if !active.contains(&state.location.column) {
+            if active & (1 << state.location.column) == 0 {
                 continue;
             }
             if self.raw_kil {
@@ -327,9 +317,9 @@ impl KeyboardMatrix {
     /// state, and the compatibility `raw_kil` presentation option do not
     /// participate.
     pub fn compute_physical_kil(&self) -> u8 {
-        let active = self.active_columns();
+        let active = self.active_column_mask();
         self.states.iter().fold(0u8, |value, state| {
-            if state.pressed && active.contains(&state.location.column) {
+            if state.pressed && active & (1 << state.location.column) != 0 {
                 value | (1 << (state.location.row & 0x07))
             } else {
                 value

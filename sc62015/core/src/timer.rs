@@ -181,6 +181,40 @@ impl TimerContext {
         cycle_count.wrapping_sub(deadline) < (1_u64 << 63)
     }
 
+    /// Return the next cycle in `(after_cycle, end_cycle]` on which at least
+    /// one enabled timer can fire. Non-deadline cycles have no architectural
+    /// timer or keyboard-scan effect and can therefore be skipped safely.
+    pub fn next_fire_cycle_in_span(&self, after_cycle: u64, end_cycle: u64) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        let span = end_cycle.wrapping_sub(after_cycle);
+        if span == 0 || span >= (1_u64 << 63) {
+            return None;
+        }
+        let first_cycle = after_cycle.wrapping_add(1);
+        let candidate = |period: u64, deadline: u64| {
+            if period == 0 {
+                return None;
+            }
+            let cycle = if Self::deadline_reached(first_cycle, deadline) {
+                first_cycle
+            } else {
+                deadline
+            };
+            let distance = cycle.wrapping_sub(after_cycle);
+            (distance <= span).then_some((distance, cycle))
+        };
+        match (
+            candidate(self.mti_period, self.next_mti),
+            candidate(self.sti_period, self.next_sti),
+        ) {
+            (Some(mti), Some(sti)) => Some(if mti.0 <= sti.0 { mti.1 } else { sti.1 }),
+            (Some((_, cycle)), None) | (None, Some((_, cycle))) => Some(cycle),
+            (None, None) => None,
+        }
+    }
+
     /// Advance a due deadline to the first phase-aligned target after the
     /// current cycle in constant time. The u128 intermediate preserves the
     /// exact result before the u64 cycle clock wraps.
@@ -633,42 +667,43 @@ impl TimerContext {
         // Track only whether host events remain represented in the FIFO.
         self.key_irq_latched = latch_active;
         // When IRQs are disabled, keep the existing latch state but avoid creating a new one.
-        // Perfetto parity: emit a scan event regardless of new key events.
-        let mut guard = PERFETTO_TRACER.enter();
-        guard.with_some(|tracer| {
-            let mut payload = HashMap::new();
-            payload.insert(
-                "events".to_string(),
-                AnnotationValue::UInt(key_events as u64),
-            );
-            payload.insert(
-                "imr".to_string(),
-                AnnotationValue::UInt(self.irq_imr as u64),
-            );
-            payload.insert(
-                "isr".to_string(),
-                AnnotationValue::UInt(self.irq_isr as u64),
-            );
-            payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
-            if let Some(stats) = kb_stats.as_ref() {
+        if mti {
+            let mut guard = PERFETTO_TRACER.enter();
+            guard.with_some(|tracer| {
+                let mut payload = HashMap::new();
                 payload.insert(
-                    "pressed".to_string(),
-                    AnnotationValue::UInt(stats.pressed as u64),
+                    "events".to_string(),
+                    AnnotationValue::UInt(key_events as u64),
                 );
                 payload.insert(
-                    "strobe_count".to_string(),
-                    AnnotationValue::UInt(stats.strobe_count as u64),
+                    "imr".to_string(),
+                    AnnotationValue::UInt(self.irq_imr as u64),
                 );
-                payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
-                payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
                 payload.insert(
-                    "active_cols".to_string(),
-                    AnnotationValue::Str(format!("{:?}", stats.active_columns)),
+                    "isr".to_string(),
+                    AnnotationValue::UInt(self.irq_isr as u64),
                 );
-            }
-            payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-            tracer.record_irq_event("KeyScanEvent", payload);
-        });
+                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
+                if let Some(stats) = kb_stats.as_ref() {
+                    payload.insert(
+                        "pressed".to_string(),
+                        AnnotationValue::UInt(stats.pressed as u64),
+                    );
+                    payload.insert(
+                        "strobe_count".to_string(),
+                        AnnotationValue::UInt(stats.strobe_count as u64),
+                    );
+                    payload.insert("kol".to_string(), AnnotationValue::UInt(stats.kol as u64));
+                    payload.insert("koh".to_string(), AnnotationValue::UInt(stats.koh as u64));
+                    payload.insert(
+                        "active_cols".to_string(),
+                        AnnotationValue::Str(format!("{:?}", stats.active_columns)),
+                    );
+                }
+                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
+                tracer.record_irq_event("KeyScanEvent", payload);
+            });
+        }
         (mti, sti, key_events, kb_stats)
     }
 
@@ -740,6 +775,39 @@ mod tests {
         assert!(timer.next_mti > 50);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01);
+    }
+
+    #[test]
+    fn deadline_span_iterator_visits_only_real_fire_cycles() {
+        let mut timer = TimerContext::new(true, 5, 7);
+        let mut memory = MemoryImage::new();
+        let mut cursor = 0;
+        let end = 20;
+        let mut fire_cycles = Vec::new();
+
+        while let Some(cycle) = timer.next_fire_cycle_in_span(cursor, end) {
+            fire_cycles.push(cycle);
+            timer.tick_timers(&mut memory, cycle, None);
+            cursor = cycle;
+        }
+
+        assert_eq!(fire_cycles, vec![5, 7, 10, 14, 15, 20]);
+        assert_eq!(timer.next_mti, 25);
+        assert_eq!(timer.next_sti, 21);
+    }
+
+    #[test]
+    fn deadline_span_iterator_handles_stale_and_wrapped_targets() {
+        let mut stale = TimerContext::new(true, 10, 0);
+        stale.next_mti = 3;
+        assert_eq!(stale.next_fire_cycle_in_span(8, 20), Some(9));
+
+        let mut wrapped = TimerContext::new(true, 4, 0);
+        wrapped.next_mti = 1;
+        assert_eq!(wrapped.next_fire_cycle_in_span(u64::MAX - 2, 3), Some(1));
+
+        let disabled = TimerContext::new(false, 1, 1);
+        assert_eq!(disabled.next_fire_cycle_in_span(0, 100), None);
     }
 
     #[test]
