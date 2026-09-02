@@ -35,8 +35,9 @@ use sc62015_core::{
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
     timer::TimerContext,
-    AsyncDriver, CoreRuntime, DeviceModel, DeviceTextDecoder, DriverEvent, PerfettoTracer,
-    SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, NUM_TEMP_REGISTERS, PERFETTO_TRACER,
+    AsyncDriver, CoreRuntime, DeviceMemoryCardProfile, DeviceModel, DeviceTextDecoder, DriverEvent,
+    PerfettoTracer, SnapshotMetadata, ADDRESS_MASK, INTERNAL_MEMORY_START, NUM_TEMP_REGISTERS,
+    PERFETTO_TRACER,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -103,8 +104,19 @@ const IQ7000_PACOM_RELEASE_STEPS: u8 = 8;
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum CardMode {
+    Auto,
     Present,
     Absent,
+}
+
+impl CardMode {
+    fn resolve(self, model: DeviceModel) -> DeviceMemoryCardProfile {
+        match self {
+            Self::Auto => model.default_memory_card_profile(),
+            Self::Present => DeviceMemoryCardProfile::BlankWritable64KiB,
+            Self::Absent => DeviceMemoryCardProfile::Absent,
+        }
+    }
 }
 
 struct IrqPerfetto {
@@ -185,7 +197,7 @@ struct Args {
     rom: Option<PathBuf>,
 
     /// Enable/disable memory card emulation (0x040000..0x04FFFF).
-    #[arg(long, value_enum, default_value_t = CardMode::Present)]
+    #[arg(long, value_enum, default_value_t = CardMode::Auto)]
     card: CardMode,
 
     /// Scripted key sequence (comma/semicolon separated).
@@ -2953,16 +2965,10 @@ fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 
 fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
     if model.is_pce500_family() {
-        // Keep host debounce responsive; raw KEYI is sampled independently.
-        bus.keyboard.set_press_threshold(1);
         // Baseline PC-E500 scans the key matrix each instruction (not just on MTI).
         bus.scan_on_timer = false;
-    } else if matches!(model, DeviceModel::Iq7000) {
-        bus.keyboard.set_columns_active_high(true);
-        bus.keyboard.disable_fifo_mirroring();
-        bus.keyboard.set_keyi_on_any_press(true);
-        bus.keyboard.set_raw_kil(true);
     }
+    model.configure_keyboard(&mut bus.keyboard);
     bus.memory.set_internal_ram_mirror(model.is_pce500_family());
 }
 
@@ -4492,8 +4498,8 @@ fn run_iq7000_pclink_ui_path(
         return Err("--iq7p-enter-pclink cannot be combined with --snapshot-in".into());
     }
 
-    let mut runtime = CoreRuntime::new();
-    args.model.configure_runtime(&mut runtime, rom_bytes)?;
+    let mut runtime = CoreRuntime::for_model(args.model, rom_bytes)?;
+    args.card.resolve(args.model).apply(&mut runtime.memory)?;
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
@@ -4768,13 +4774,21 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     memory.set_readonly_ranges(readonly_ranges);
     memory.set_keyboard_bridge(false);
 
-    memory
-        .set_memory_card_slot_present(matches!(args.card, CardMode::Present) && !trace_resume_mode);
-    if matches!(args.card, CardMode::Present) && !trace_resume_mode {
-        // Model the inserted card as a blank writable RAM card so CE1 probes do not
-        // fall through to the underlying system-image filler bytes.
-        memory.load_memory_card(&vec![0u8; 65_536])?;
-    }
+    let card_profile = if trace_resume_mode {
+        DeviceMemoryCardProfile::Absent
+    } else {
+        args.card.resolve(args.model)
+    };
+    card_profile.apply(&mut memory)?;
+    eprintln!(
+        "[card] model={} mode={}",
+        args.model.label(),
+        if card_profile.is_present() {
+            "blank-writable-64k"
+        } else {
+            "absent"
+        }
+    );
 
     let timer_profile = args.model.timer_profile();
     eprintln!(

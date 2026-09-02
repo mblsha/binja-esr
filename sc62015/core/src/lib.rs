@@ -37,7 +37,10 @@ pub use async_driver::{
     current_cycle, emit_event, sleep_cycles, AsyncDriver, CycleSleep, DriverEvent, DriverRunResult,
 };
 pub use async_runtime::AsyncRuntimeRunner;
-pub use device::{DeviceModel, DeviceTextDecoder, DeviceTimerProfile, TimerProfileProvenance};
+pub use device::{
+    DeviceKeyboardProfile, DeviceMemoryCardProfile, DeviceModel, DeviceTextDecoder,
+    DeviceTimerProfile, TimerProfileProvenance,
+};
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
@@ -416,21 +419,6 @@ pub struct CoreRuntime {
     poisoned: Option<String>,
 }
 
-struct DeviceRuntimeSettings {
-    internal_ram_mirror: bool,
-}
-
-fn device_runtime_settings(model: DeviceModel) -> Option<DeviceRuntimeSettings> {
-    match model {
-        DeviceModel::PcE500 | DeviceModel::PcE500Jp => Some(DeviceRuntimeSettings {
-            internal_ram_mirror: true,
-        }),
-        DeviceModel::Iq7000 => Some(DeviceRuntimeSettings {
-            internal_ram_mirror: false,
-        }),
-    }
-}
-
 impl Default for CoreRuntime {
     fn default() -> Self {
         Self::new()
@@ -466,19 +454,21 @@ impl CoreRuntime {
         rt
     }
 
+    /// Construct a complete machine runtime from one authoritative model profile.
+    pub fn for_model(model: DeviceModel, rom: &[u8]) -> Result<Self> {
+        let mut runtime = Self::new();
+        model.configure_runtime(&mut runtime, rom)?;
+        Ok(runtime)
+    }
+
     pub fn device_model(&self) -> DeviceModel {
         self.metadata.device_model.unwrap_or(DeviceModel::PcE500)
     }
 
     pub fn set_device_model(&mut self, model: DeviceModel) -> Result<()> {
-        let settings = device_runtime_settings(model).ok_or_else(|| {
-            CoreError::Other(format!(
-                "device model {model:?} missing runtime settings; validate and define for a new model"
-            ))
-        })?;
         self.metadata.device_model = Some(model);
         self.memory
-            .set_internal_ram_mirror(settings.internal_ram_mirror);
+            .set_internal_ram_mirror(model.spec().internal_ram_mirror);
         Ok(())
     }
 
@@ -2389,11 +2379,6 @@ impl CoreRuntime {
         let loaded = snapshot::load_snapshot(path)?;
         let metadata = loaded.metadata.clone();
         let model = metadata.device_model.unwrap_or(DeviceModel::PcE500);
-        let settings = device_runtime_settings(model).ok_or_else(|| {
-            CoreError::InvalidSnapshot(format!(
-                "snapshot device model {model:?} has no runtime settings"
-            ))
-        })?;
         if model != self.device_model() {
             return Err(CoreError::InvalidSnapshot(format!(
                 "snapshot device model {model:?} does not match active machine {:?}",
@@ -2544,7 +2529,7 @@ impl CoreRuntime {
         self.memory
             .set_readonly_ranges(metadata.readonly_ranges.clone());
         self.memory
-            .set_internal_ram_mirror(settings.internal_ram_mirror);
+            .set_internal_ram_mirror(model.spec().internal_ram_mirror);
         self.memory.clear_dirty();
         self.memory
             .set_memory_counts(metadata.memory_reads, metadata.memory_writes);

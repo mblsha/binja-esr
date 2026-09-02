@@ -258,6 +258,10 @@ impl KeyboardMatrix {
         self.emit_events = false;
     }
 
+    pub fn set_fifo_mirroring(&mut self, enabled: bool) {
+        self.emit_events = enabled;
+    }
+
     pub fn set_keyi_on_any_press(&mut self, enabled: bool) {
         self.keyi_on_any_press = enabled;
     }

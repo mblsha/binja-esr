@@ -10,7 +10,9 @@ use crossterm::{
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
-use sc62015_core::{pce500::ROM_WINDOW_START, CoreRuntime, DeviceModel, LoopDetectorConfig};
+use sc62015_core::{
+    pce500::ROM_WINDOW_START, CoreRuntime, DeviceMemoryCardProfile, DeviceModel, LoopDetectorConfig,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fs;
@@ -48,8 +50,19 @@ const ISR_KEYI: u8 = 0x04;
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum CardMode {
+    Auto,
     Present,
     Absent,
+}
+
+impl CardMode {
+    fn resolve(self, model: DeviceModel) -> DeviceMemoryCardProfile {
+        match self {
+            Self::Auto => model.default_memory_card_profile(),
+            Self::Present => DeviceMemoryCardProfile::BlankWritable64KiB,
+            Self::Absent => DeviceMemoryCardProfile::Absent,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -67,7 +80,7 @@ struct Args {
     rom: Option<PathBuf>,
 
     /// Memory card slot state (PC-E500).
-    #[arg(long, value_enum, default_value_t = CardMode::Present)]
+    #[arg(long, value_enum, default_value_t = CardMode::Auto)]
     card: CardMode,
 
     /// Number of instructions to execute before exiting (0 = run until Ctrl+C).
@@ -1603,21 +1616,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rom_path = args.rom.unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = fs::read(&rom_path)?;
 
-    let mut runtime = CoreRuntime::new();
-    runtime.set_device_model(args.model)?;
-    args.model.configure_runtime(&mut runtime, &rom_bytes)?;
+    let mut runtime = CoreRuntime::for_model(args.model, &rom_bytes)?;
     apply_iq7000_rtc_arg(&mut runtime, args.model, &args.iq7000_rtc)?;
-    if args.model.is_pce500_family() {
-        if let Some(kb) = runtime.keyboard.as_mut() {
-            kb.set_press_threshold(1);
-        }
-    }
     if args.disable_timers {
         runtime.timer.enabled = false;
     }
-    runtime
-        .memory
-        .set_memory_card_slot_present(matches!(args.card, CardMode::Present));
+    args.card.resolve(args.model).apply(&mut runtime.memory)?;
     let loop_config = LoopDetectorConfig {
         detect_stride: args.refresh_steps,
         ..Default::default()

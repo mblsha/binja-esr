@@ -394,9 +394,7 @@ impl Sc62015Emulator {
             return Err(JsValue::from_str("ROM not loaded"));
         }
         let rom = self.rom_image.clone();
-        self.runtime = CoreRuntime::new();
-        self.model
-            .configure_runtime(&mut self.runtime, &rom)
+        self.runtime = CoreRuntime::for_model(self.model, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
             self.runtime
