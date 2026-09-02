@@ -1622,6 +1622,9 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         )
 
 
+# HW-002 intentionally drives a complete 65,536-iteration register ring. Under
+# coverage, slower CPython runners can legitimately exceed the global 60s guard.
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize(
     ("mnemonic", "instr_bytes", "expected_fz", "write_multiplier"),
     [
