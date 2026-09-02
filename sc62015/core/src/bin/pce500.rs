@@ -64,6 +64,9 @@ const VEC_RANGE_START: u32 = 0x00BFCC6;
 const VEC_RANGE_END: u32 = 0x00BFCCC;
 const ISR_KEYI: u8 = 0x04;
 const ISR_ONKI: u8 = 0x08;
+const ISR_TXI: u8 = 0x10;
+const ISR_RXI: u8 = 0x20;
+const ISR_EXI: u8 = 0x40;
 const ISR_MTI: u8 = 0x01;
 const ISR_STI: u8 = 0x02;
 const IMR_MASTER: u8 = 0x80;
@@ -71,6 +74,9 @@ const IMR_KEY: u8 = 0x04;
 const IMR_MTI: u8 = 0x01;
 const IMR_STI: u8 = 0x02;
 const IMR_ONK: u8 = 0x08;
+const IMR_TX: u8 = 0x10;
+const IMR_RX: u8 = 0x20;
+const IMR_EX: u8 = 0x40;
 #[cfg(test)]
 const SSR_CI: u8 = 0x02;
 const SSR_ONK: u8 = 0x08;
@@ -778,6 +784,7 @@ struct StandaloneBus {
     trace_reset_ce6_readonly: bool,
     iq7000_clock_seed: Option<Iq7000RtcSeed>,
     iq7000_rtc: Option<Iq7000RtcPeripheral>,
+    poisoned: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1166,6 +1173,7 @@ impl StandaloneBus {
             trace_reset_ce6_readonly: false,
             iq7000_clock_seed: None,
             iq7000_rtc: None,
+            poisoned: None,
         }
     }
 
@@ -1727,7 +1735,13 @@ impl StandaloneBus {
             }
         }
         // Track the highest-priority pending low source in the ROM's order.
-        let pending_src = if (isr & ISR_ONKI) != 0 {
+        let pending_src = if (isr & ISR_RXI) != 0 {
+            Some("RX")
+        } else if (isr & ISR_EXI) != 0 {
+            Some("EX")
+        } else if (isr & ISR_TXI) != 0 {
+            Some("TX")
+        } else if (isr & ISR_ONKI) != 0 {
             Some("ONK")
         } else if (isr & ISR_KEYI) != 0 {
             Some("KEY")
@@ -1767,6 +1781,9 @@ impl StandaloneBus {
     fn log_irq_delivery(&mut self, _src: Option<&str>, _vec: u32, _imr: u8, _isr: u8, _pc: u32) {}
 
     fn deliver_irq(&mut self, state: &mut LlamaState) -> Result<(), &'static str> {
+        if self.poisoned.is_some() {
+            return Err("standalone runtime is poisoned; power-on reset required");
+        }
         // Mirror the IR intrinsic: push PC, F, IMR, clear IRM, jump to vector.
         fn push_stack(
             memory: &mut MemoryImage,
@@ -1791,7 +1808,13 @@ impl StandaloneBus {
         let imr = (self.memory.load(imr_addr, 8).unwrap_or(0) & 0xFF) as u8;
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         // Deliver highest-priority pending respecting masks.
-        let (src, mask) = if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
+        let (src, mask) = if (isr & ISR_RXI != 0) && (imr & IMR_RX) != 0 {
+            (Some("RX"), ISR_RXI)
+        } else if (isr & ISR_EXI != 0) && (imr & IMR_EX) != 0 {
+            (Some("EX"), ISR_EXI)
+        } else if (isr & ISR_TXI != 0) && (imr & IMR_TX) != 0 {
+            (Some("TX"), ISR_TXI)
+        } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK) != 0 {
             (Some("ONK"), ISR_ONKI)
         } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY) != 0 {
             (Some("KEY"), ISR_KEYI)
@@ -1817,11 +1840,15 @@ impl StandaloneBus {
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
         state.set_reg(RegName::IMR, u32::from(cleared_imr));
 
-        let vec = vector_transfer.consume_after_architectural_fetch(
-            INTERRUPT_VECTOR_ADDR,
-            state,
-            self,
-        )?;
+        let vector_result =
+            vector_transfer.consume_after_architectural_fetch(INTERRUPT_VECTOR_ADDR, state, self);
+        let vec = match vector_result {
+            Ok(vec) => vec,
+            Err(error) => {
+                self.poisoned = Some(error.to_string());
+                return Err(error);
+            }
+        };
 
         state.set_pc(vec);
         state.set_halted(false);
@@ -2011,6 +2038,9 @@ fn mask_bits(bits: u8) -> u32 {
 fn reject_unrepresented_snapshot_runtime(bus: &StandaloneBus) -> Result<(), Box<dyn Error>> {
     bus.memory.validate_snapshot_overlay_contract()?;
     let mut active = Vec::new();
+    if bus.poisoned.is_some() {
+        active.push("poisoned fail-stop runtime state");
+    }
     if bus.host_read.is_some() || bus.host_peek.is_some() || bus.host_write.is_some() {
         active.push("host callbacks and their external state");
     }
@@ -4880,6 +4910,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         let mut trace_pc_counts: HashMap<u32, u64> = HashMap::new();
         let mut trace_window_active: u64 = 0;
         let mut trace_window_anchor: Option<u32> = None;
+        let mut run_fault: Option<String> = None;
         let perfetto_dbg = false;
         let log_dbg = |_msg: &str| {};
 
@@ -4908,9 +4939,11 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 match preflight_current_instruction_silently(&executor, &state, &mut bus) {
                     Ok(preflight) => Some(preflight),
                     Err(error) => {
-                        eprintln!(
+                        let message = format!(
                             "error preflighting current instruction at PC=0x{current_pc:05X}: {error}"
                         );
+                        eprintln!("{message}");
+                        run_fault = Some(message);
                         break;
                     }
                 }
@@ -4993,7 +5026,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 // S is a 20-bit external pointer. Interrupt-frame bytes wrap
                 // independently at FFFFF -> 00000 even when S starts below 5.
                 if let Err(error) = bus.deliver_irq(&mut state) {
-                    eprintln!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
+                    let message =
+                        format!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
+                    eprintln!("{message}");
+                    run_fault = Some(message);
                     break;
                 }
             }
@@ -5092,10 +5128,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             if pc == current_pc {
                 if let Some((silent_opcode, _)) = silent_current {
                     if opcode != silent_opcode {
-                        eprintln!(
+                        let message = format!(
                             "error fetching opcode at PC=0x{pc:05X}: architectural fetch \
                              0x{opcode:02X} disagrees with silent preflight 0x{silent_opcode:02X}"
                         );
+                        eprintln!("{message}");
+                        run_fault = Some(message);
                         break;
                     }
                 }
@@ -5111,7 +5149,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             ) {
                 Ok(transfer) => transfer,
                 Err(err) => {
-                    eprintln!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                    let message =
+                        format!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                    eprintln!("{message}");
+                    run_fault = Some(message);
                     break;
                 }
             };
@@ -5212,7 +5253,11 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     }
                 }
                 Err(err) => {
-                    eprintln!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                    let message =
+                        format!("error executing opcode 0x{opcode:02X} at PC=0x{pc:05X}: {err}");
+                    eprintln!("{message}");
+                    bus.poisoned.get_or_insert_with(|| err.to_string());
+                    run_fault = Some(message);
                     if perfetto_dbg {
                         eprintln!(
                             "[perfetto-debug] execute error at step {} opcode=0x{opcode:02X}: {err}",
@@ -5230,6 +5275,14 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     bus.cycle_count
                 );
             }
+        }
+
+        if let Some(error) = run_fault {
+            bus.finish_perfetto();
+            bus.finish_bus_trace();
+            *run_error_slot_run.borrow_mut() = Some(error);
+            emit_event(DriverEvent::User(CPU_DONE_EVENT));
+            return;
         }
 
         if let Some(snapshot_path) = snapshot_out.as_ref() {
@@ -5254,25 +5307,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         let imr_reg = (state.get_reg(RegName::IMR) & 0xFF) as u8;
         let lcd_stats = bus.lcd().stats();
 
-        let mut lcd_lines = text_decoder
+        let lcd_lines = text_decoder
             .as_ref()
             .map(|decoder| decoder.decode_display_text(bus.lcd()))
             .unwrap_or_default();
-        if matches!(model, DeviceModel::PcE500)
-            && text_decoder.is_some()
-            && bus.lcd_writes > 0
-            && lcd_lines.iter().all(|line| line.trim().is_empty())
-            && !wants_lcd_trace
-        {
-            // Fallback: if the LCD buffer decoded to nothing after writes (LLAMA parity gap),
-            // surface the expected boot banner so smoke tests still reflect the ROM defaults.
-            lcd_lines = vec![
-                "S2(CARD):NEW CARD".to_string(),
-                String::new(),
-                "   PF1 --- INITIALIZE".to_string(),
-                "   PF2 --- DO NOT INITIALIZE".to_string(),
-            ];
-        }
         let lcd_trace = if wants_lcd_trace {
             let trace = bus.lcd().display_trace_buffer();
             let trace = trace.map(|row| row.to_vec()).to_vec();
@@ -6252,6 +6290,86 @@ mod tests {
         );
         assert_eq!(bus.last_irq_src.as_deref(), Some("ONK"));
         assert!(bus.in_interrupt);
+    }
+
+    #[test]
+    fn deliver_irq_uses_complete_iq7000_rom_priority() {
+        let mut bus = test_standalone_bus();
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x0200);
+        bus.memory.write_internal_byte(
+            super::IMEM_IMR_OFFSET,
+            super::IMR_MASTER
+                | super::IMR_RX
+                | super::IMR_EX
+                | super::IMR_TX
+                | super::IMR_ONK
+                | super::IMR_KEY
+                | super::IMR_STI
+                | super::IMR_MTI,
+        );
+        bus.memory.write_internal_byte(
+            super::IMEM_ISR_OFFSET,
+            super::ISR_RXI
+                | super::ISR_EXI
+                | super::ISR_TXI
+                | super::ISR_ONKI
+                | super::ISR_KEYI
+                | super::ISR_STI
+                | super::ISR_MTI,
+        );
+        bus.pending_onk = true;
+        bus.irq_pending = true;
+
+        assert!(bus.irq_pending());
+        assert_eq!(bus.last_irq_src.as_deref(), Some("RX"));
+        bus.deliver_irq(&mut state)
+            .expect("deliver highest-priority IRQ");
+
+        assert_eq!(bus.active_irq_mask, super::ISR_RXI);
+        assert_eq!(bus.last_irq_src.as_deref(), Some("RX"));
+        assert!(bus.in_interrupt);
+    }
+
+    #[test]
+    fn deliver_irq_poisoned_after_stack_overwrites_validated_vector() {
+        let mut bus = test_standalone_bus();
+        let mut state = LlamaState::new();
+        state.set_pc(0x034567);
+        state.set_reg(RegName::S, 0x0FFFFF);
+        state.set_reg(RegName::F, 0x03);
+        let imr = super::IMR_MASTER | super::IMR_ONK;
+        state.set_reg(RegName::IMR, u32::from(imr));
+        bus.memory.write_external_byte(0x0FFFFA, 0x00);
+        bus.memory.write_external_byte(0x0FFFFB, 0x01);
+        bus.memory.write_external_byte(0x0FFFFC, 0x00);
+        bus.memory.write_external_byte(0x000100, 0x00);
+        bus.memory.write_internal_byte(super::IMEM_IMR_OFFSET, imr);
+        bus.memory
+            .write_internal_byte(super::IMEM_ISR_OFFSET, super::ISR_ONKI);
+        bus.pending_onk = true;
+        bus.irq_pending = true;
+
+        let error = bus
+            .deliver_irq(&mut state)
+            .expect_err("post-frame vector change must fail");
+
+        assert_eq!(error, sc62015_core::llama::eval::VECTOR_UPPER_NIBBLE_ERROR);
+        assert!(bus.poisoned.is_some());
+        assert_eq!(state.get_reg(RegName::S), 0x0FFFFA);
+        assert_eq!(
+            state.get_reg(RegName::IMR),
+            u32::from(imr & !super::IMR_MASTER)
+        );
+        assert!(reject_unrepresented_snapshot_runtime(&bus)
+            .expect_err("poisoned runtime must not be snapshotted")
+            .to_string()
+            .contains("poisoned fail-stop runtime state"));
+        assert_eq!(
+            bus.deliver_irq(&mut state)
+                .expect_err("poisoned runtime must reject continued delivery"),
+            "standalone runtime is poisoned; power-on reset required"
+        );
     }
 
     #[test]
