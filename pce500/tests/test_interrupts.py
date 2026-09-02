@@ -94,6 +94,7 @@ handler:
     PUSHU A
     MV A, (ISR)
     PUSHU A
+    MV (ISR), 0x00
     RETI
 """
 
@@ -271,6 +272,20 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
     elif g.trigger is Trigger.KEY_OFF:
         emu.press_key(g.trigger.value)
 
+    # These synthetic scenarios test one interrupt delivery, not held-key
+    # retriggering.  Give F1 one scheduler sample at the selected KIL level,
+    # then release it.  The handler acknowledges ISR after recording it so a
+    # latched source cannot manufacture additional deliveries.  Dedicated
+    # hardware-backed keyboard tests cover the real held-level behaviour.
+    key_pulse_pending = g.trigger is Trigger.KEY_F1
+
+    def step_once() -> None:
+        nonlocal key_pulse_pending
+        emu.step()
+        if key_pulse_pending:
+            emu.release_key(g.trigger.value)
+            key_pulse_pending = False
+
     # Execute program to the delivery point
     if g.program is Program.HALT:
         if g.timers_enabled:
@@ -281,33 +296,33 @@ def _run_and_observe(g: Given, e: Expect) -> Observed:
             else:
                 steps = 24
             for _ in range(int(steps)):
-                emu.step()
+                step_once()
         else:
             for _ in range(24):
-                emu.step()
+                step_once()
     elif g.program is Program.OFF:
         # Timers remain off; ON unmasked should wake, others shouldn't
         if e.deliver:
             # One step to cancel OFF and deliver, plus a few for handler
-            emu.step()
+            step_once()
             for _ in range(5):
-                emu.step()
+                step_once()
         else:
             # Exceed the longest timer period to be robust to off-by-one
             longest = max(mti_period, sti_period)
             for _ in range(int(longest + 200)):
-                emu.step()
+                step_once()
     else:
         # WAIT program
         for _ in range(max(1, wait_chunks)):
-            emu.step()  # MV I
-            emu.step()  # WAIT
-        emu.step()  # Attempt delivery
+            step_once()  # MV I
+            step_once()  # WAIT
+        step_once()  # Attempt delivery
         if e.deliver:
             for _ in range(5):  # Full handler
-                emu.step()
+                step_once()
         else:
-            emu.step()  # NOP
+            step_once()  # NOP
 
     u_after = emu.cpu.regs.get(RegisterName.U)
     u_delta = u_after - u_before
@@ -908,7 +923,9 @@ def test_partial_irq_frame_failure_poisons_until_reset(
         emu.step()
 
     assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
-    assert emu.cpu.regs.get(RegisterName.S) == 0x01FD
+    # PC high/middle/low commit first, followed by F.  The injected failure is
+    # the IMR frame write, so four bytes have observably reached the stack.
+    assert emu.cpu.regs.get(RegisterName.S) == 0x01FC
     assert emu.instruction_count == 0
     assert "IRQ delivery failed" in str(emu._poisoned)  # type: ignore[attr-defined]
 
@@ -950,7 +967,7 @@ def test_pending_irq_stack_underflow_wraps_in_20_bit_space(
 
     emu.step()
 
-    assert external_writes[:5] == [0xFFFFF, 0x00000, 0x00001, 0xFFFFE, 0xFFFFD]
+    assert external_writes[:5] == [0x00001, 0x00000, 0xFFFFF, 0xFFFFE, 0xFFFFD]
     assert emu.memory.read_byte(0xFFFFF) == 0x00  # saved PC low
     assert emu.memory.read_byte(0x00000) == 0x10  # saved PC middle
     assert emu.memory.read_byte(0x00001) == 0x00  # saved PC high
