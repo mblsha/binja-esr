@@ -10,10 +10,7 @@ use crossterm::{
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
-use sc62015_core::{
-    pce500::DEFAULT_MTI_PERIOD, pce500::DEFAULT_STI_PERIOD, pce500::ROM_WINDOW_START,
-    timer::TimerContext, CoreRuntime, DeviceModel, LoopDetectorConfig,
-};
+use sc62015_core::{pce500::ROM_WINDOW_START, CoreRuntime, DeviceModel, LoopDetectorConfig};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fs;
@@ -1616,10 +1613,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     if args.disable_timers {
-        *runtime.timer = TimerContext::new(false, 0, 0);
-    } else {
-        *runtime.timer =
-            TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
+        runtime.timer.enabled = false;
     }
     runtime
         .memory
