@@ -29,8 +29,8 @@ use sc62015_core::{
     },
     pce500::{
         load_pce500_rom_window_into_memory, load_pce500_system_image_into_memory,
-        seed_pce500_bootstrap_imem, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD, NO_RAM_WINDOW_END,
-        NO_RAM_WINDOW_START, ROM_RESET_VECTOR_ADDR, ROM_WINDOW_LEN, ROM_WINDOW_START,
+        seed_pce500_bootstrap_imem, NO_RAM_WINDOW_END, NO_RAM_WINDOW_START, ROM_RESET_VECTOR_ADDR,
+        ROM_WINDOW_LEN, ROM_WINDOW_START,
     },
     perfetto::set_call_ui_function_names,
     sleep_cycles, snapshot,
@@ -4493,7 +4493,6 @@ fn run_iq7000_pclink_ui_path(
     }
 
     let mut runtime = CoreRuntime::new();
-    *runtime.timer = TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32);
     args.model.configure_runtime(&mut runtime, rom_bytes)?;
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
@@ -4777,8 +4776,15 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         memory.load_memory_card(&vec![0u8; 65_536])?;
     }
 
-    // Timer periods align with the 1.024 MHz best-guess hardware clock (fast ≈2 ms, slow ≈0.5 s)
-    // unless disabled for debugging.
+    let timer_profile = args.model.timer_profile();
+    eprintln!(
+        "[timing] model={} cpu_hz={} mti={} sti={} source={}",
+        args.model.label(),
+        timer_profile.cpu_hz,
+        timer_profile.mti_period,
+        timer_profile.sti_period,
+        timer_profile.provenance_label()
+    );
     let perfetto = args.perfetto.then(|| {
         let mut irq_path = args.perfetto_path.clone();
         let stem = irq_path
@@ -4795,11 +4801,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let mut bus = StandaloneBus::new(
         memory,
         lcd,
-        if args.disable_timers {
-            TimerContext::new(false, 0, 0)
-        } else {
-            TimerContext::new(true, DEFAULT_MTI_PERIOD as i32, DEFAULT_STI_PERIOD as i32)
-        },
+        timer_profile.new_context(!args.disable_timers),
         log_lcd,
         log_lcd_limit,
         trace_kbd,

@@ -9,6 +9,7 @@ use crate::lcd_text::{
     LcdCharMatcher, Pce500FontMap,
 };
 use crate::pce500;
+use crate::timer::TimerContext;
 use crate::{CoreRuntime, Result};
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,47 @@ pub struct DeviceSpec {
     pub rom_window_len: usize,
     pub font_base_addr: Option<u32>,
     pub text_decoder: Option<DeviceTextDecoderKind>,
+    pub timer: DeviceTimerProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerProfileProvenance {
+    PcE500BoardEstimate,
+    PcE500CompatibilityFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceTimerProfile {
+    pub cpu_hz: u64,
+    pub mti_period: u64,
+    pub sti_period: u64,
+    pub provenance: TimerProfileProvenance,
+}
+
+impl DeviceTimerProfile {
+    pub fn new_context(self, enabled: bool) -> TimerContext {
+        if enabled {
+            TimerContext::new(true, self.mti_period as i32, self.sti_period as i32)
+        } else {
+            TimerContext::new(false, 0, 0)
+        }
+    }
+
+    pub fn is_provisional(self) -> bool {
+        matches!(
+            self.provenance,
+            TimerProfileProvenance::PcE500CompatibilityFallback
+        )
+    }
+
+    pub fn provenance_label(self) -> &'static str {
+        match self.provenance {
+            TimerProfileProvenance::PcE500BoardEstimate => "PC-E500 board-clock estimate",
+            TimerProfileProvenance::PcE500CompatibilityFallback => {
+                "provisional PC-E500-compatible fallback; IQ-7000 timing is uncalibrated"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,8 +90,7 @@ impl DeviceTextDecoderKind {
     }
 }
 
-/// Supported device/ROM models. These primarily affect defaults (ROM selection, LCD controller,
-/// font decoding) rather than the SC62015 CPU core.
+/// Supported complete machine profiles around the shared SC62015 CPU core.
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeviceModel {
@@ -102,6 +143,12 @@ impl DeviceModel {
                 rom_window_len: iq7000::ROM_WINDOW_LEN,
                 font_base_addr: Some(0x00F_1B45),
                 text_decoder: Some(DeviceTextDecoderKind::Iq7000),
+                timer: DeviceTimerProfile {
+                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    sti_period: pce500::DEFAULT_STI_PERIOD,
+                    provenance: TimerProfileProvenance::PcE500CompatibilityFallback,
+                },
             },
             Self::PcE500 => DeviceSpec {
                 label: "pc-e500",
@@ -111,6 +158,12 @@ impl DeviceModel {
                 rom_window_len: pce500::ROM_WINDOW_LEN,
                 font_base_addr: Some(pce500::ROM_ENGLISH_FONT_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
+                timer: DeviceTimerProfile {
+                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    sti_period: pce500::DEFAULT_STI_PERIOD,
+                    provenance: TimerProfileProvenance::PcE500BoardEstimate,
+                },
             },
             Self::PcE500Jp => DeviceSpec {
                 label: "pc-e500-jp",
@@ -120,6 +173,12 @@ impl DeviceModel {
                 rom_window_len: pce500::ROM_WINDOW_LEN,
                 font_base_addr: Some(pce500::ROM_JP_FONT_ATLAS_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
+                timer: DeviceTimerProfile {
+                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    sti_period: pce500::DEFAULT_STI_PERIOD,
+                    provenance: TimerProfileProvenance::PcE500BoardEstimate,
+                },
             },
         }
     }
@@ -169,8 +228,13 @@ impl DeviceModel {
         self.spec().text_decoder.and_then(|kind| kind.build(rom))
     }
 
+    pub fn timer_profile(self) -> DeviceTimerProfile {
+        self.spec().timer
+    }
+
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self)?;
+        *rt.timer = self.timer_profile().new_context(true);
         rt.lcd = Some(create_lcd(self.lcd_kind()));
         if let Some(lcd) = rt.lcd.as_deref_mut() {
             configure_lcd_char_tracing(lcd, *self, rom);
@@ -220,6 +284,45 @@ impl DeviceTextDecoder {
                 small_font,
                 large_font,
             } => decode_iq7000_display_text_auto(lcd, small_font, large_font),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timer_profiles_preserve_model_specific_provenance() {
+        let pc = DeviceModel::PcE500.timer_profile();
+        let iq = DeviceModel::Iq7000.timer_profile();
+
+        assert_eq!(pc.provenance, TimerProfileProvenance::PcE500BoardEstimate);
+        assert!(!pc.is_provisional());
+        assert_eq!(
+            iq.provenance,
+            TimerProfileProvenance::PcE500CompatibilityFallback
+        );
+        assert!(iq.is_provisional());
+        assert_eq!(iq.mti_period, pc.mti_period);
+        assert_eq!(iq.sti_period, pc.sti_period);
+    }
+
+    #[test]
+    fn configure_runtime_installs_selected_models_timer_profile() {
+        for model in [
+            DeviceModel::PcE500,
+            DeviceModel::PcE500Jp,
+            DeviceModel::Iq7000,
+        ] {
+            let mut runtime = CoreRuntime::new();
+            model
+                .configure_runtime(&mut runtime, &[])
+                .expect("configure model runtime");
+            let expected = model.timer_profile();
+            assert!(runtime.timer.enabled);
+            assert_eq!(runtime.timer.mti_period, expected.mti_period);
+            assert_eq!(runtime.timer.sti_period, expected.sti_period);
         }
     }
 }

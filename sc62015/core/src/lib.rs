@@ -37,7 +37,7 @@ pub use async_driver::{
     current_cycle, emit_event, sleep_cycles, AsyncDriver, CycleSleep, DriverEvent, DriverRunResult,
 };
 pub use async_runtime::AsyncRuntimeRunner;
-pub use device::{DeviceModel, DeviceTextDecoder};
+pub use device::{DeviceModel, DeviceTextDecoder, DeviceTimerProfile, TimerProfileProvenance};
 pub use keyboard::KeyboardMatrix;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,

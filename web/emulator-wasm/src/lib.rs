@@ -11,7 +11,6 @@ use wasm_bindgen::prelude::*;
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{ADDRESS_MASK, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
-use sc62015_core::pce500::{DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD};
 use sc62015_core::{
     CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
@@ -293,15 +292,13 @@ pub struct Sc62015Emulator {
 impl Sc62015Emulator {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        let mut emulator = Self {
+        Self {
             runtime: CoreRuntime::new(),
             rom_image: Vec::new(),
             model: DeviceModel::DEFAULT,
             text_decoder: None,
             iq7000_rtc_seed: None,
-        };
-        emulator.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
-        emulator
+        }
     }
 
     pub fn device_model(&self) -> String {
@@ -398,7 +395,6 @@ impl Sc62015Emulator {
         }
         let rom = self.rom_image.clone();
         self.runtime = CoreRuntime::new();
-        self.configure_timer(true, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD);
         self.model
             .configure_runtime(&mut self.runtime, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
