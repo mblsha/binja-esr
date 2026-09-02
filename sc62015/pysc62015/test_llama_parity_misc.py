@@ -648,6 +648,9 @@ def test_reg_imem_offset_imem_selector_uses_pre1(backend: str) -> None:
     assert memory._raw[0x000100] == 0xAA
 
 
+# This hardware-backed parity case executes the complete 65,536-iteration ring;
+# the Python LLIL backend can legitimately exceed the global 60s guard in CI.
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("backend", ["python", "llama"])
 @pytest.mark.parametrize(
     ("mnemonic", "program", "expected_fz"),
