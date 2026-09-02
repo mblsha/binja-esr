@@ -113,7 +113,7 @@ struct Args {
     #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
     iq7000_rtc: String,
 
-    /// Force-enable KEY IRQ delivery when injecting keys (debug helper).
+    /// Synthetically assert KEYI when injecting keys (debug-only override).
     #[arg(long, default_value_t = false)]
     force_key_irq: bool,
 
@@ -1150,9 +1150,8 @@ fn inject_key(
         runtime.timer.kb_irq_enabled = true;
     }
     if let Some(kb) = runtime.keyboard.as_mut() {
-        let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
         kb.press_matrix_code(code, &mut runtime.memory);
-        if kb_irq_enabled {
+        if force_key_irq {
             runtime.timer.key_irq_latched = true;
             if let Some(cur) = runtime.memory.read_internal_byte(IMEM_ISR_OFFSET) {
                 runtime
@@ -1199,7 +1198,7 @@ fn inject_input_event(runtime: &mut CoreRuntime, code: u8, force_key_irq: bool) 
     if events == 0 {
         return false;
     }
-    if kb_irq_enabled {
+    if force_key_irq {
         runtime.timer.key_irq_latched = true;
         runtime.timer.irq_pending = true;
         if runtime.timer.irq_source.is_none() && !runtime.timer.in_interrupt {

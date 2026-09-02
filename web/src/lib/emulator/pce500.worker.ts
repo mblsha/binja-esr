@@ -2,6 +2,7 @@ import { normalizeRomModel, type RomModel } from '../rom_model';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { createStubDispatcher, type StubDispatcher } from '../debug/sc62015_stub_dispatch';
 import type { StubRegistration } from '../debug/sc62015_stub_types';
+import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -63,9 +64,6 @@ type Frame = {
 
 const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const IMEM_BASE = 0x100000;
-const FIFO_BASE_ADDR = 0x00bfc96;
-const FIFO_HEAD_ADDR = 0x00bfc9d;
-const FIFO_TAIL_ADDR = 0x00bfc9e;
 
 const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
@@ -339,9 +337,12 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 		const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 		const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 		const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-		const fifoHead = emulator.read_u8?.(FIFO_HEAD_ADDR) ?? null;
-		const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR) ?? null;
-		const fifo = Array.from({ length: 16 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
+		const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+		const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
+		const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
+		const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
+			fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoBase + i) ?? 0) : 0,
+		);
 		const keyboardDebug: KeyboardDebug = {
 			pc,
 			instr,

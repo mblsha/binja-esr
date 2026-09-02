@@ -577,7 +577,7 @@ impl TimerContext {
         memory: &mut MemoryImage,
         cycle_count: u64,
         mut keyboard_scan: F,
-        y_reg: Option<u32>,
+        _y_reg: Option<u32>,
         pc_hint: Option<u32>,
     ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
     where
@@ -598,55 +598,11 @@ impl TimerContext {
             .map(|(_, pc)| pc)
             .or(pc_hint)
             .unwrap_or_else(perfetto_last_pc);
-        // Only create a new latch when fresh events arrive while IRQs are enabled; otherwise
-        // preserve any existing latch without reviving a cleared one from FIFO contents.
-        let new_latch = self.kb_irq_enabled && key_events > 0;
+        // Preserve the host-event latch for snapshot/FIFO bookkeeping only.
+        // It is not an electrical KEYI source; the runtimes sample the raw,
+        // selected KIL matrix independently at scheduling boundaries.
+        let new_latch = key_events > 0;
         let latch_active = had_latch || new_latch;
-        let should_assert = latch_active;
-        if should_assert {
-            if let Some(isr) = memory.read_internal_byte(ISR_OFFSET) {
-                if (isr & 0x04) == 0 {
-                    let new_isr = isr | 0x04;
-                    memory.write_internal_byte(ISR_OFFSET, new_isr);
-                    let pc_trace = crate::llama::eval::perfetto_instr_context()
-                        .map(|(_, pc)| pc)
-                        .or(pc_hint)
-                        .unwrap_or_else(perfetto_last_pc);
-                    self.record_bit_watch_transition("ISR", isr, new_isr, pc_trace);
-                }
-            }
-            // Mirror Python: key activity (new events or pending FIFO data) latches KEYI and marks a pending IRQ.
-            self.irq_pending = true;
-            self.irq_source = Some("KEY".to_string());
-            self.last_fired = self.irq_source.clone();
-            self.irq_imr = memory.read_internal_byte(0xFB).unwrap_or(self.irq_imr);
-            self.irq_isr = memory
-                .read_internal_byte(ISR_OFFSET)
-                .unwrap_or(self.irq_isr);
-            // Perfetto parity: emit a KeyIRQ marker with PC/cycle context.
-            let mut guard = PERFETTO_TRACER.enter();
-            guard.with_some(|tracer| {
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "events".to_string(),
-                    AnnotationValue::UInt(key_events as u64),
-                );
-                payload.insert(
-                    "imr".to_string(),
-                    AnnotationValue::UInt(self.irq_imr as u64),
-                );
-                payload.insert(
-                    "isr".to_string(),
-                    AnnotationValue::UInt(self.irq_isr as u64),
-                );
-                payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
-                payload.insert("cycle".to_string(), AnnotationValue::UInt(cycle_count));
-                if let Some(y) = y_reg {
-                    payload.insert("y".to_string(), AnnotationValue::Pointer(y as u64));
-                }
-                tracer.record_irq_event("KeyIRQ", payload);
-            });
-        }
         if key_events == 0 {
             if let Some(stats) = kb_stats.as_ref() {
                 if stats.pressed > 0 {
@@ -674,7 +630,7 @@ impl TimerContext {
                 }
             }
         }
-        // Track latch so KEYI can be reasserted if firmware clears ISR while FIFO remains non-empty.
+        // Track only whether host events remain represented in the FIFO.
         self.key_irq_latched = latch_active;
         // When IRQs are disabled, keep the existing latch state but avoid creating a new one.
         // Perfetto parity: emit a scan event regardless of new key events.
@@ -713,10 +669,6 @@ impl TimerContext {
             payload.insert("pc".to_string(), AnnotationValue::Pointer(pc_trace as u64));
             tracer.record_irq_event("KeyScanEvent", payload);
         });
-        // Maintain bit-watch parity even when KEYI was already set prior to the scan.
-        if should_assert {
-            let _ = memory.read_internal_byte(ISR_OFFSET);
-        }
         (mti, sti, key_events, kb_stats)
     }
 
@@ -1071,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn bit_watch_tracks_keyi_assertion() {
+    fn host_event_latch_does_not_emit_raw_keyi_bit_watch() {
         let mut timer = TimerContext::new(true, 0, 0);
         let mut mem = MemoryImage::new();
         // Simulate ISR initially cleared.
@@ -1081,28 +1033,18 @@ mod tests {
         let pc = 0x234u32;
         let _ =
             timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (0, true, None), None, Some(pc));
-        let watch = timer
-            .irq_bit_watch
-            .as_ref()
-            .and_then(|w| w.get("ISR"))
-            .and_then(|v| v.as_object())
-            .expect("bit watch table should capture ISR");
-        let bit2 = watch
-            .get("2")
-            .and_then(|v| v.as_object())
-            .expect("bit 2 entry should exist for KEYI");
-        let set = bit2
-            .get("set")
-            .and_then(|v| v.as_array())
-            .expect("'set' array should exist for bit 2");
-        assert!(
-            set.iter().any(|entry| entry.as_u64() == Some(pc as u64)),
-            "bit watch should record KEYI assertion PC"
-        );
+        assert_eq!(mem.read_internal_byte(ISR_OFFSET).unwrap_or(0) & 0x04, 0);
+        assert!(timer.irq_bit_watch.as_ref().is_none_or(|watch| {
+            watch
+                .get("ISR")
+                .and_then(|value| value.as_object())
+                .and_then(|bits| bits.get("2"))
+                .is_none()
+        }));
     }
 
     #[test]
-    fn tick_timers_with_keyboard_sets_keyi() {
+    fn tick_timers_with_keyboard_keeps_events_separate_from_raw_keyi() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         // Simulate keyboard scan emitting one event.
@@ -1110,21 +1052,9 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, true, None), None, None);
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & 0x04,
-            0x04,
-            "KEYI bit should be set on MTI with events"
-        );
-        assert!(
-            timer
-                .irq_bit_watch
-                .as_ref()
-                .and_then(|w| w.get("ISR"))
-                .is_some(),
-            "bit watch should track ISR changes for KEYI"
-        );
-        // Perfetto payload should carry src and PC.
-        assert_eq!(timer.irq_source, Some("KEY".to_string()));
+        assert_eq!(isr & 0x04, 0);
+        assert_eq!(isr & 0x01, 0x01, "the independent MTI still fires");
+        assert_eq!(timer.irq_source, Some("MTI".to_string()));
     }
 
     #[test]
@@ -1145,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn key_latch_sets_on_new_events_when_enabled() {
+    fn host_event_latch_sets_without_asserting_raw_keyi() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         timer.key_irq_latched = false;
@@ -1153,13 +1083,13 @@ mod tests {
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (1, false, None), None, None);
         assert_eq!(events, 1);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_ne!(isr & 0x04, 0, "KEYI should assert on new events");
+        assert_eq!(isr & 0x04, 0);
         assert!(timer.key_irq_latched, "latch should set on new events");
-        assert_eq!(timer.irq_source, Some("KEY".to_string()));
+        assert_eq!(timer.irq_source, Some("MTI".to_string()));
     }
 
     #[test]
-    fn key_events_count_while_irq_masked_and_reassert_on_enable() {
+    fn buffered_key_events_do_not_manufacture_raw_keyi_on_enable() {
         let mut timer = TimerContext::new(true, 1, 0);
         timer.set_keyboard_irq_enabled(false);
         let mut mem = MemoryImage::new();
@@ -1175,7 +1105,8 @@ mod tests {
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
         assert_eq!(isr & 0x04, 0, "KEYI should stay clear while IRQs disabled");
 
-        // Re-enable IRQs and let the buffered FIFO assert KEYI.
+        // Re-enabling host event generation does not turn buffered FIFO data
+        // into an electrical raw-matrix level.
         timer.set_keyboard_irq_enabled(true);
         let (_mti2, _sti2, events2, _stats2) = timer.tick_timers_with_keyboard(
             &mut mem,
@@ -1197,32 +1128,21 @@ mod tests {
             "no additional events are needed to surface buffered data"
         );
         let isr_after = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_ne!(
-            isr_after & 0x04,
-            0,
-            "KEYI should assert once IRQs are enabled"
-        );
+        assert_eq!(isr_after & 0x04, 0);
     }
 
     #[test]
-    fn tick_timers_with_keyboard_reasserts_keyi_without_events() {
+    fn tick_timers_with_keyboard_does_not_reassert_keyi_from_fifo_latch() {
         let mut timer = TimerContext::new(true, 1, 0);
         let mut mem = MemoryImage::new();
         timer.key_irq_latched = true;
-        // No new events, but FIFO already has data -> KEYI should still assert on MTI.
+        // No new physical sample is available here; an event/FIFO latch is
+        // insufficient to assert raw KEYI.
         let (_mti, _sti, events, _) =
             timer.tick_timers_with_keyboard(&mut mem, 1, |_mem| (0, true, None), None, None);
         assert_eq!(events, 0);
         let isr = mem.read_internal_byte(ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & 0x04,
-            0x04,
-            "KEYI should reassert when FIFO has data even without new events"
-        );
-        assert!(
-            timer.irq_pending,
-            "pending IRQ should be latched when FIFO remains non-empty"
-        );
+        assert_eq!(isr & 0x04, 0);
     }
 
     #[test]

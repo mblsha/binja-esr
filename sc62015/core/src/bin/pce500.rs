@@ -15,8 +15,9 @@ use sc62015_core::{
     llama::{
         async_eval::{AsyncLlamaExecutor, TickHelper},
         eval::{
-            fetch_validated_vector, perfetto_next_substep, power_on_reset, set_perf_instr_counter,
-            validate_vector_transfer_with_length, LlamaBus, TimerTrace, ValidatedVectorTransfer,
+            fetch_validated_vector, perfetto_next_substep, power_on_reset,
+            prepare_validated_vector, set_perf_instr_counter, validate_vector_transfer_with_length,
+            LlamaBus, TimerTrace, ValidatedVectorTransfer,
         },
         opcodes::RegName,
         state::{mask_for, validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
@@ -54,8 +55,11 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use sc62015_core::memory::IMEM_EIH_OFFSET;
 
-const FIFO_BASE_ADDR: u32 = 0x00BFC96;
-const FIFO_TAIL_ADDR: u32 = 0x00BFC9E;
+const PCE500_IOCS_WS_PTR_ADDR: u32 = 0x00BFD17;
+const PCE500_KEY_FIFO_BASE_OFFSET: u32 = 0x02;
+const PCE500_KEY_FIFO_TAIL_OFFSET: u32 = 0x04;
+const PCE500_KEY_FIFO_HEAD_OFFSET: u32 = 0x05;
+const PCE500_KEY_FIFO_CAPACITY: u32 = 0x10;
 const VEC_RANGE_START: u32 = 0x00BFCC6;
 const VEC_RANGE_END: u32 = 0x00BFCCC;
 const ISR_KEYI: u8 = 0x04;
@@ -1451,11 +1455,37 @@ impl StandaloneBus {
         }
     }
 
+    fn keyboard_fifo_addresses(&self) -> Option<(u32, u32, u32)> {
+        let read = |address| self.memory.read_byte_silent(address).map(u32::from);
+        let workspace_base = read(PCE500_IOCS_WS_PTR_ADDR)?
+            | (read(PCE500_IOCS_WS_PTR_ADDR + 1)? << 8)
+            | (read(PCE500_IOCS_WS_PTR_ADDR + 2)? << 16);
+        if workspace_base == 0 {
+            return None;
+        }
+        let fifo_offset = read(workspace_base + PCE500_KEY_FIFO_BASE_OFFSET)?
+            | (read(workspace_base + PCE500_KEY_FIFO_BASE_OFFSET + 1)? << 8);
+        Some((
+            (workspace_base + fifo_offset) & ADDRESS_MASK,
+            (workspace_base + PCE500_KEY_FIFO_TAIL_OFFSET) & ADDRESS_MASK,
+            (workspace_base + PCE500_KEY_FIFO_HEAD_OFFSET) & ADDRESS_MASK,
+        ))
+    }
+
+    fn is_keyboard_fifo_address(&self, addr: u32) -> bool {
+        let Some((fifo_base, fifo_tail, fifo_head)) = self.keyboard_fifo_addresses() else {
+            return false;
+        };
+        addr == fifo_tail
+            || addr == fifo_head
+            || (fifo_base..fifo_base + PCE500_KEY_FIFO_CAPACITY).contains(&addr)
+    }
+
     fn trace_fifo_access(&self, kind: &str, addr: u32, bits: u8, value: u32) {
         if !self.trace_kbd {
             return;
         }
-        if !(FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
+        if !self.is_keyboard_fifo_address(addr) {
             return;
         }
         println!(
@@ -1494,7 +1524,8 @@ impl StandaloneBus {
     }
 
     fn tick_keyboard(&mut self) {
-        // Parity: scan only when called by timer cadence; assert KEYI when events are queued.
+        // Scan only on timer cadence. Events feed host/ROM FIFO bookkeeping;
+        // raw KEYI is sampled separately from selected physical KIL.
         let events = self.keyboard.scan_tick(&mut self.memory, true);
         let fifo_pending = self.keyboard.fifo_len() > 0;
         let pending = events > 0 || fifo_pending;
@@ -1544,29 +1575,12 @@ impl StandaloneBus {
                 .write_fifo_to_memory(&mut self.memory, kb_irq_enabled);
         }
         self.pending_kil = true;
-        self.raise_key_irq();
-        if kb_irq_enabled {
-            self.timer.key_irq_latched = true;
-            self.irq_pending = true;
-            if !self.in_interrupt {
-                self.last_irq_src = Some("KEY".to_string());
-            }
-        }
-    }
-
-    fn raise_key_irq(&mut self) {
-        if !self.timer.keyboard_irq_enabled() {
-            return;
-        }
-        if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-            let new = cur | ISR_KEYI;
-            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new);
-        }
+        self.timer.key_irq_latched = true;
     }
 
     fn press_key(&mut self, code: u8) {
-        // Parity: auto-key presses update the matrix state and let the timer-driven scan
-        // Correctness: enqueue FIFO/KEYI timing.
+        // Auto-key presses update physical matrix state. Timer-driven scans
+        // handle host FIFO timing; CPU boundaries sample raw KIL/KEYI.
         self.keyboard.press_matrix_code(code, &mut self.memory);
     }
 
@@ -1582,12 +1596,7 @@ impl StandaloneBus {
             .inject_input_event(code, &mut self.memory, kb_irq_enabled);
         if events > 0 {
             self.pending_kil = true;
-            self.raise_key_irq();
-            if kb_irq_enabled {
-                self.timer.key_irq_latched = true;
-                self.irq_pending = true;
-                self.last_irq_src = Some("KEY".to_string());
-            }
+            self.timer.key_irq_latched = true;
         }
     }
 
@@ -1598,12 +1607,7 @@ impl StandaloneBus {
                 .inject_matrix_event(code, release, &mut self.memory, kb_irq_enabled);
         if events > 0 {
             self.pending_kil = true;
-            self.raise_key_irq();
-            if kb_irq_enabled {
-                self.timer.key_irq_latched = true;
-                self.irq_pending = true;
-                self.last_irq_src = Some("KEY".to_string());
-            }
+            self.timer.key_irq_latched = true;
         }
     }
 
@@ -1689,13 +1693,26 @@ impl StandaloneBus {
         let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let in_interrupt = self.in_interrupt;
-        // Reassert latched KEYI if firmware clears ISR while key IRQ latch remains set.
-        if self.timer.key_irq_latched && (isr & ISR_KEYI) == 0 {
+        let raw_kil = if self
+            .memory
+            .read_internal_byte_silent(IMEM_LCC_OFFSET)
+            .unwrap_or(0)
+            & 0x04
+            == 0
+        {
+            self.keyboard.compute_physical_kil()
+        } else {
+            0
+        };
+        // KEYI follows the selected, undebounced physical KIL level. This
+        // remains active while servicing an interrupt; only nested delivery
+        // is deferred below.
+        if raw_kil != 0 && (isr & ISR_KEYI) == 0 {
             self.memory
                 .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_KEYI);
             isr |= ISR_KEYI;
             self.irq_pending = true;
-            if !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")) {
+            if !self.in_interrupt && !matches!(self.last_irq_src.as_deref(), Some("KEY" | "ONK")) {
                 self.last_irq_src = Some("KEY".to_string());
             }
         }
@@ -1786,11 +1803,12 @@ impl StandaloneBus {
             return Ok(());
         };
 
-        let vec = fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, self)?.target();
+        let vector_transfer = prepare_validated_vector(INTERRUPT_VECTOR_ADDR, state, self)?;
         self.maybe_patch_vectors();
 
-        // Only now is the vector transfer committed: construct the frame and
-        // clear IRM after every rejectable condition has passed.
+        // Hardware writes the complete frame before the one low-to-high
+        // architectural vector fetch. Silent validation above is deliberately
+        // unobservable and does not substitute for those reads.
         push_stack(&mut self.memory, state, RegName::S, pc, 24);
         let f = state.get_reg(RegName::F) & 0xFF;
         push_stack(&mut self.memory, state, RegName::S, f, 8);
@@ -1798,6 +1816,12 @@ impl StandaloneBus {
         let cleared_imr = imr & 0x7F;
         let _ = self.memory.store(imr_addr, 8, cleared_imr as u32);
         state.set_reg(RegName::IMR, u32::from(cleared_imr));
+
+        let vec = vector_transfer.consume_after_architectural_fetch(
+            INTERRUPT_VECTOR_ADDR,
+            state,
+            self,
+        )?;
 
         state.set_pc(vec);
         state.set_halted(false);
@@ -1924,47 +1948,34 @@ impl StandaloneBus {
             self.irq_pending = true;
             self.last_irq_src = Some("STI".to_string());
         }
-        if scan_on_timer {
-            if mti && key_events > 0 {
-                self.pending_kil = pending_kil;
-                if self.pending_kil {
-                    self.raise_key_irq();
-                    if kb_irq_enabled {
-                        self.timer.key_irq_latched = true;
-                        self.irq_pending = true;
-                        self.last_irq_src = Some("KEY".to_string());
-                    }
-                }
-                self.last_kbd_access = Some("scan".to_string());
-                self.log_irq_event(
-                    "KeyScan",
-                    Some("KEY"),
-                    [
-                        (
-                            "isr",
-                            AnnotationValue::UInt(
-                                self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) as u64,
-                            ),
-                        ),
-                        (
-                            "imr",
-                            AnnotationValue::UInt(
-                                self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
-                            ),
-                        ),
-                        ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
-                    ],
-                );
+        if scan_on_timer && mti && key_events > 0 {
+            self.pending_kil = pending_kil;
+            if self.pending_kil {
+                self.timer.key_irq_latched = true;
             }
-            if sti && self.keyboard.fifo_len() > 0 {
-                if let Some(cur) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                    if (cur & ISR_KEYI) == 0 {
-                        self.memory
-                            .write_internal_byte(IMEM_ISR_OFFSET, cur | ISR_KEYI);
-                    }
-                }
-            }
+            self.last_kbd_access = Some("scan".to_string());
+            self.log_irq_event(
+                "KeyScan",
+                Some("KEY"),
+                [
+                    (
+                        "isr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    (
+                        "imr",
+                        AnnotationValue::UInt(
+                            self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0) as u64,
+                        ),
+                    ),
+                    ("pc", AnnotationValue::Pointer(self.last_pc as u64)),
+                ],
+            );
         }
+        // Host FIFO occupancy is not an electrical KEYI source. Raw selected
+        // KIL is sampled by refresh_raw_key_irq().
     }
 
     fn advance_cycle(&mut self) {
@@ -2591,9 +2602,7 @@ impl LlamaBus for StandaloneBus {
                     }
                     return self.lcd.read_placeholder(addr);
                 }
-                if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
-                    self.trace_fifo_access("read", addr, bits, val);
-                }
+                self.trace_fifo_access("read", addr, bits, val);
                 val & mask_bits(bits)
             })
             .unwrap_or(0);
@@ -2807,9 +2816,7 @@ impl LlamaBus for StandaloneBus {
             }
             return;
         }
-        if (FIFO_BASE_ADDR..=FIFO_TAIL_ADDR).contains(&addr) {
-            self.trace_fifo_access("write", addr, bits, value);
-        }
+        self.trace_fifo_access("write", addr, bits, value);
         if self.memory.requires_python(addr) {
             if let Some(cb) = self.host_write.as_mut() {
                 (cb)(addr, value as u8);
@@ -2916,7 +2923,7 @@ fn load_rom(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
 
 fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
     if model.is_pce500_family() {
-        // Baseline emulator key scanning asserts KEYI on the first visible scan.
+        // Keep host debounce responsive; raw KEYI is sampled independently.
         bus.keyboard.set_press_threshold(1);
         // Baseline PC-E500 scans the key matrix each instruction (not just on MTI).
         bus.scan_on_timer = false;
@@ -4057,7 +4064,18 @@ fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &Stand
         .memory
         .read_internal_byte_silent(IMEM_ISR_OFFSET)
         .unwrap_or(0);
-    if bus.timer.key_irq_latched {
+    let raw_kil = if bus
+        .memory
+        .read_internal_byte_silent(IMEM_LCC_OFFSET)
+        .unwrap_or(0)
+        & 0x04
+        == 0
+    {
+        bus.keyboard.compute_physical_kil()
+    } else {
+        0
+    };
+    if raw_kil != 0 {
         isr |= ISR_KEYI;
     }
     if bus.pending_onk {
@@ -4065,14 +4083,6 @@ fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &Stand
     }
     let irq_replaces_pc = !bus.in_interrupt && (imr & IMR_MASTER) != 0 && (imr & isr) != 0;
     !irq_replaces_pc
-}
-
-fn fetch_replaced_irq_opcode(state: &LlamaState, bus: &mut StandaloneBus) -> u8 {
-    let pc = state.pc() & ADDRESS_MASK;
-    // Hardware performs exactly one architectural opcode fetch at the saved
-    // PC before an already-selected interrupt writes its frame. The byte is
-    // discarded, so it must not be decoded or silently stability-checked.
-    bus.load(pc, 8) as u8
 }
 
 fn preflight_and_tick_instruction(
@@ -4096,7 +4106,7 @@ fn preflight_and_tick_instruction(
     let transfer = match opcode {
         0xFE => {
             validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, state, bus)?;
-            Some(fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?)
+            Some(prepare_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?)
         }
         0xFF => {
             validate_stable_vector_transfer(ROM_RESET_VECTOR_ADDR, state, bus)?;
@@ -4907,17 +4917,6 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             } else {
                 None
             };
-            let (_irq_target, _irq_target_len) =
-                match validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, &state, &mut bus) {
-                    Ok(validated) => validated,
-                    Err(error) => {
-                        eprintln!(
-                            "error preflighting IRQ vector at PC=0x{:05X}: {error}",
-                            state.pc()
-                        );
-                        break;
-                    }
-                };
             if use_key_seq {
                 let screen_state = if needs_screen_state || needs_screen_text {
                     capture_screen_state(bus.lcd(), text_decoder.as_ref(), needs_screen_text)
@@ -4986,9 +4985,13 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             }
 
             if bus.irq_pending() {
+                // A deliverable asynchronous IRQ replaces, but does not erase,
+                // the fall-through opcode fetch. Hardware performs exactly one
+                // byte read here and does not decode operands.
+                let irq_pc = state.pc() & ADDRESS_MASK;
+                let _discarded_opcode = bus.load(irq_pc, 8);
                 // S is a 20-bit external pointer. Interrupt-frame bytes wrap
                 // independently at FFFFF -> 00000 even when S starts below 5.
-                let _discarded_opcode = fetch_replaced_irq_opcode(&state, &mut bus);
                 if let Err(error) = bus.deliver_irq(&mut state) {
                     eprintln!("error delivering IRQ at PC=0x{:05X}: {error}", state.pc());
                     break;
@@ -5897,60 +5900,6 @@ mod tests {
     }
 
     #[test]
-    fn selected_irq_fetches_discarded_callback_opcode_once_without_preflight() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let mut bus = test_standalone_bus();
-        let current_pc = 0x02000;
-        let handler_pc = 0x03000;
-        let mut state = LlamaState::new();
-        state.set_pc(current_pc);
-        state.set_reg(RegName::S, 0x00400);
-        bus.memory.write_external_byte(current_pc, 0x20);
-        bus.memory.write_external_byte(handler_pc, 0x00);
-        bus.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR, handler_pc as u8);
-        bus.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, (handler_pc >> 8) as u8);
-        bus.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, (handler_pc >> 16) as u8);
-        bus.memory
-            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
-        bus.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
-        bus.irq_pending = true;
-        bus.timer.irq_pending = true;
-        bus.last_irq_src = Some("KEY".to_string());
-        bus.memory.set_python_ranges(vec![(current_pc, current_pc)]);
-
-        let architectural_reads = Arc::new(AtomicUsize::new(0));
-        let silent_peeks = Arc::new(AtomicUsize::new(0));
-        let read_count = Arc::clone(&architectural_reads);
-        bus.host_read = Some(Box::new(move |addr| {
-            assert_eq!(addr, current_pc);
-            read_count.fetch_add(1, Ordering::Relaxed);
-            Some(0x20)
-        }));
-        let peek_count = Arc::clone(&silent_peeks);
-        bus.host_peek = Some(Box::new(move |addr| {
-            assert_eq!(addr, current_pc);
-            peek_count.fetch_add(1, Ordering::Relaxed);
-            Some(0x20)
-        }));
-
-        assert!(!current_instruction_requires_silent_preflight(&state, &bus));
-        assert_eq!(fetch_replaced_irq_opcode(&state, &mut bus), 0x20);
-        bus.deliver_irq(&mut state)
-            .expect("selected IRQ must replace a reserved callback opcode");
-
-        assert_eq!(architectural_reads.load(Ordering::Relaxed), 1);
-        assert_eq!(silent_peeks.load(Ordering::Relaxed), 0);
-        assert_eq!(state.pc(), handler_pc);
-        assert_eq!(state.get_reg(RegName::S), 0x003FB);
-        assert!(bus.in_interrupt);
-    }
-
-    #[test]
     fn on_key_sets_isr_and_triggers_pending_irq() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
@@ -6031,7 +5980,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_key_press_defers_keyi_until_scan() {
+    fn selected_auto_key_asserts_raw_keyi_at_scheduling_boundary() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
             create_lcd(sc62015_core::LcdKind::Hd61202),
@@ -6077,7 +6026,7 @@ mod tests {
             "auto key press should not mark KIL pending before scan"
         );
 
-        bus.advance_cycles(6);
+        let _delivery_selected = bus.irq_pending();
 
         let isr_scan = bus
             .memory
@@ -6086,13 +6035,7 @@ mod tests {
         assert_ne!(
             isr_scan & super::ISR_KEYI,
             0,
-            "scan tick should assert KEYI after debounce"
-        );
-        assert!(bus.timer.key_irq_latched, "scan tick should latch KEYI");
-        assert!(bus.pending_kil, "scan tick should mark KIL pending");
-        assert!(
-            bus.keyboard.fifo_len() > 0,
-            "scan tick should enqueue FIFO event"
+            "raw selected KIL should assert KEYI before debounce"
         );
     }
 
@@ -6139,7 +6082,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_input_event_sets_key_irq_without_matrix_release_masking() {
+    fn exact_input_event_does_not_manufacture_raw_matrix_keyi() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
             create_lcd(sc62015_core::LcdKind::Iq7000Vram),
@@ -6160,9 +6103,9 @@ mod tests {
             .memory
             .read_internal_byte(super::IMEM_ISR_OFFSET)
             .unwrap_or(0);
-        assert_ne!(isr & super::ISR_KEYI, 0);
+        assert_eq!(isr & super::ISR_KEYI, 0);
         assert!(bus.pending_kil);
-        assert!(bus.irq_pending);
+        assert!(!bus.irq_pending);
     }
 
     #[test]
@@ -6193,7 +6136,47 @@ mod tests {
     }
 
     #[test]
-    fn per_instruction_scan_sets_keyi_when_enabled() {
+    fn raw_keyi_reasserts_in_handler_until_physical_release() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        bus.strobe_all_columns();
+        bus.press_key(super::PF1_CODE);
+        bus.in_interrupt = true;
+        bus.memory.write_internal_byte(super::IMEM_ISR_OFFSET, 0);
+
+        assert!(!bus.irq_pending(), "nested delivery remains deferred");
+        assert_eq!(
+            bus.memory
+                .read_internal_byte(super::IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & super::ISR_KEYI,
+            super::ISR_KEYI
+        );
+
+        bus.release_key(super::PF1_CODE);
+        bus.memory.write_internal_byte(super::IMEM_ISR_OFFSET, 0);
+        bus.irq_pending = false;
+        assert!(!bus.irq_pending());
+        assert_eq!(
+            bus.memory
+                .read_internal_byte(super::IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & super::ISR_KEYI,
+            0
+        );
+    }
+
+    #[test]
+    fn per_instruction_scan_keeps_fifo_separate_from_raw_keyi() {
         let mut bus = StandaloneBus::new(
             MemoryImage::new(),
             create_lcd(sc62015_core::LcdKind::Hd61202),
@@ -6223,13 +6206,18 @@ mod tests {
             .memory
             .read_internal_byte(super::IMEM_ISR_OFFSET)
             .unwrap_or(0);
-        assert_ne!(
-            isr_after & super::ISR_KEYI,
-            0,
-            "per-instruction scan should assert KEYI"
-        );
+        assert_eq!(isr_after & super::ISR_KEYI, 0);
         assert!(bus.timer.key_irq_latched);
         assert!(bus.pending_kil);
+        let _delivery_selected = bus.irq_pending();
+        assert_ne!(
+            bus.memory
+                .read_internal_byte(super::IMEM_ISR_OFFSET)
+                .unwrap_or(0)
+                & super::ISR_KEYI,
+            0,
+            "raw held matrix level should assert KEYI"
+        );
     }
 
     #[test]
@@ -6246,6 +6234,7 @@ mod tests {
             None,
         );
         let mut state = LlamaState::new();
+        state.set_reg(RegName::S, 0x0200);
         // Enable master + ONK mask.
         bus.memory
             .write_internal_byte(super::IMEM_IMR_OFFSET, super::IMR_MASTER | super::IMR_ONK);
@@ -7426,5 +7415,48 @@ mod tests {
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
+    }
+
+    #[test]
+    fn keyboard_trace_resolves_relocatable_iocs_fifo() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 1, 1),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(bus.keyboard_fifo_addresses(), None);
+        bus.memory
+            .store(PCE500_IOCS_WS_PTR_ADDR, 24, 0x00BF9B4)
+            .expect("store IOCS workspace pointer");
+        bus.memory
+            .store(0x00BF9B6, 16, 0x0050)
+            .expect("store FIFO offset");
+
+        assert_eq!(
+            bus.keyboard_fifo_addresses(),
+            Some((0x00BFA04, 0x00BF9B8, 0x00BF9B9))
+        );
+        assert!(bus.is_keyboard_fifo_address(0x00BF9B8));
+        assert!(bus.is_keyboard_fifo_address(0x00BF9B9));
+        assert!(bus.is_keyboard_fifo_address(0x00BFA04));
+        assert!(bus.is_keyboard_fifo_address(0x00BFA13));
+        assert!(!bus.is_keyboard_fifo_address(0x00BFC96));
+
+        bus.memory
+            .store(PCE500_IOCS_WS_PTR_ADDR, 24, 0x00BFA00)
+            .expect("relocate IOCS workspace pointer");
+        bus.memory
+            .store(0x00BFA02, 16, 0x0170)
+            .expect("store relocated FIFO offset");
+        assert_eq!(
+            bus.keyboard_fifo_addresses(),
+            Some((0x00BFB70, 0x00BFA04, 0x00BFA05))
+        );
     }
 }

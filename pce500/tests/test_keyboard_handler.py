@@ -69,7 +69,7 @@ class TestKeyboardHandler:
     def test_fifo_drains_into_rom_iocs_workspace(self) -> None:
         workspace = 0x0BFC80
         self.memory.write_long(0x1000E6, workspace)
-        self.memory.write_byte(workspace + 0x02, 0x50)
+        self.memory.write_word(workspace + 0x02, 0x0150)
         self.memory.write_byte(workspace + 0x04, 0)
         self.memory.write_byte(workspace + 0x05, 0)
 
@@ -79,7 +79,7 @@ class TestKeyboardHandler:
         assert self.handler.scan_tick()
 
         assert self.handler.drain_fifo_to_pce500_iocs_workspace(True) == 1
-        assert self.memory.read_byte(workspace + 0x50) == (
+        assert self.memory.read_byte(workspace + 0x0150) == (
             KEY_LOCATIONS["KEY_F1"].column << 3 | KEY_LOCATIONS["KEY_F1"].row
         )
         assert self.memory.read_byte(workspace + 0x04) == 1

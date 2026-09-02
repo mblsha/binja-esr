@@ -1464,12 +1464,36 @@ def test_wait_lifts_to_timing_intrinsic() -> None:
     assert [getattr(node, "name", None) for node in il.ils] == ["WAIT"]
 
 
-def test_ir_lifts_vector_validation_before_stack_mutation() -> None:
+def test_ir_lifts_frame_before_architectural_vector_fetch() -> None:
     instr = decode(bytearray([0xFE]), 0x12345)
     il = MockLowLevelILFunction()
     instr.lift(il, 0x12345)
 
-    fetch, validation = il.ils[:2]
+    preflight = il.ils[0]
+    assert getattr(preflight, "name", None) == "PREFLIGHT_VECTOR_TRANSFER"
+    assert "1048570" in repr(preflight)
+    assert "74565" in repr(preflight)
+
+    fetch_index = next(
+        index
+        for index, node in enumerate(il.ils)
+        if node.bare_op() == "SET_REG"
+        and "TEMP6" in repr(node)
+        and "1048570" in repr(node)
+    )
+    validation_index = next(
+        index
+        for index, node in enumerate(il.ils)
+        if getattr(node, "name", None) == "VALIDATE_VECTOR_TRANSFER"
+    )
+    stores = [index for index, node in enumerate(il.ils) if node.bare_op() == "STORE"]
+    # Five stack-frame bytes plus the architectural IMR.IRM clear all precede
+    # the low-to-high vector read.
+    assert len(stores) == 6
+    assert max(stores) < fetch_index < validation_index
+
+    fetch = il.ils[fetch_index]
+    validation = il.ils[validation_index]
     assert fetch.bare_op() == "SET_REG"
     assert "TEMP6" in repr(fetch)
     assert "1048570" in repr(fetch)  # architectural read at 0xFFFFA
@@ -1477,7 +1501,6 @@ def test_ir_lifts_vector_validation_before_stack_mutation() -> None:
     assert "1048570" in repr(validation)
     assert "74565" in repr(validation)  # source PC at 0x12345
     assert "TEMP6" in repr(validation)
-    assert all(node.bare_op() != "STORE" for node in il.ils[:2])
     assert il.ils[-1].bare_op() == "JUMP"
     assert "TEMP6" in repr(il.ils[-1])
     assert "LOAD" not in repr(il.ils[-1])

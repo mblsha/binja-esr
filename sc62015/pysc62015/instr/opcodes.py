@@ -220,6 +220,7 @@ HALTIntrinsic = IntrinsicName("HALT")
 OFFIntrinsic = IntrinsicName("OFF")
 RESETIntrinsic = IntrinsicName("RESET")
 ValidateFIntrinsic = IntrinsicName("VALIDATE_F")
+PreflightVectorTransferIntrinsic = IntrinsicName("PREFLIGHT_VECTOR_TRANSFER")
 ValidateVectorTransferIntrinsic = IntrinsicName("VALIDATE_VECTOR_TRANSFER")
 
 # Use distinct temporary registers for various operations in order to avoid

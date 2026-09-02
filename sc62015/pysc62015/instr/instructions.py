@@ -1821,10 +1821,30 @@ class OFF(MiscInstruction):
 # 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        # Fetch the architectural vector into a dedicated temporary before
-        # any S-stack/IMR mutation. The validation intrinsic compares this
-        # value with a side-effect-free peek and statically checks its target;
-        # the final jump reuses it rather than reading a volatile bus twice.
+        # Fail-closed target proof is silent. HW-014 then requires the five
+        # observable frame writes before the low-to-high architectural vector
+        # fetch, which is retained in a temporary for the final jump.
+        il.append(
+            il.intrinsic(
+                [],
+                PreflightVectorTransferIntrinsic,
+                [
+                    il.const(3, INTERRUPT_VECTOR_ADDR),
+                    il.const(3, addr & PC_MASK),
+                ],
+            )
+        )
+        imr, *_rest = RegIMR().operands()
+        imr_value = imr.lift(il)
+        # Software IR saves the address of the IR opcode itself.  The ROM
+        # dispatcher identifies 0xFE at that saved PC and advances the frame
+        # by one before RETI; hardware interrupt delivery instead saves the
+        # already-current resume PC in the runtime's separate entry path.
+        _lift_s_push(il, 3, il.const(3, addr & PC_MASK))
+        _lift_s_push(il, 1, RegF().lift(il))
+        _lift_s_push(il, 1, imr_value)
+        imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
+
         mem = EMemAddr(width=3)
         mem.value = INTERRUPT_VECTOR_ADDR
         vector_target = TempReg(TempVectorTarget, width=3)
@@ -1840,16 +1860,6 @@ class IR(MiscInstruction):
                 ],
             )
         )
-        imr, *_rest = RegIMR().operands()
-        imr_value = imr.lift(il)
-        # Software IR saves the address of the IR opcode itself.  The ROM
-        # dispatcher identifies 0xFE at that saved PC and advances the frame
-        # by one before RETI; hardware interrupt delivery instead saves the
-        # already-current resume PC in the runtime's separate entry path.
-        _lift_s_push(il, 3, il.const(3, addr & PC_MASK))
-        _lift_s_push(il, 1, RegF().lift(il))
-        _lift_s_push(il, 1, imr_value)
-        imr.lift_assign(il, il.and_expr(1, imr.lift(il), il.const(1, 0x7F)))
 
         il.append(il.jump(vector_target.lift(il)))
 

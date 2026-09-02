@@ -264,6 +264,28 @@ class PCE500KeyboardHandler:
     def peek_keyboard_input(self) -> int:
         return self._matrix.peek_kil()
 
+    def peek_physical_keyboard_input(self, pc: int | None = None) -> int:
+        """Return raw selected matrix level without advancing debounce/FIFO."""
+
+        if not self._scan_enabled:
+            return 0
+        if self._memory is not None:
+            try:
+                from sc62015.pysc62015.instr.opcodes import IMEMRegisters
+
+                address = INTERNAL_MEMORY_START + IMEMRegisters.LCC
+                peek = getattr(self._memory, "peek_byte_for_preflight", None)
+                lcc = (
+                    peek(address, pc)
+                    if callable(peek)
+                    else self._memory.read_byte(address)
+                )
+                if int(lcc) & 0x04:
+                    return 0
+            except Exception:
+                return 0
+        return self._matrix.peek_physical_kil()
+
     def get_debug_info(self) -> dict[str, object]:
         return {
             "pressed_keys": self.get_pressed_keys(),

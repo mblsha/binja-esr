@@ -919,18 +919,6 @@ class PCE500Memory:
             print(
                 f"[ext-write] pc=0x{effective_pc:06X} addr=0x{address:06X} value=0x{value:02X}"
             )
-        if getattr(self, "_emulator", None) is not None and getattr(
-            self._emulator, "_llama_pure_lcd", False
-        ):
-            if (
-                effective_pc is not None
-                and 0x0BFCE0 <= address <= 0x0BFCFF
-                and 0x0F2040 <= (effective_pc & 0xFFFFFF) <= 0x0F205F
-            ):
-                notify = getattr(self._emulator, "notify_lcd_interrupt", None)
-                if callable(notify):
-                    notify(address, value, effective_pc)
-
         # Check for SC62015 internal memory (0x100000-0x1000FF)
         if address >= 0x100000:
             offset = (address - 0x100000) & 0xFF

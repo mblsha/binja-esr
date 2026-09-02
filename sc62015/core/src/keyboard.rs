@@ -317,6 +317,22 @@ impl KeyboardMatrix {
         value
     }
 
+    /// Return the selected, undebounced electrical matrix level.
+    ///
+    /// This is the hardware source for KIL/KEYI. Host FIFO events, repeat
+    /// state, and the compatibility `raw_kil` presentation option do not
+    /// participate.
+    pub fn compute_physical_kil(&self) -> u8 {
+        let active = self.active_columns();
+        self.states.iter().fold(0u8, |value, state| {
+            if state.pressed && active.contains(&state.location.column) {
+                value | (1 << (state.location.row & 0x07))
+            } else {
+                value
+            }
+        })
+    }
+
     fn enqueue_event(&mut self, code: u8, release: bool, count_irq: bool) -> usize {
         let mut value = code & 0x7F;
         if release {
@@ -352,7 +368,10 @@ impl KeyboardMatrix {
         self.keyi_latch = false;
     }
 
-    /// Inject a matrix event immediately, bypassing debounce, and assert KEYI if enabled.
+    /// Inject a matrix event immediately, bypassing debounce.
+    ///
+    /// This updates physical key state and host FIFO bookkeeping. The CPU
+    /// samples selected physical KIL separately to assert raw KEYI.
     pub fn inject_matrix_event(
         &mut self,
         code: u8,
@@ -416,47 +435,23 @@ impl KeyboardMatrix {
         events
     }
 
-    pub fn write_fifo_to_memory(&mut self, memory: &mut MemoryImage, kb_irq_enabled: bool) {
-        // Assert KEYI only if keyboard IRQs are enabled, matching Python gating.
-        if self.keyi_latch && self.fifo_count > 0 && kb_irq_enabled {
-            if let Some(isr) = memory.read_internal_byte(0xFC) {
-                if (isr & 0x04) == 0 {
-                    memory.write_internal_byte(0xFC, isr | 0x04);
-                    let mut guard = crate::PERFETTO_TRACER.enter();
-                    guard.with_some(|tracer| {
-                        let (seq, pc) = crate::llama::eval::perfetto_instr_context()
-                            .unwrap_or_else(|| {
-                                (
-                                    crate::llama::eval::perfetto_last_instr_index(),
-                                    crate::llama::eval::perfetto_last_pc(),
-                                )
-                            });
-                        let substep = crate::llama::eval::perfetto_next_substep();
-                        tracer.record_mem_write_with_substep(
-                            seq,
-                            pc,
-                            crate::INTERNAL_MEMORY_START + 0xFC,
-                            (isr | 0x04) as u32,
-                            "internal",
-                            8,
-                            substep,
-                        );
-                    });
-                }
-            }
-        }
+    pub fn write_fifo_to_memory(&mut self, _memory: &mut MemoryImage, _kb_irq_enabled: bool) {
+        // The ROM-facing FIFO is not an electrical KEYI source. KEYI is
+        // sampled from compute_physical_kil() at the CPU scheduling boundary.
     }
 
     /// Drain debounced matrix events into the PC-E500 ROM IOCS key FIFO.
     ///
     /// The generic keyboard matrix owns the physical scan/debounce FIFO. The PC-E500 ROM
-    /// consumes a separate ring buffer inside the IOCS workspace (`IOCS_WS+0x50` after
-    /// normal boot). Timer-driven scans call this after `scan_tick` so `STDI:41h/42h/43h`
-    /// can observe physical key events without tests seeding the ROM FIFO directly.
+    /// consumes a separate relocatable ring buffer inside the IOCS workspace. Its u16
+    /// data offset is stored at `IOCS_WS+0x02` (normally `0x0050`), while producer and
+    /// consumer indices live at `+0x04/+0x05`. Timer-driven scans call this after
+    /// `scan_tick` so `STDI:41h/42h/43h` can observe physical key events without tests
+    /// seeding the ROM FIFO directly.
     pub fn drain_fifo_to_pce500_iocs_workspace(
         &mut self,
         memory: &mut MemoryImage,
-        kb_irq_enabled: bool,
+        _kb_irq_enabled: bool,
     ) -> usize {
         if self.fifo_count == 0 {
             self.keyi_latch = false;
@@ -464,15 +459,13 @@ impl KeyboardMatrix {
         }
 
         let Some(base) = read_u24(memory, PCE500_IOCS_WS_PTR_MIRROR)
-            .or_else(|| read_u24(memory, PCE500_IOCS_WS_PTR))
+            .filter(|base| *base != 0)
+            .or_else(|| read_u24(memory, PCE500_IOCS_WS_PTR).filter(|base| *base != 0))
         else {
             return 0;
         };
-        if base == 0 {
-            return 0;
-        }
 
-        let Some(buffer_offset) = memory.load(base + PCE500_KEY_FIFO_BASE_OFFSET, 8) else {
+        let Some(buffer_offset) = memory.load(base + PCE500_KEY_FIFO_BASE_OFFSET, 16) else {
             return 0;
         };
         let Some(mut tail) = memory
@@ -503,11 +496,6 @@ impl KeyboardMatrix {
 
         if written > 0 {
             let _ = memory.store(base + PCE500_KEY_FIFO_TAIL_OFFSET, 8, u32::from(tail));
-            if kb_irq_enabled {
-                if let Some(isr) = memory.read_internal_byte(0xFC) {
-                    memory.write_internal_byte(0xFC, isr | 0x04);
-                }
-            }
             self.consume_pending_events();
         }
         written
@@ -801,11 +789,11 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = self.repeat_delay;
             self.kil_latch = self.compute_kil(false);
-            // Parity: defer event enqueue/KEYI to timer-driven scan_tick; do not push KIL to IMEM here.
+            // Defer host-event enqueueing to timer-driven scan_tick; do not
+            // push KIL into IMEM here. Raw KEYI is sampled independently.
             if self.keyi_on_any_press && !was_pressed {
-                // Some ROMs (e.g., IQ‑7000) park KOL/KOH inactive while waiting and rely on KEYI
-                // to kick off scanning. Wake on any new physical press to avoid a deadlock where
-                // a key cannot be seen until columns are strobed.
+                // Preserve the compatibility host-event queue used by input
+                // bridges without treating it as an electrical IRQ source.
                 self.enqueue_event(code & 0x7F, false, true);
             }
         }
@@ -820,7 +808,7 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
             self.kil_latch = self.compute_kil(false);
-            // Parity: defer event enqueue/KEYI to timer-driven scan_tick.
+            // Defer host-event enqueueing to timer-driven scan_tick.
         }
     }
 
@@ -968,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_tick_respects_irq_disable() {
+    fn scan_tick_never_manufactures_raw_keyi() {
         let mut kb = KeyboardMatrix::new();
         kb.set_press_threshold(1);
         let mut mem = MemoryImage::new();
@@ -980,7 +968,11 @@ mod tests {
         let isr = mem
             .read_internal_byte(crate::memory::IMEM_ISR_OFFSET)
             .unwrap_or(0);
-        assert_eq!(isr & 0x04, 0, "KEYI should remain clear when IRQs disabled");
+        assert_eq!(
+            isr & 0x04,
+            0,
+            "host scan events must not manufacture raw KEYI"
+        );
         assert!(kb.fifo_len() > 0, "FIFO should still capture the event");
     }
 
@@ -1012,6 +1004,46 @@ mod tests {
 
         assert_eq!(events, 1);
         assert_eq!(kb.fifo_snapshot(), vec![0xA3]);
+    }
+
+    #[test]
+    fn iocs_fifo_uses_bfd17_when_e6_is_zero_and_reads_u16_data_offset() {
+        let mut kb = KeyboardMatrix::new();
+        let mut mem = MemoryImage::new();
+        let workspace_base = 0x00BF9B4;
+        let fifo_offset = 0x0170;
+
+        mem.store(PCE500_IOCS_WS_PTR_MIRROR, 24, 0)
+            .expect("clear live IOCS workspace image");
+        mem.store(PCE500_IOCS_WS_PTR, 24, workspace_base)
+            .expect("store authoritative IOCS workspace pointer");
+        mem.store(
+            workspace_base + PCE500_KEY_FIFO_BASE_OFFSET,
+            16,
+            fifo_offset,
+        )
+        .expect("store 16-bit FIFO data offset");
+        mem.store(workspace_base + PCE500_KEY_FIFO_TAIL_OFFSET, 8, 0)
+            .expect("clear FIFO producer index");
+        mem.store(workspace_base + PCE500_KEY_FIFO_HEAD_OFFSET, 8, 0)
+            .expect("clear FIFO consumer index");
+        assert_eq!(kb.inject_input_event(0x23, &mut mem, false), 1);
+
+        assert_eq!(kb.drain_fifo_to_pce500_iocs_workspace(&mut mem, true), 1);
+        assert_eq!(
+            mem.load(workspace_base + fifo_offset, 8),
+            Some(0x23),
+            "the high byte of the stored FIFO offset must affect the destination"
+        );
+        assert_eq!(
+            mem.load(workspace_base + PCE500_KEY_FIFO_TAIL_OFFSET, 8),
+            Some(1)
+        );
+        assert_eq!(
+            mem.read_internal_byte(0xFC).unwrap_or(0) & 0x04,
+            0,
+            "draining a host FIFO must not manufacture raw KEYI"
+        );
     }
 
     #[test]

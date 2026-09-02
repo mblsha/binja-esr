@@ -14,7 +14,10 @@ from enum import Enum
 
 # Import the SC62015 emulator
 from sc62015.pysc62015 import CPU, RegisterName, Registers
-from sc62015.pysc62015.emulator import fetch_validated_vector_transfer
+from sc62015.pysc62015.emulator import (
+    fetch_validated_vector_transfer,
+    prepare_validated_vector_transfer,
+)
 from sc62015.pysc62015.instr.instructions import (
     CALL,
     RetInstruction,
@@ -559,7 +562,8 @@ class PCE500Emulator:
         self.keyboard = KeyboardHandler(
             self.memory, columns_active_high=keyboard_columns_active_high
         )
-        # Match Rust PC-E500: assert KEYI on first visible scan.
+        # Keep host-event delivery responsive. Raw KEYI is sampled separately
+        # from the selected physical KIL level at instruction boundaries.
         try:
             if hasattr(self.keyboard, "_matrix"):
                 self.keyboard._matrix.press_threshold = 1
@@ -750,7 +754,7 @@ class PCE500Emulator:
         self.memory.set_imem_access_callback(self._default_imem_access_callback)
         self.memory._mark_snapshot_baseline()
         try:
-            # Tap into keyboard scan events to surface KEYI progression in logs/perfetto.
+            # Trace host scan/debounce events separately from raw KIL/KEYI.
             if hasattr(self.keyboard, "_matrix"):
                 matrix = self.keyboard._matrix  # type: ignore[attr-defined]
                 matrix._trace_hook = self._trace_key_event  # type: ignore[attr-defined]
@@ -1064,7 +1068,10 @@ class PCE500Emulator:
             return False
         was_halted = bool(getattr(self.cpu.state, "halted", False))
         in_interrupt = bool(getattr(self, "_in_interrupt", False))
-        key_will_reassert = bool(self._key_irq_latched) and not in_interrupt
+        raw_kil_level = 0
+        if self.keyboard is not None:
+            raw_kil_level = self.keyboard.peek_physical_keyboard_input(pc) & 0xFF
+        key_will_reassert = raw_kil_level != 0
         onk_will_reassert = (
             bool(getattr(self, "_pending_onk", False)) and not in_interrupt
         )
@@ -1111,19 +1118,19 @@ class PCE500Emulator:
             # timer state can change. Interrupt delivery may replace this PC,
             # so the selected handler is validated again below.
             self.cpu.validate_before_scheduling(pc)
-        # Reassert latched KEY/ONK interrupts even when timers are disabled so
-        # firmware ISR clearing does not drop pending keyboard events.
-        if self._key_irq_latched and not getattr(self, "_in_interrupt", False):
+        # The raw KEYI source follows the undebounced selected KIL level. It is
+        # independent of IMR, the ROM FIFO, and handler in-service state.
+        if raw_kil_level:
             isr_addr = INTERNAL_MEMORY_START + IMEMRegisters.ISR
             isr_val = self.memory.read_byte(isr_addr) & 0xFF
             if (isr_val & int(ISRFlag.KEYI)) == 0:
                 self._set_isr_bits(int(ISRFlag.KEYI))
-                self._irq_pending = True
-                if getattr(self, "_irq_source", None) not in (
-                    IRQSource.KEY,
-                    IRQSource.ONK,
-                ):
-                    self._irq_source = IRQSource.KEY
+            self._irq_pending = True
+            if not in_interrupt and getattr(self, "_irq_source", None) not in (
+                IRQSource.KEY,
+                IRQSource.ONK,
+            ):
+                self._irq_source = IRQSource.KEY
         # Honor low-power state without collapsing OFF into HALT. Device traces
         # verify STI wake for HALT and ONKI wake for firmware-prepared OFF; the
         # remaining source combinations are peripheral integration policy.
@@ -1131,11 +1138,7 @@ class PCE500Emulator:
             power_state = getattr(self.cpu.state, "power_state", "halted")
             is_off = power_state == "off"
             # Mirror Rust: tick timers while halted to allow ISR bits to wake the CPU.
-            if (
-                not is_off
-                and self._timer_enabled
-                and not getattr(self, "_in_interrupt", False)
-            ):
+            if not is_off and self._timer_enabled:
                 try:
                     self._tick_timers()
                 except Exception as exc:
@@ -1405,16 +1408,16 @@ class PCE500Emulator:
                         raise RuntimeError(
                             "failed architectural pre-IRQ opcode fetch"
                         ) from exc
-                    # Resolve and statically preflight the handler silently,
-                    # then perform exactly one architectural vector fetch and
-                    # require it to match before the frame changes.  This
-                    # catches a failing/volatile bus without leaving a partial
-                    # stack frame or cleared IMR.
-                    vector_addr = self._fetch_validated_vector(
-                        INTERRUPT_VECTOR_ADDR, source_pc=cur_pc
+                    # Resolve and statically preflight the handler silently.
+                    # HW-014 requires the observable vector reads after all
+                    # five frame writes, so retain the opaque proof until then.
+                    vector_transfer = prepare_validated_vector_transfer(
+                        self.memory,
+                        self.cpu.regs,
+                        INTERRUPT_VECTOR_ADDR,
+                        source_pc=cur_pc,
+                        require_stability_metadata=True,
                     )
-                    # Commit wrapper metadata only after the vector read has
-                    # proved that delivery can begin atomically.
                     if pending_src is not None:
                         self._irq_source = pending_src
                     _log_irq_debug(
@@ -1438,10 +1441,17 @@ class PCE500Emulator:
                         print(
                             f"[irq-stack] deliver start pc=0x{cur_pc:06X} s=0x{s:06X} f=0x{int(self.cpu.regs.get(RegisterName.F)) & 0xFF:02X} imr=0x{imr_val_chk:02X}"
                         )
-                    # push PC (little-endian 3 bytes)
-                    s_new = (s - 3) & 0xFFFFF
+                    # Push saved PC high/middle/low while pre-decrementing S
+                    # once per byte. The final image is little-endian, but the
+                    # externally visible write order is descending.
                     irq_delivery_started = True
-                    self.memory.write_bytes(3, s_new, cur_pc)
+                    s_new = s & 0xFFFFF
+                    for byte_index in reversed(range(3)):
+                        s_new = (s_new - 1) & 0xFFFFF
+                        self.memory.write_byte(
+                            s_new,
+                            (cur_pc >> (byte_index * 8)) & 0xFF,
+                        )
                     if IRQ_STACK_TRACE_ENABLED:
                         print(
                             f"[irq-stack] push_pc from 0x{s:06X} to 0x{s_new:06X} value=0x{cur_pc & 0xFFFFFF:06X}"
@@ -1473,9 +1483,26 @@ class PCE500Emulator:
                         print(
                             f"[irq-stack] deliver done s=0x{int(self.cpu.regs.get(RegisterName.S)):06X}"
                         )
+                    # Perform exactly one low-to-high architectural vector
+                    # fetch after the complete frame and require it to match
+                    # the silent proof retained above.
+                    raw_vector = 0
+                    for byte_index in range(3):
+                        raw_vector |= (
+                            self.memory.read_byte(
+                                INTERRUPT_VECTOR_ADDR + byte_index,
+                                cpu_pc=cur_pc,
+                            )
+                            & 0xFF
+                        ) << (byte_index * 8)
+                    vector_addr = vector_transfer.consume_after_architectural_fetch(
+                        self.memory,
+                        INTERRUPT_VECTOR_ADDR,
+                        cur_pc,
+                        raw_vector,
+                    )
                     # ISR status was set by the triggering source (device/timer)
-                    # Do not modify ISR here; only deliver the interrupt.
-                    # Jump to the already validated interrupt vector candidate.
+                    # and is not acknowledged by entry itself.
                     if self._irq_source == IRQSource.KEY:
                         # Mark keyboard IRQ delivery explicitly on irq.key track.
                         try:
@@ -3636,7 +3663,7 @@ class PCE500Emulator:
         """Advance cycle count and timers for simulated WAIT loops."""
         for _ in range(int(cycles)):
             self.cycle_count += 1
-            if self._timer_enabled and not getattr(self, "_in_interrupt", False):
+            if self._timer_enabled:
                 self._tick_timers()
 
     def _build_register_annotations(self) -> Dict[str, Any]:
@@ -3996,30 +4023,6 @@ class PCE500Emulator:
         target.write_text(json.dumps(payload, indent=2))
         return target
 
-    def notify_lcd_interrupt(
-        self, address: int, value: int, pc: Optional[int] = None
-    ) -> None:
-        """Handle a pure-Rust LCD write that should nudge the KEY interrupt."""
-
-        if not getattr(self, "_llama_pure_lcd", False):
-            return
-        if not getattr(self, "_kb_irq_enabled", True):
-            return
-        self._set_isr_bits(int(ISRFlag.KEYI))
-        self._key_irq_latched = True
-        self._irq_pending = True
-        self._irq_source = IRQSource.KEY
-        try:
-            self.irq_counts["KEY"] += 1
-            self.irq_counts["total"] += 1
-        except Exception:
-            pass
-        if IRQ_DEBUG_ENABLED:
-            pc_str = f"0x{pc:06X}" if pc is not None else "N/A"
-            _log_irq_debug(
-                f"lcd-notify irq addr=0x{address:06X} value=0x{value:02X} pc={pc_str}"
-            )
-
     def press_key(self, key_code: str) -> bool:
         result = self.keyboard.press_key(key_code) if self.keyboard else False
         # The handler commits SSR.ONK and ISR.ONKI first (transactionally in
@@ -4192,37 +4195,11 @@ class PCE500Emulator:
                 pass
 
         if key_events:
-            if self._kb_irq_enabled:
-                self._key_irq_latched = True
-                self._set_isr_bits(int(ISRFlag.KEYI))
-                self._irq_pending = True
-                self._irq_source = IRQSource.KEY
-                self._kb_irq_count += len(key_events)
-                if IRQ_DEBUG_ENABLED:
-                    _log_irq_debug(
-                        f"key_events_irq count={len(key_events)} cycle={self.cycle_count}"
-                    )
-                # Emit a delivery marker for perfetto parity when scan raises KEYI.
-                try:
-                    self._trace_irq_instant(
-                        "KeyIRQ",
-                        self._irq_source,
-                        {
-                            "pc": self.cpu.regs.get(RegisterName.PC),
-                            "y": self.cpu.regs.get(RegisterName.Y),
-                            "events": len(key_events),
-                            "imr": self.memory.read_byte(
-                                INTERNAL_MEMORY_START + IMEMRegisters.IMR
-                            )
-                            & 0xFF,
-                            "isr": self.memory.read_byte(
-                                INTERNAL_MEMORY_START + IMEMRegisters.ISR
-                            )
-                            & 0xFF,
-                        },
-                    )
-                except Exception:
-                    pass
+            # Debounced events and the ROM-facing FIFO are bookkeeping only.
+            # Real hardware drives KEYI from the selected raw KIL matrix
+            # level, sampled at the scheduling boundary above.
+            self._key_irq_latched = True
+            self._kb_irq_count += len(key_events)
         # Trace scan outcome to perfetto to understand KEYI assertion cadence.
         try:
             pressed = len(getattr(self.keyboard, "_pressed_keys", []))
@@ -4278,16 +4255,12 @@ class PCE500Emulator:
                 pass
         if events:
             self._kb_irq_count += len(events)
-        if self._kb_irq_enabled and (events or fifo_pending):
+        if events or fifo_pending:
             self._key_irq_latched = True
-            self._set_isr_bits(int(ISRFlag.KEYI))
-            self._irq_pending = True
-            if not getattr(self, "_in_interrupt", False):
-                self._irq_source = IRQSource.KEY
             if events:
                 try:
                     self._trace_irq_instant(
-                        "KeyIRQ",
+                        "KeyEvent",
                         self._irq_source,
                         {
                             "pc": self.cpu.regs.get(RegisterName.PC),

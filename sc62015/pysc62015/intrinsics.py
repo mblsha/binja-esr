@@ -76,16 +76,67 @@ def eval_intrinsic_validate_vector_transfer(
             raise RuntimeError("VALIDATE_VECTOR_TRANSFER input produced no value")
         values.append(int(value))
 
-    # Runtime import avoids an instruction-module cycle during decoder setup.
-    from .emulator import validate_vector_transfer
+    # PREFLIGHT_VECTOR_TRANSFER stores the opaque silent proof on the
+    # instruction-local state. The architectural vector load follows the five
+    # frame writes and this intrinsic consumes the proof exactly once.
+    prepared = getattr(state, "_sc62015_llil_vector_transfer", None)
+    if prepared is None:
+        raise RuntimeError(
+            "VALIDATE_VECTOR_TRANSFER requires a prior silent vector preflight"
+        )
+    delattr(state, "_sc62015_llil_vector_transfer")
+    prepared.consume_after_architectural_fetch(
+        memory,
+        values[0],
+        values[1],
+        values[2],
+    )
+    return None, None
 
-    validate_vector_transfer(
+
+def eval_intrinsic_preflight_vector_transfer(
+    llil: MockLLIL,
+    size: Optional[int],
+    regs: RegistersLike,
+    memory: Memory,
+    state: State,
+    get_flag: FlagGetter,
+    set_flag: FlagSetter,
+) -> Tuple[None, Optional[ResultFlags]]:
+    """Silently prove one vector before interrupt-frame mutation."""
+
+    from binja_test_mocks.eval_llil import evaluate_llil
+
+    params = getattr(llil, "params", ())
+    if len(params) != 2:
+        raise RuntimeError(
+            "PREFLIGHT_VECTOR_TRANSFER requires vector address and source PC"
+        )
+    values: list[int] = []
+    for param in params:
+        value, _flags = evaluate_llil(
+            param,
+            regs,
+            memory,
+            state,
+            get_flag=get_flag,
+            set_flag=set_flag,
+        )
+        if value is None:
+            raise RuntimeError("PREFLIGHT_VECTOR_TRANSFER input produced no value")
+        values.append(int(value))
+    if hasattr(state, "_sc62015_llil_vector_transfer"):
+        raise RuntimeError("an SC62015 LLIL vector transfer is already prepared")
+
+    from .emulator import prepare_validated_vector_transfer
+
+    prepared = prepare_validated_vector_transfer(
         memory,
         regs,  # type: ignore[arg-type]
         values[0],
         source_pc=values[1],
-        actual_raw_vector=values[2],
     )
+    setattr(state, "_sc62015_llil_vector_transfer", prepared)
     return None, None
 
 
@@ -318,6 +369,9 @@ def register_sc62015_intrinsics() -> None:
     register_intrinsic("OFF", eval_intrinsic_off)
     register_intrinsic("RESET", eval_intrinsic_reset)
     register_intrinsic("VALIDATE_F", eval_intrinsic_validate_f)
+    register_intrinsic(
+        "PREFLIGHT_VECTOR_TRANSFER", eval_intrinsic_preflight_vector_transfer
+    )
     register_intrinsic(
         "VALIDATE_VECTOR_TRANSFER", eval_intrinsic_validate_vector_transfer
     )
