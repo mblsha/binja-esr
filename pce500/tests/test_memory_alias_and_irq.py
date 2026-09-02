@@ -220,7 +220,7 @@ def test_timer_irq_arms_only_when_imr_allows(backend: str) -> None:
 
 
 def test_timer_advances_while_interrupt_handler_is_active() -> None:
-    """Pin the Python scheduler model; real-device ISR relatch timing is unverified."""
+    """HW-014: timers latch status in a handler without nested delivery."""
     emu = Emulator()
     emu._timer_enabled = True
     emu._timer_mti_period = 2
@@ -235,6 +235,9 @@ def test_timer_advances_while_interrupt_handler_is_active() -> None:
     emu.step()
 
     assert emu.memory.read_byte(isr_addr) & int(ISRFlag.MTI)
+    assert emu.cpu.regs.get(RegisterName.PC) == 1
+    assert emu.cpu.regs.get(RegisterName.S) == 0x0200
+    assert emu._in_interrupt is True
 
 
 @pytest.mark.parametrize("backend", ["python", "llama"])

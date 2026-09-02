@@ -13,6 +13,7 @@
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
+	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -64,9 +65,6 @@
 	const pendingVirtualRelease = new Map<number, number>();
 	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 	const IMEM_BASE = 0x100000;
-	const FIFO_BASE_ADDR = 0x00bfc96;
-	const FIFO_HEAD_ADDR = 0x00bfc9d;
-	const FIFO_TAIL_ADDR = 0x00bfc9e;
 	const debugLog: string[] = [];
 	let physicalKeyboardEnabled = false;
 	let keyboardDebugOpen = false;
@@ -665,9 +663,12 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-			const fifoHead = emulator.read_u8?.(FIFO_HEAD_ADDR) ?? null;
-			const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR) ?? null;
-			const fifo = Array.from({ length: 16 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
+			const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
+			const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
+			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
+				fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoBase + i) ?? 0) : 0,
+			);
 			debugKio = { pc, instr, imr, isr, kol, koh, kil, fifoHead, fifoTail, fifo };
 			debugKioJson = safeJson({
 				...debugKio,
@@ -701,9 +702,12 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0);
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1);
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2);
-			const fifoHead = emulator.read_u8?.(FIFO_HEAD_ADDR);
-			const fifoTail = emulator.read_u8?.(FIFO_TAIL_ADDR);
-			const fifo = Array.from({ length: 8 }, (_, i) => emulator.read_u8?.(FIFO_BASE_ADDR + i) ?? 0);
+			const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoHead = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoHead) : undefined;
+			const fifoTail = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoTail) : undefined;
+			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
+				fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoBase + i) ?? 0) : 0,
+			);
 			console.log(`[pce500] ${tag}`, {
 				pc,
 				instr,

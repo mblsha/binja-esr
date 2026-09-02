@@ -180,6 +180,7 @@ class _ValidatedVectorTransfer:
     """Private, one-shot proof binding a vector fetch to one memory mapping."""
 
     __slots__ = (
+        "_architectural_fetch_validated",
         "_memory",
         "_provenance",
         "_source_pc",
@@ -197,7 +198,10 @@ class _ValidatedVectorTransfer:
         target: int,
         provenance: tuple[int, int],
         scope: str = "instruction",
+        *,
+        architectural_fetch_validated: bool = True,
     ) -> None:
+        self._architectural_fetch_validated = architectural_fetch_validated
         self._memory = memory
         self._provenance = provenance
         self._vector_address = int(vector_address)
@@ -239,11 +243,55 @@ class _ValidatedVectorTransfer:
         if self._used:
             raise RuntimeError("prepared SC62015 vector transfer was already consumed")
         self._used = True
+        if not self._architectural_fetch_validated:
+            raise RuntimeError(
+                "prepared SC62015 vector transfer still requires its "
+                "architectural fetch"
+            )
         matches = self._binding_matches(memory, vector_address, source_pc)
         if not matches:
             raise RuntimeError(
                 "prepared SC62015 vector transfer does not match the current "
                 "instruction or memory mapping"
+            )
+        return self._target
+
+    def consume_after_architectural_fetch(
+        self,
+        memory: Memory,
+        vector_address: int,
+        source_pc: int,
+        actual_raw_vector: int,
+    ) -> int:
+        """Consume a silent proof after the post-frame architectural read."""
+
+        if self._used:
+            raise RuntimeError("prepared SC62015 vector transfer was already consumed")
+        self._used = True
+        if self._architectural_fetch_validated:
+            raise RuntimeError(
+                "prepared SC62015 vector transfer already includes an "
+                "architectural fetch"
+            )
+        if not self._binding_matches(memory, vector_address, source_pc):
+            raise RuntimeError(
+                "prepared SC62015 vector transfer does not match the current "
+                "instruction or memory mapping"
+            )
+        if not 0 <= int(actual_raw_vector) <= 0xFFFFFF:
+            raise RuntimeError("architectural SC62015 vector is not a 24-bit value")
+        actual_raw_vector = int(actual_raw_vector)
+        if actual_raw_vector & 0xF00000:
+            raise NotImplementedError(
+                "SC62015 vector upper-nibble behavior is unverified; refusing "
+                f"noncanonical architectural vector 0x{actual_raw_vector:06X}"
+            )
+        if actual_raw_vector != self._target:
+            raise RuntimeError(
+                "SC62015 architectural vector fetch disagrees with safe "
+                f"preflight at 0x{int(vector_address) & PC_MASK:05X}: "
+                f"fetched 0x{actual_raw_vector:06X}, "
+                f"preflight 0x{self._target:06X}"
             )
         return self._target
 
@@ -355,6 +403,56 @@ def fetch_validated_vector_transfer(
         target,
         provenance,
         scope,
+    )
+
+
+def prepare_validated_vector_transfer(
+    memory: Memory,
+    regs: "Registers",
+    vector_address: int,
+    *,
+    source_pc: int | None = None,
+    require_immutable: bool = False,
+    scope: str = "instruction",
+    require_stability_metadata: bool = False,
+) -> _ValidatedVectorTransfer:
+    """Create a silent proof without performing the architectural read.
+
+    Interrupt entry uses this proof before constructing its frame, then
+    performs and validates the three observable vector reads after all five
+    stack writes, matching the PC-E500 HW-014 capture.
+    """
+
+    if isinstance(vector_address, bool) or not 0 <= int(vector_address) <= PC_MASK:
+        raise ValueError("SC62015 vector address must be canonical 20-bit")
+    vector_address = int(vector_address)
+    vector_pc = (
+        regs.get(RegisterName.PC) if source_pc is None else int(source_pc)
+    ) & PC_MASK
+    provenance = _vector_transfer_provenance(memory)
+    target = validate_vector_transfer(
+        memory,
+        regs,
+        vector_address,
+        source_pc=vector_pc,
+    )
+    validate_vector_transfer_stability(
+        memory,
+        vector_address,
+        target,
+        require_immutable=require_immutable,
+        require_metadata=require_stability_metadata,
+    )
+    if _vector_transfer_provenance(memory) != provenance:
+        raise RuntimeError("SC62015 vector mapping changed during silent preflight")
+    return _ValidatedVectorTransfer(
+        memory,
+        vector_address,
+        vector_pc,
+        target,
+        provenance,
+        scope,
+        architectural_fetch_validated=False,
     )
 
 
@@ -854,11 +952,21 @@ class Emulator:
         require_immutable: bool = False,
         scope: str = "instruction",
     ) -> int:
-        """Architecturally fetch one vector for the next matching operation."""
+        """Retain one vector proof for the next matching operation.
+
+        Software/hardware interrupt entry retains only a silent proof because
+        HW-014 places its architectural vector reads after the frame. RESET
+        retains its already-fetched proof because it has no interrupt frame.
+        """
 
         if self._pending_vector_transfer is not None:
             raise RuntimeError("an SC62015 vector transfer is already prepared")
-        transfer = fetch_validated_vector_transfer(
+        prepare = (
+            prepare_validated_vector_transfer
+            if vector_address == INTERRUPT_VECTOR_ADDR and scope == "instruction"
+            else fetch_validated_vector_transfer
+        )
+        transfer = prepare(
             self.memory,
             self.regs,
             vector_address,
@@ -1061,30 +1169,24 @@ class Emulator:
                 source_pc=address,
             )
 
-        # A prepared software IR must not execute the lifted architectural
-        # vector load after the wrapper's timer tick.  Consume the exact
-        # pre-tick fetch and perform the documented frame writes directly.
+        # A prepared software IR carries only its silent destination proof.
+        # Perform the documented frame writes first, then the one low-to-high
+        # architectural vector fetch measured by HW-014.
         if isinstance(instr, IR) and prepared_transfer is not None:
-            target = prepared_transfer.consume(
-                self.memory, INTERRUPT_VECTOR_ADDR, address
-            )
             info = InstructionInfo()
             instr.analyze(info, address)
             self._execution_may_have_side_effects = True
             saved_pc = address & PC_MASK
-            # Hardware pre-decrements S for every byte and writes the saved PC
-            # high-to-low.  Keep that observable bus order here; subtracting
-            # the full width first and filling the final little-endian image
-            # produces the same bytes but reverses callback/peripheral writes.
+            s = self.regs.get(RegisterName.S) & PC_MASK
             for byte_index in reversed(range(3)):
-                s = (self.regs.get(RegisterName.S) - 1) & PC_MASK
-                self.regs.set(RegisterName.S, s)
+                s = (s - 1) & PC_MASK
                 _write_byte_with_pc(
                     self.memory,
                     s,
                     (saved_pc >> (8 * byte_index)) & 0xFF,
                     saved_pc,
                 )
+            self.regs.set(RegisterName.S, s)
             s = (self.regs.get(RegisterName.S) - 1) & PC_MASK
             self.regs.set(RegisterName.S, s)
             _write_byte_with_pc(
@@ -1099,6 +1201,19 @@ class Emulator:
             self.regs.set(RegisterName.S, s)
             _write_byte_with_pc(self.memory, s, imr, saved_pc)
             _write_byte_with_pc(self.memory, imr_address, imr & 0x7F, saved_pc)
+            raw_vector = 0
+            for byte_index in range(3):
+                raw_vector |= _read_byte_with_pc(
+                    self.memory,
+                    (INTERRUPT_VECTOR_ADDR + byte_index) & PC_MASK,
+                    saved_pc,
+                ) << (byte_index * 8)
+            target = prepared_transfer.consume_after_architectural_fetch(
+                self.memory,
+                INTERRUPT_VECTOR_ADDR,
+                address,
+                raw_vector,
+            )
             self.regs.set(RegisterName.PC, target)
             self.regs.call_sub_level += 1
             return InstructionEvalInfo(instruction_info=info, instruction=instr)

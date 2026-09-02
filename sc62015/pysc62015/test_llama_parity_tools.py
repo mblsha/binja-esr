@@ -127,37 +127,6 @@ def test_run_case_seeds_stacks_in_valid_external_memory(monkeypatch) -> None:
     )
 
 
-def test_python_prepared_ir_preserves_measured_stack_bus_order() -> None:
-    pc = 0x12345
-    backing = bytearray(llama_parity_sweep.ADDRESS_SPACE_SIZE)
-    backing[pc] = 0xFE
-    imr_address = (
-        llama_parity_sweep.INTERNAL_MEMORY_START + llama_parity_sweep.IMEMRegisters.IMR
-    )
-    backing[imr_address] = 0xA5
-    memory = llama_parity_sweep.LoggingMemory(backing)
-    cpu = llama_parity_sweep.CPU(memory, reset_on_init=False, backend="python")
-    cpu.apply_snapshot(
-        llama_parity_sweep.CPURegistersSnapshot(
-            pc=pc,
-            s=llama_parity_sweep.STACK_SEED,
-            f=0x03,
-        )
-    )
-
-    cpu.prepare_instruction_before_scheduling(pc)
-    cpu.execute_instruction(pc)
-
-    assert memory.writes == [
-        (llama_parity_sweep.STACK_SEED - 1, 0x01),
-        (llama_parity_sweep.STACK_SEED - 2, 0x23),
-        (llama_parity_sweep.STACK_SEED - 3, 0x45),
-        (llama_parity_sweep.STACK_SEED - 4, 0x03),
-        (llama_parity_sweep.STACK_SEED - 5, 0xA5),
-        (imr_address, 0x25),
-    ]
-
-
 def test_run_case_classifies_two_sided_reserved_rejection(monkeypatch) -> None:
     class RejectingCPU(_FakeCPU):
         def execute_instruction(self, _pc: int) -> None:

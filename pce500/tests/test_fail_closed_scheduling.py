@@ -781,7 +781,7 @@ def test_hardware_irq_callback_vector_rejects_before_mutation(
 
 
 @pytest.mark.parametrize("failure_mode", ("read_error", "mismatch"))
-def test_hardware_irq_architectural_vector_failure_is_atomic_and_poisoning(
+def test_hardware_irq_vector_failure_occurs_after_frame_and_poisons(
     failure_mode: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -818,29 +818,8 @@ def test_hardware_irq_architectural_vector_failure_is_atomic_and_poisoning(
         )
         emu._timer_enabled = False
         emu._irq_pending = True
-        # Deliberately differ from the pending ISR source so the assertion
-        # proves failed vector delivery does not relabel wrapper metadata.
         emu._irq_source = IRQSource.MTI
         emu._in_interrupt = False
-        before = (
-            emu.cpu.regs.get(RegisterName.PC),
-            emu.cpu.regs.get(RegisterName.S),
-            emu.cpu.regs.get(RegisterName.F),
-            emu.memory.peek_byte_for_preflight(
-                INTERNAL_MEMORY_START + IMEMRegisters.IMR
-            ),
-            bytes(
-                emu.memory.peek_byte_for_preflight(stack - offset)
-                for offset in range(1, 6)
-            ),
-            emu._irq_pending,
-            emu._in_interrupt,
-            emu._irq_source,
-            emu.cycle_count,
-            emu.instruction_count,
-            dict(emu.irq_counts),
-            dict(emu.last_irq),
-        )
         error = (
             "architectural IRQ-vector read failed"
             if failure_mode == "read_error"
@@ -850,26 +829,28 @@ def test_hardware_irq_architectural_vector_failure_is_atomic_and_poisoning(
         with pytest.raises(RuntimeError, match=error):
             emu.step()
 
-        assert (
-            emu.cpu.regs.get(RegisterName.PC),
-            emu.cpu.regs.get(RegisterName.S),
-            emu.cpu.regs.get(RegisterName.F),
-            emu.memory.peek_byte_for_preflight(
-                INTERNAL_MEMORY_START + IMEMRegisters.IMR
-            ),
-            bytes(
-                emu.memory.peek_byte_for_preflight(stack - offset)
-                for offset in range(1, 6)
-            ),
-            emu._irq_pending,
-            emu._in_interrupt,
-            emu._irq_source,
-            emu.cycle_count,
-            emu.instruction_count,
-            dict(emu.irq_counts),
-            dict(emu.last_irq),
-        ) == before
-        assert architectural_vector_reads
+        # HW-014 places the architectural vector read after all five frame
+        # writes. A failure there is therefore deliberately non-atomic and
+        # must poison the machine rather than roll the frame back.
+        assert emu.cpu.regs.get(RegisterName.PC) == 0x1000
+        assert emu.cpu.regs.get(RegisterName.S) == stack - 5
+        assert emu.cpu.regs.get(RegisterName.F) == 0x03
+        assert bytes(
+            emu.memory.peek_byte_for_preflight(stack - offset) for offset in range(1, 6)
+        ) == bytes((0x00, 0x10, 0x00, 0x03, int(IMRFlag.IRM | IMRFlag.KEYM)))
+        assert emu.memory.peek_byte_for_preflight(
+            INTERNAL_MEMORY_START + IMEMRegisters.IMR
+        ) == int(IMRFlag.KEYM)
+        assert emu._irq_pending is True
+        assert emu._in_interrupt is False
+        assert emu._irq_source is IRQSource.KEY
+        assert emu.cycle_count == 0
+        assert emu.instruction_count == 0
+        assert architectural_vector_reads == (
+            [0xFFFFA, 0xFFFFB]
+            if failure_mode == "read_error"
+            else [0xFFFFA, 0xFFFFB, 0xFFFFC]
+        )
         assert emu._poisoned is not None
     finally:
         emu.close()

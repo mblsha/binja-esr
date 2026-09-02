@@ -327,6 +327,21 @@ class KeyboardMatrix:
         self.trace_kio("peek_kil", pc=pc)
         return val
 
+    def peek_physical_kil(self) -> int:
+        """Return the undebounced electrical matrix level.
+
+        SC62015 `KIL` and the raw KEYI source are driven by the selected
+        column/pressed-row level. Debounce and repeat belong to firmware/event
+        handling and must not suppress this physical source.
+        """
+
+        value = 0
+        active_cols = set(self._active_columns())
+        for state in self._key_states.values():
+            if state.pressed and state.location.column in active_cols:
+                value |= 1 << state.location.row
+        return value & 0xFF
+
     def get_active_columns(self) -> List[int]:
         return list(self._active_columns())
 
@@ -394,7 +409,7 @@ class KeyboardMatrix:
         if base == 0:
             return 0
 
-        buffer_offset = self._memory.read_byte(base + PCE500_KEY_FIFO_BASE_OFFSET)
+        buffer_offset = self._memory.read_word(base + PCE500_KEY_FIFO_BASE_OFFSET)
         tail = self._memory.read_byte(base + PCE500_KEY_FIFO_TAIL_OFFSET)
         head = self._memory.read_byte(base + PCE500_KEY_FIFO_HEAD_OFFSET)
         written = 0

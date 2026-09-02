@@ -47,7 +47,13 @@ address matrix,
 D0-D3/D8-DB transfer matrix,
 and `sc62015_hardware_wait_flags_2026-08-30.md` the HW-003 C/Z matrix. The later
 `sc62015_hardware_zero_wait_2026-08-30.md` records the HW-002 zero-count WAIT
-result. The private `sc62015_hardware_instruction_closure_2026-09-01.md`
+result. The 2026-09-02 follow-up records low-S frame wrapping and
+frame-before-vector order in `sc62015_hardware_interrupt_frame_wrap_2026-09-02.md`,
+raw matrix KEYI level/latch behavior in `sc62015_hardware_key_irq_2026-09-02.md`,
+and continued MTI/STI latching during interrupt service in
+`sc62015_hardware_mti_during_interrupt_2026-09-02.md` and
+`sc62015_hardware_sti_during_interrupt_2026-09-02.md`. The private
+`sc62015_hardware_instruction_closure_2026-09-01.md`
 reconciles the later TCL, zero-count block, far-control, PRE, RETI, IR,
 WAIT/IRQ, HALT/OFF, and software RESET captures and separates valid-instruction
 closure from residual peripheral or malformed-encoding work. The connected
@@ -160,7 +166,9 @@ is promoted to an ISA fact.
 | LLIL operand widths and masks | The mock evaluator accepted mixed-width near jumps, returns, dynamic IMEM addresses, `MV IL`, ROM-valid `FD 24`/`FD 42`, and `ED` exchanges that real Binary Ninja rejects; some control/address consumers retained unmodeled high bits | Emit explicit unsigned `ZERO_EXT`/`LOW_PART` conversions, snapshot both exchange directions, and apply the 8-bit IMEM or 20-bit external/control mask at every consumer; verify through a width-strict LLIL facade |
 | Control/address immediate high byte | Text assembly could turn an out-of-range literal into a self-fulfilling raw alias; table bytes at PC-E500 `F003A` were incorrectly treated as executed `CALLF` evidence | Raw JPF/CALLF probes for every upper nibble `1..F` transfer to the same low-20-bit target as canonical form. Raw 62/66/6A/72/7A, 88-8F, A8-AF, D0-D3, and D8-DB forms with tested upper nibble `8` are likewise device-verified low-20-bit data-address aliases. Fresh text assembly remains canonical; untested absolute-memory families and synthetic vectors remain fail-closed rather than promoted by analogy. Register-immediate `MV X/Y/U/S,lmn` separately discards bits 23-20 |
 | Reset-vector selection | Python read the interrupt vector at `FFFFA` | Read the distinct reset-vector slot at `FFFFD`. Software-RESET capture verifies low-first reads through `FFFFF`, no system-stack frame, and the first target fetch. Detailed SFR/general-register retention remains manual-derived because reset ROM initialization starts immediately |
-| Vector-transfer failure ordering | Software `IR`, RESET, and synthetic IRQ paths could push a frame, clear `IMR.IRM`, reset SFRs, or clear wrapper state before discovering a noncanonical vector, rejected destination, failed bus read, volatile mismatch, or late observer failure | For software `IR`, RESET, and Python/PCE synthetic delivery, require explicit callback-free metadata for each selected transfer, bind the one matching architectural vector fetch plus target length and memory provenance into a non-forgeable, one-shot prepared operation, and consume it before transfer mutation. The Python/PCE wrapper does not inspect the IRQ vector on the HALT/OFF wake step, for masked status, with an active handler, or on a timer-only pass. On a following deliverable pass, both runtime paths preserve the measured opcode fetch at the saved/fall-through PC before frame writes and vector fetch; that discarded opcode is neither decoded nor executed. Generic Rust `CoreRuntime` additionally defers a source first armed after its no-speculative-vector gate. Machine reset is stricter: the reset-vector and decoded target bytes must be declared immutable before RAM/LCD reset can begin. Destination `I`, stack, and other data-dependent checks remain the destination instruction's job, and vector targets that are themselves `IR`/RESET do not recurse during preflight |
+| Vector-transfer and frame ordering | IR/IRQ paths fetched the interrupt vector before constructing the frame, while some runtimes decoded a discarded fall-through instruction or omitted its fetch | For software `IR` and asynchronous IRQ delivery, silently validate the vector/destination first, then perform the measured bus sequence: one opcode-byte fetch for asynchronous delivery without operand decode, five independently wrapped frame writes (PC high/middle/low, F, IMR), and exactly one low-to-high `FFFFA..FFFFC` architectural vector fetch. A failed or changed post-frame vector poisons the machine because the hardware-visible frame is already committed. RESET remains distinct and fetches/validates `FFFFD..FFFFF` before reset mutation. The HALT/OFF wake step, masked status, active-handler nested check, and timer-only pass do not speculatively read the IRQ vector |
+| Raw matrix KEYI | Python and Rust tied KEYI assertion/reassertion to debounced events, FIFO contents, host enable policy, and sometimes `in_interrupt` | Sample selected physical KIL independently of debounce/repeat/FIFO bookkeeping. `KIL != 0` asserts or reasserts `ISR.KEYI` regardless of `IMR`, host event generation, or handler-in-service state; release lowers KIL without acknowledging an existing status bit, and a firmware clear remains clear after release. FIFO-only/input-event injection cannot manufacture raw KEYI. Nested delivery remains deferred |
+| Timers during interrupt service | Generic Rust and several Python timing paths froze MTI/STI phase while `in_interrupt` | Continue MTI/STI phase advancement and status latching while a handler is active. Preserve pending status but defer nested delivery until service returns and the normal mask checks select it |
 | Software interrupt `IR` | The saved PC pointed after the opcode | Save the `IR` opcode address; the ROM dispatcher tests `FE` there and advances the saved frame |
 | Stacked `F` byte | Rust preserved six opaque upper bits while Python modeled only carry/zero; `POPS F` advanced `S` before its lazy validation node; an initial quarantine also rejected arbitrary `POPU F`/`RETI` input | PC-E500 matrices establish `POPU F`, `POPS F`, and `RETI` as `F = raw & 03`, followed by their normal pointer/frame advance. Pushes and interrupt entry can therefore emit only the normalized architectural C/Z byte. Keep the one-byte frame field and snapshot each input once |
 | `TEST` | Some LLIL paths used a 24-bit operation for a byte instruction | Use byte-width logic |
@@ -170,7 +178,7 @@ is promoted to an ISA fact.
 | Decimal shifts | Direction, pointer walk, and carried nibble disagreed | `DSLL` starts at the LSB and decrements; `DSRL` starts at the MSB and increments |
 | Wide memory access | A word/pointer could spill outside 8-bit IMEM or 20-bit external memory, an overlapping store could mutate the register used to calculate later destination bytes, and bridge buses could collapse a wide access into one callback | Fix effective bases before writes; fixed-width moves also fix their source values, while `EXP` applies its separately documented ordered byte-exchange semantics. Expand every wide load/store into ordered wrapped byte operations so hardware/host hooks run once per byte. Device captures verify wrapped IMEM byte mapping and external read bus order for the tested `MVW`/`MVP` and `[X++]` forms. Read-only CE1 overlap traces further verify that direct and both displaced `F1`/`F2`/`F3` modes fix their initial effective source and read two/three ordered external bytes from it before overlapping writes. An address-only write trace verifies all direct and displaced `F8`/`F9`/`FA`/`FB` modes select the expected effective destination and emit exactly one/two/three/I low-to-high write phases. These traces exposed and now prevent Rust's former non-boundary wide-callback collapse. The loaded gateware sampled and read every write as zero, so exact write data, partial visibility, boundary order, and invisible IMEM temporal order remain model contracts |
 | `CALL`/`CALLF` LLIL | The lifter performed the explicit wrapped stack-frame writes but represented the control-flow edge as a jump | Keep the explicit architectural frame writes and emit a Binary Ninja call edge; the mock evaluator treats that call node as control flow only so it cannot add a second synthetic frame |
-| Interrupt-frame boundary access | Synthetic delivery paths could read or write a five-byte system frame past the 20-bit external bus when `S < 5` | Snapshot the frame inputs and wrap every byte at `FFFFF -> 00000`; exact silicon bus order at that boundary remains hardware-trace work |
+| Interrupt-frame boundary access | Synthetic delivery paths could read or write a five-byte system frame past the 20-bit external bus when `S < 5` | Snapshot the frame inputs and decrement/wrap each byte independently on the 20-bit bus. A real S=5..0 matrix verifies PC-high/middle/low, F, IMR time order, modulo-20-bit addresses, and completion of all five writes before the vector read |
 | External pointers and control flow | Some paths advanced in a 24-bit space, while LLIL register consumers could retain a high nibble that the runtime facade masks | Mask effective addresses, pointer updates, register jumps, and far-return targets to 20 bits; near control flow explicitly widens its 16-bit component before page composition |
 | `PMDF` | Implemented as packed BCD | Use 8-bit wrapping binary pointer addition and preserve incoming `C`/`Z`; both immediate and A-source forms, wrap/zero cases, and deliberately contradictory incoming flags are verified on a PC-E500 |
 | `TCL` | Could execute as a silent no-op | Device traces establish independent main/sub divider-phase restart selected by `LCC.MTCL`/`LCC.STCL`, without clearing LCC or already-latched ISR; require the timer-phase-clear hook and fail closed if a host cannot implement it |
@@ -273,13 +281,13 @@ missing events are errors.  These guarantees make failures visible, but a
 matching trace still establishes only cross-implementation agreement.
 
 IRQ-boundary parity remains an emulator-integrity follow-up for source-specific
-peripheral edges. Hardware now establishes HALT/OFF fall-through resume and
-interrupt-atomic WAIT with delivery after the fall-through fetch. The narrowed
-generic Rust `CoreRuntime` gate additionally prevents speculative vector reads
-and leaves a source first armed after that gate for a later step. Key, ON-key,
-external, SIO, and timer re-latching still need small cross-runtime traces and,
-where electrical timing matters, source-specific device evidence; those are
-peripheral-scheduler questions rather than unresolved instruction semantics.
+peripheral edges. Hardware establishes HALT/OFF fall-through resume,
+interrupt-atomic WAIT, the asynchronous discarded-opcode fetch, complete
+frame-before-vector order with 20-bit stack wrapping, raw selected-KIL KEYI
+re-latching (including in-service), and continued MTI/STI latching in a
+handler. ON-key, external, and SIO edge latency still benefit from small
+cross-runtime traces; those are peripheral-scheduler questions rather than
+unresolved instruction semantics.
 
 ## Explicit model contracts
 
@@ -355,17 +363,15 @@ outside that closure:
    gateware establishes write addresses/count/order but not trustworthy write
    data. Architectural values and effective-base rules are already covered by
    device round trips and the documented instruction contract.
-4. A real interrupt-frame write with `S < 5`. Such a probe can corrupt low live
-   memory, so the cores use byte-wise 20-bit wrapping established independently
-   rather than claiming direct boundary-trace evidence.
-5. Detailed software/external/power-on RESET SFR retention. Software FF's
+4. Detailed software/external/power-on RESET SFR retention. Software FF's
    vector order, no-frame transfer, and target fetch are device-verified; reset
    ROM code immediately overwrites SFRs, so remaining retention stays labeled
    manual-derived.
-6. ON-key, general-key, timer-re-latch, peripheral-ready, debounce/repeat, and
-   asynchronous latency questions. These belong to device scheduling and
+5. ON-key, external/SIO peripheral-ready, debounce/repeat, and exact
+   asynchronous latency questions. Raw matrix KEYI and MTI/STI-in-handler
+   latching are resolved; the remaining items belong to device scheduling and
    peripherals, not alternate meanings of HALT/OFF/WAIT/RETI.
-7. Preserve equivalent raw artifacts for any older cited report that still has
+6. Preserve equivalent raw artifacts for any older cited report that still has
    only a decoded event table. This is evidence reproducibility, not a silicon
    semantic question.
 

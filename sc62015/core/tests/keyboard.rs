@@ -4,7 +4,7 @@ use sc62015_core::keyboard::KeyboardMatrix;
 use sc62015_core::memory::MemoryImage;
 
 #[test]
-fn scan_tick_populates_fifo_and_sets_keyi() {
+fn scan_tick_populates_fifo_without_manufacturing_keyi() {
     let mut mem = MemoryImage::new();
     let mut kb = KeyboardMatrix::new();
 
@@ -12,7 +12,7 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
     kb.press_matrix_code(0x10, &mut mem);
     assert_eq!(kb.fifo_len(), 0);
 
-    // Strobe columns, then run a scan tick and assert KEYI.
+    // Strobe columns, then run a scan tick to populate host bookkeeping.
     kb.handle_write(0xF0, 0xFF, &mut mem);
     kb.handle_write(0xF1, 0x07, &mut mem);
     let mut events = 0;
@@ -28,7 +28,7 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
     );
     assert!(
         kb.fifo_len() > 0,
-        "FIFO should hold the event before KEYI assert"
+        "FIFO should hold the debounced host event"
     );
     kb.write_fifo_to_memory(&mut mem, true);
     assert!(
@@ -36,17 +36,21 @@ fn scan_tick_populates_fifo_and_sets_keyi() {
         "FIFO should remain pending until the ROM consumes it"
     );
     let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
-    assert_ne!(isr & 0x04, 0, "KEYI should be set after scan");
+    assert_eq!(
+        isr & 0x04,
+        0,
+        "debounce/FIFO bookkeeping must not manufacture raw KEYI"
+    );
     let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
     assert_eq!(kb.fifo_len(), 0, "FIFO should drain after KIL read");
 }
 
 #[test]
-fn keyi_is_not_reasserted_by_kil_read_without_host() {
+fn kil_read_does_not_reassert_keyi_from_host_fifo() {
     let mut mem = MemoryImage::new();
     let mut kb = KeyboardMatrix::new();
 
-    // Seed a press and force a scan via KOL to populate FIFO and set KEYI.
+    // Seed a press and force a scan via KOL to populate the host FIFO.
     kb.press_matrix_code(0x10, &mut mem);
     kb.handle_write(0xF0, 0xFF, &mut mem);
     kb.handle_write(0xF1, 0x07, &mut mem);
@@ -61,19 +65,25 @@ fn keyi_is_not_reasserted_by_kil_read_without_host() {
         "FIFO should remain queued until KIL read"
     );
     let isr_after_scan = mem.read_internal_byte(0xFC).unwrap_or(0);
-    assert_ne!(isr_after_scan & 0x04, 0, "KEYI should be set after scan");
+    assert_eq!(
+        isr_after_scan & 0x04,
+        0,
+        "host FIFO state is not a raw KEYI source"
+    );
 
-    // Clear ISR (e.g., by firmware) after the KEYI latch was asserted.
+    // Model firmware acknowledgement after a CPU boundary latched KEYI.
+    mem.write_internal_byte(0xFC, 0x04);
     mem.write_internal_byte(0xFC, 0x00);
     assert_eq!(mem.read_internal_byte(0xFC).unwrap_or(0) & 0x04, 0);
 
-    // A subsequent KIL read alone should not reassert KEYI; bus/host logic handles that.
+    // A subsequent KIL read/FIFO drain alone does not reassert KEYI. CPU
+    // boundary sampling of selected physical KIL is the separate source.
     let _kil = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
     let isr_reassert = mem.read_internal_byte(0xFC).unwrap_or(0);
     assert_eq!(
         isr_reassert & 0x04,
         0,
-        "Keyboard read should not reassert KEYI without host involvement"
+        "KIL read must not synthesize KEYI from the host FIFO"
     );
 }
 
@@ -98,7 +108,7 @@ fn write_fifo_to_memory_keeps_events_when_irq_masked() {
     let mut mem = MemoryImage::new();
     let mut kb = KeyboardMatrix::new();
 
-    // Populate one event into the FIFO and assert KEYI.
+    // Populate one event into the host FIFO.
     kb.press_matrix_code(0x10, &mut mem);
     kb.handle_write(0xF0, 0xFF, &mut mem);
     kb.handle_write(0xF1, 0x07, &mut mem);
@@ -114,7 +124,7 @@ fn write_fifo_to_memory_keeps_events_when_irq_masked() {
         "FIFO should remain queued while IRQs are masked"
     );
     let isr = mem.read_internal_byte(0xFC).unwrap_or(0);
-    assert_eq!(isr & 0x04, 0, "KEYI should not assert when masked");
+    assert_eq!(isr & 0x04, 0, "host FIFO should not assert raw KEYI");
     let _ = kb.handle_read(0xF2, &mut mem).unwrap_or(0);
     assert_eq!(kb.fifo_len(), 0, "KIL read should consume pending events");
 }

@@ -248,13 +248,8 @@ class PythonContractBackend:
         if not matrix.inject_event(key_code, release=release):  # type: ignore[attr-defined]
             return False
 
-        # Mirror scheduler effects: assert KEYI and mark pending.
-        isr_addr = INTERNAL_MEMORY_START + IMEM_ISR_OFFSET
-        isr = self.read(isr_addr)
-        if matrix.scan_enabled:  # type: ignore[attr-defined]
-            self.write(isr_addr, isr | 0x04)
-            self._irq_pending = True
-            self._irq_source = "KEY"
+        # Host injection only updates physical/event state. The scheduler
+        # samples selected KIL and asserts raw KEYI at a CPU boundary.
         return True
 
     def snapshot(self) -> ContractSnapshot:

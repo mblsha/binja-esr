@@ -127,7 +127,8 @@ use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::{mask_for, CallMetricsSnapshot};
 use crate::memory::{
     IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
-    IMEM_RXD_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET, IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
+    IMEM_LCC_OFFSET, IMEM_RXD_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET, IMEM_UCR_OFFSET,
+    IMEM_USR_OFFSET,
 };
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -1020,18 +1021,25 @@ impl CoreRuntime {
         self.memory.write_internal_byte(0xF6, high);
     }
 
-    fn refresh_key_irq_latch(&mut self) {
-        if self.timer.in_interrupt {
-            // Parity: do not reassert KEYI while already in an interrupt handler.
-            return;
+    fn raw_selected_kil(&self) -> u8 {
+        // LCC.KSD disconnects keyboard scanning. Otherwise the physical level
+        // is independent of debounce/FIFO policy and IMR.
+        if self
+            .memory
+            .read_internal_byte_silent(IMEM_LCC_OFFSET)
+            .unwrap_or(0)
+            & 0x04
+            != 0
+        {
+            return 0;
         }
-        if self.keyboard.is_some() {
-            // Only reassert when a latch is already active; do not recreate one purely from FIFO
-            // contents. New latches are set at event time by the timer/keyboard path.
-            if !self.timer.key_irq_latched {
-                return;
-            }
-            self.timer.key_irq_latched = true;
+        self.keyboard
+            .as_ref()
+            .map_or(0, KeyboardMatrix::compute_physical_kil)
+    }
+
+    fn refresh_raw_key_irq_level(&mut self) {
+        if self.raw_selected_kil() != 0 {
             let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
             if (isr & ISR_KEYI) == 0 {
                 let new_isr = isr | ISR_KEYI;
@@ -1043,7 +1051,7 @@ impl CoreRuntime {
                 self.timer.irq_isr = isr;
             }
             self.timer.irq_pending = true;
-            if self.timer.irq_source.is_none() {
+            if !self.timer.in_interrupt && self.timer.irq_source.is_none() {
                 self.timer.irq_source = Some("KEY".to_string());
             }
             self.timer.last_fired = self.timer.irq_source.clone();
@@ -1055,9 +1063,6 @@ impl CoreRuntime {
     }
 
     pub(crate) fn tick_timers_and_keyboard(&mut self, cycle: u64) {
-        if self.timer.in_interrupt {
-            return;
-        }
         let kb_irq_enabled = self.timer.kb_irq_enabled;
         let mirror_pce500_fifo = matches!(
             self.device_model(),
@@ -1099,9 +1104,6 @@ impl CoreRuntime {
     }
 
     fn arm_pending_irq_from_isr(&mut self) {
-        if self.timer.in_interrupt {
-            return;
-        }
         if self.timer.irq_pending {
             return;
         }
@@ -1109,10 +1111,7 @@ impl CoreRuntime {
         if isr == 0 {
             return;
         }
-        let mut isr_effective = isr;
-        if !self.timer.kb_irq_enabled {
-            isr_effective &= !ISR_KEYI;
-        }
+        let isr_effective = isr;
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         // Parity: Python marks irq_pending as soon as ISR bits are asserted, even if IMR master is 0
         // or the source mask is currently disabled. Delivery is still gated later.
@@ -1140,12 +1139,14 @@ impl CoreRuntime {
         self.timer.irq_isr = isr_effective;
         self.timer.irq_imr = imr;
         // Allow a newly latched KEY/ONK to override earlier timer sources to match Python priority.
-        match self.timer.irq_source.as_deref() {
-            None => self.timer.irq_source = src.map(str::to_string),
-            Some(cur) => {
-                if let Some(src_name) = src {
-                    if irq_source_priority(src_name) < irq_source_priority(cur) {
-                        self.timer.irq_source = Some(src_name.to_string());
+        if !self.timer.in_interrupt {
+            match self.timer.irq_source.as_deref() {
+                None => self.timer.irq_source = src.map(str::to_string),
+                Some(cur) => {
+                    if let Some(src_name) = src {
+                        if irq_source_priority(src_name) < irq_source_priority(cur) {
+                            self.timer.irq_source = Some(src_name.to_string());
+                        }
                     }
                 }
             }
@@ -1192,7 +1193,7 @@ impl CoreRuntime {
             .memory
             .read_internal_byte_silent(IMEM_ISR_OFFSET)
             .unwrap_or(0);
-        let key_will_reassert = self.keyboard.is_some() && self.timer.key_irq_latched;
+        let key_will_reassert = self.raw_selected_kil() != 0;
         let sio_rx_will_assert = self.sio.is_some()
             && (imr & IMR_RX) != 0
             && (self
@@ -1216,19 +1217,12 @@ impl CoreRuntime {
             predicted_isr |= ISR_RXI;
         }
 
-        // A bare KEYI only arms the host keyboard source when generation is
-        // enabled. An existing pending source or synchronous re-latch still
-        // makes the complete ISR image eligible for the delivery selector.
-        let mut armable_isr = asserted_isr;
-        if !self.timer.kb_irq_enabled {
-            armable_isr &= !ISR_KEYI;
-        }
         let pending_or_will_reassert = self.timer.irq_pending
             || key_will_reassert
             || self.onk_level
             || self.external_interrupt_level
             || sio_rx_will_assert
-            || (armable_isr & ISR_KNOWN_MASK) != 0;
+            || (asserted_isr & ISR_KNOWN_MASK) != 0;
 
         pending_or_will_reassert && (predicted_isr & imr & ISR_KNOWN_MASK) != 0
     }
@@ -1600,6 +1594,7 @@ impl CoreRuntime {
         }
 
         for _ in 0..instructions {
+            let halted_at_step_entry = self.state.is_halted();
             let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
             // Reject quarantined/invalid encodings before level re-latching,
             // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
@@ -1671,9 +1666,9 @@ impl CoreRuntime {
                     state_ptr: &self.state as *const LlamaState,
                 };
                 // Fully validate the current instruction through the silent
-                // bus only when it can execute on this slot. An IRQ selected
-                // at entry replaces that PC after one discarded architectural
-                // opcode fetch, so its operands and encoding are irrelevant.
+                // bus first. A malformed current encoding takes precedence
+                // even when the IRQ destination aliases it, and must consume
+                // zero architectural reads.
                 let silent_prepared_opcode = if should_preflight && !irq_transfer_selected {
                     let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
                         CoreError::Other(format!(
@@ -1756,18 +1751,13 @@ impl CoreRuntime {
                             "IRQ vector preflight: callback-backed vector/target".to_string(),
                         ));
                     }
+                    // A deliverable asynchronous IRQ replaces the current
+                    // instruction after exactly one opcode-byte fetch. Do not
+                    // decode or read operands from the discarded instruction.
+                    let _discarded_opcode = bus.load(pc, 8);
                 }
 
-                if irq_transfer_selected {
-                    // PC-E500 captures show one architectural fetch at the
-                    // saved/fall-through PC before an already-selected IRQ
-                    // writes its frame.  The fetched byte is discarded: do
-                    // not decode it, reject reserved values, or require a
-                    // callback-backed byte to remain stable across the
-                    // scheduler boundary.
-                    let _discarded_opcode = bus.load(pc, 8) as u8;
-                    None
-                } else if let Some(silent_opcode) = silent_prepared_opcode {
+                if let Some(silent_opcode) = silent_prepared_opcode {
                     let opcode = bus.load(pc, 8) as u8;
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
@@ -1777,7 +1767,7 @@ impl CoreRuntime {
                     }
                     let transfer = match opcode {
                         0xFE => Some(
-                            crate::llama::eval::fetch_validated_vector(
+                            crate::llama::eval::prepare_validated_vector(
                                 INTERRUPT_VECTOR_ADDR,
                                 &self.state,
                                 &mut bus,
@@ -1804,27 +1794,23 @@ impl CoreRuntime {
                 }
             };
             if irq_transfer_selected {
-                // IRQ entry consumes this CoreRuntime scheduling slot. The
-                // handler instruction is prepared on the next slot, matching
-                // the runtime's established step/count contract while the
-                // replaced current PC is never decoded or executed.
-                // Materialize any level/latch state that the side-effect-free
-                // entry decision included before committing delivery.
+                // Materialize level-sensitive sources only after the silent
+                // vector proof and discarded-opcode fetch above. Delivery
+                // writes the frame, then performs the architectural vector
+                // reads. The recursive one-instruction step executes the
+                // selected handler within this caller's instruction budget.
                 self.refresh_on_key_interrupt_level();
                 self.refresh_external_interrupt_level();
                 self.refresh_sio_interrupts();
-                self.refresh_key_irq_latch();
+                self.refresh_raw_key_irq_level();
                 self.arm_pending_irq_from_isr();
                 self.deliver_pending_irq()?;
-                let mut guard = PERFETTO_TRACER.enter();
-                guard.with_some(|tracer| {
-                    tracer.update_counters(
-                        self.metadata.instruction_count,
-                        self.state.call_depth(),
-                        self.memory.memory_read_count(),
-                        self.memory.memory_write_count(),
-                    );
-                });
+                if !self.timer.in_interrupt {
+                    return Err(CoreError::Other(
+                        "selected IRQ boundary did not enter its handler".to_string(),
+                    ));
+                }
+                self.step(1)?;
                 continue;
             }
             if self.state.is_off() {
@@ -1927,8 +1913,9 @@ impl CoreRuntime {
                 });
                 // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
                 self.refresh_sio_interrupts();
-                // Reassert KEYI if the FIFO still holds events even after firmware clears ISR.
-                self.refresh_key_irq_latch();
+                // Sample the selected, undebounced matrix level. Host FIFO and
+                // debounce bookkeeping are not silicon KEYI sources.
+                self.refresh_raw_key_irq_level();
                 // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
                 self.arm_pending_irq_from_isr();
 
@@ -1970,51 +1957,48 @@ impl CoreRuntime {
                     }
                 }
 
-                // Halted cores still consume idle cycles and allow timers/IRQs to run.
-                if self.state.is_halted() {
+                // A HALT boundary remains an idle boundary even when a status
+                // level wakes the core. Execute the first foreground opcode
+                // on the next scheduler step, after it receives its own
+                // silent validation and architectural fetch.
+                if halted_at_step_entry {
                     let prev_cycle = self.metadata.cycle_count;
                     let new_cycle = prev_cycle.wrapping_add(1);
                     self.metadata.cycle_count = new_cycle;
-                    if !self.timer.in_interrupt {
-                        let kb_irq_enabled = self.timer.kb_irq_enabled;
-                        let mirror_pce500_fifo = matches!(
-                            self.device_model(),
-                            DeviceModel::PcE500 | DeviceModel::PcE500Jp
-                        );
-                        let _ = self.timer.tick_timers_with_keyboard(
-                            &mut self.memory,
-                            new_cycle,
-                            |mem| {
-                                if let Some(kb) = self.keyboard.as_mut() {
-                                    // Parity: always count/key-latch events even when IRQs are masked.
-                                    let events = kb.scan_tick(mem, true);
-                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                        let drained = if mirror_pce500_fifo {
-                                            kb.drain_fifo_to_pce500_iocs_workspace(
-                                                mem,
-                                                kb_irq_enabled,
-                                            )
-                                        } else {
-                                            0
-                                        };
-                                        if drained == 0 {
-                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                        }
+                    let kb_irq_enabled = self.timer.kb_irq_enabled;
+                    let mirror_pce500_fifo = matches!(
+                        self.device_model(),
+                        DeviceModel::PcE500 | DeviceModel::PcE500Jp
+                    );
+                    let _ = self.timer.tick_timers_with_keyboard(
+                        &mut self.memory,
+                        new_cycle,
+                        |mem| {
+                            if let Some(kb) = self.keyboard.as_mut() {
+                                // Parity: always count/key-latch events even when IRQs are masked.
+                                let events = kb.scan_tick(mem, true);
+                                if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
+                                    let drained = if mirror_pce500_fifo {
+                                        kb.drain_fifo_to_pce500_iocs_workspace(mem, kb_irq_enabled)
+                                    } else {
+                                        0
+                                    };
+                                    if drained == 0 {
+                                        kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                     }
-                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                } else {
-                                    (0, false, None)
                                 }
-                            },
-                            Some(self.state.get_reg(RegName::Y)),
-                            Some(self.state.get_reg(RegName::PC)),
-                        );
-                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                            self.timer.irq_isr = isr;
-                        }
-                        // Reassert KEYI latch only when enabled, mirroring Python HALT wake behavior.
-                        self.refresh_key_irq_latch();
+                                (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                            } else {
+                                (0, false, None)
+                            }
+                        },
+                        Some(self.state.get_reg(RegName::Y)),
+                        Some(self.state.get_reg(RegName::PC)),
+                    );
+                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                        self.timer.irq_isr = isr;
                     }
+                    self.refresh_raw_key_irq_level();
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
                         tracer.update_counters(
@@ -2170,40 +2154,39 @@ impl CoreRuntime {
                         DeviceModel::PcE500 | DeviceModel::PcE500Jp
                     );
                     for cyc in prev_cycle + 1..=new_cycle {
-                        if !self.timer.in_interrupt {
-                            let kb_irq_enabled = self.timer.kb_irq_enabled;
-                            let _ = self.timer.tick_timers_with_keyboard(
-                                &mut self.memory,
-                                cyc,
-                                |mem| {
-                                    if let Some(kb) = self.keyboard.as_mut() {
-                                        // Parity: always count/key-latch events even when IRQs are masked.
-                                        let events = kb.scan_tick(mem, true);
-                                        if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
-                                            let drained = if mirror_pce500_fifo {
-                                                kb.drain_fifo_to_pce500_iocs_workspace(
-                                                    mem,
-                                                    kb_irq_enabled,
-                                                )
-                                            } else {
-                                                0
-                                            };
-                                            if drained == 0 {
-                                                kb.write_fifo_to_memory(mem, kb_irq_enabled);
-                                            }
+                        let kb_irq_enabled = self.timer.kb_irq_enabled;
+                        let _ = self.timer.tick_timers_with_keyboard(
+                            &mut self.memory,
+                            cyc,
+                            |mem| {
+                                if let Some(kb) = self.keyboard.as_mut() {
+                                    // Parity: always count/key-latch events even when IRQs are masked.
+                                    let events = kb.scan_tick(mem, true);
+                                    if events > 0 || (kb_irq_enabled && kb.fifo_len() > 0) {
+                                        let drained = if mirror_pce500_fifo {
+                                            kb.drain_fifo_to_pce500_iocs_workspace(
+                                                mem,
+                                                kb_irq_enabled,
+                                            )
+                                        } else {
+                                            0
+                                        };
+                                        if drained == 0 {
+                                            kb.write_fifo_to_memory(mem, kb_irq_enabled);
                                         }
-                                        (events, kb.fifo_len() > 0, Some(kb.telemetry()))
-                                    } else {
-                                        (0, false, None)
                                     }
-                                },
-                                Some(self.state.get_reg(RegName::Y)),
-                                Some(self.state.get_reg(RegName::PC)),
-                            );
-                            // KEYI delivery is handled inside tick_timers_with_keyboard and respects kb_irq_enabled.
-                            if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                                self.timer.irq_isr = isr;
-                            }
+                                    (events, kb.fifo_len() > 0, Some(kb.telemetry()))
+                                } else {
+                                    (0, false, None)
+                                }
+                            },
+                            Some(self.state.get_reg(RegName::Y)),
+                            Some(self.state.get_reg(RegName::PC)),
+                        );
+                        // Timer status mirrors are independent of raw KEYI,
+                        // which is sampled at instruction boundaries.
+                        if let Some(isr) = self.memory.read_internal_byte(0xFC) {
+                            self.timer.irq_isr = isr;
                         }
                     }
                 }
@@ -2695,95 +2678,91 @@ impl CoreRuntime {
 
         // Resolve the vector and statically validate its destination before
         // constructing the interrupt frame or changing IMR/runtime metadata.
-        // The three vector bytes are still fetched architecturally exactly
-        // once after a side-effect-free preflight.
-        let vec = {
-            struct VectorBus<'a> {
-                mem: &'a mut MemoryImage,
-                host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
-                host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
-                lcd_ptr: Option<*mut dyn LcdHal>,
-                keyboard_active: bool,
-                sio_active: bool,
-                rtc_active: bool,
-                pc: u32,
-            }
+        // The proof remains silent until the complete frame is present.
+        struct VectorBus<'a> {
+            mem: &'a mut MemoryImage,
+            host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
+            lcd_ptr: Option<*mut dyn LcdHal>,
+            keyboard_active: bool,
+            sio_active: bool,
+            rtc_active: bool,
+            pc: u32,
+        }
 
-            impl LlamaBus for VectorBus<'_> {
-                fn load(&mut self, addr: u32, bits: u8) -> u32 {
-                    let addr = addr & ADDRESS_MASK;
-                    if self.mem.requires_python(addr) {
-                        if let Some(read) = self.host_read {
-                            // SAFETY: this synchronous bus exclusively owns
-                            // the callback pointer while delivering the IRQ.
-                            if let Some(value) = unsafe { (*read)(addr) } {
-                                self.mem.bump_read_count();
-                                return u32::from(value);
-                            }
+        impl LlamaBus for VectorBus<'_> {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                let addr = addr & ADDRESS_MASK;
+                if self.mem.requires_python(addr) {
+                    if let Some(read) = self.host_read {
+                        // SAFETY: this synchronous bus exclusively owns
+                        // the callback pointer while delivering the IRQ.
+                        if let Some(value) = unsafe { (*read)(addr) } {
+                            self.mem.bump_read_count();
+                            return u32::from(value);
                         }
                     }
-                    self.mem
-                        .load_with_pc(addr, bits, Some(self.pc))
-                        .unwrap_or(0)
                 }
+                self.mem
+                    .load_with_pc(addr, bits, Some(self.pc))
+                    .unwrap_or(0)
+            }
 
-                fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {
-                    unreachable!("IRQ vector validation must never write memory")
-                }
+            fn store(&mut self, _addr: u32, _bits: u8, _value: u32) {
+                unreachable!("IRQ vector validation must never write memory")
+            }
 
-                fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
-                    self.peek_byte_silent_at(addr, self.pc)
-                }
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                self.peek_byte_silent_at(addr, self.pc)
+            }
 
-                fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
-                    let addr = addr & ADDRESS_MASK;
-                    if let Some(offset) = MemoryImage::internal_offset(addr) {
-                        if (self.keyboard_active
+            fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+                let addr = addr & ADDRESS_MASK;
+                if let Some(offset) = MemoryImage::internal_offset(addr) {
+                    if (self.keyboard_active
+                        && matches!(offset, IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET))
+                        || (self.rtc_active && offset == iq7000::IMEM_EIL_OFFSET)
+                        || (self.sio_active
                             && matches!(
                                 offset,
-                                IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET
+                                IMEM_UCR_OFFSET
+                                    | IMEM_USR_OFFSET
+                                    | IMEM_RXD_OFFSET
+                                    | IMEM_TXD_OFFSET
                             ))
-                            || (self.rtc_active && offset == iq7000::IMEM_EIL_OFFSET)
-                            || (self.sio_active
-                                && matches!(
-                                    offset,
-                                    IMEM_UCR_OFFSET
-                                        | IMEM_USR_OFFSET
-                                        | IMEM_RXD_OFFSET
-                                        | IMEM_TXD_OFFSET
-                                ))
-                        {
-                            return None;
-                        }
+                    {
+                        return None;
                     }
-                    if let Some(lcd_ptr) = self.lcd_ptr {
-                        // SAFETY: address classification is read-only.
-                        if unsafe { (&*lcd_ptr).handles(addr) } {
-                            return None;
-                        }
+                }
+                if let Some(lcd_ptr) = self.lcd_ptr {
+                    // SAFETY: address classification is read-only.
+                    if unsafe { (&*lcd_ptr).handles(addr) } {
+                        return None;
                     }
-                    if self.mem.requires_python(addr) {
-                        return self.host_peek.and_then(|peek| {
-                            // SAFETY: this is the explicit safe callback.
-                            unsafe { (*peek)(addr) }
-                        });
-                    }
-                    self.mem.read_byte_for_preflight(addr, Some(context_pc))
                 }
-
-                fn vector_transfer_provenance(&self) -> (usize, u64) {
-                    self.mem.vector_transfer_provenance()
+                if self.mem.requires_python(addr) {
+                    return self.host_peek.and_then(|peek| {
+                        // SAFETY: this is the explicit safe callback.
+                        unsafe { (*peek)(addr) }
+                    });
                 }
-
-                fn instruction_byte_is_stable(&self, addr: u32) -> bool {
-                    self.mem.instruction_byte_is_stable(addr)
-                }
-
-                fn supports_wait_cycles(&self) -> bool {
-                    true
-                }
+                self.mem.read_byte_for_preflight(addr, Some(context_pc))
             }
 
+            fn vector_transfer_provenance(&self) -> (usize, u64) {
+                self.mem.vector_transfer_provenance()
+            }
+
+            fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+                self.mem.instruction_byte_is_stable(addr)
+            }
+
+            fn supports_wait_cycles(&self) -> bool {
+                true
+            }
+        }
+
+        let vector_transfer = {
             let host_read = self
                 .host_read
                 .as_mut()
@@ -2803,9 +2782,12 @@ impl CoreRuntime {
                 rtc_active: self.iq7000_rtc.is_some(),
                 pc: self.state.pc() & ADDRESS_MASK,
             };
-            crate::llama::eval::fetch_validated_vector(INTERRUPT_VECTOR_ADDR, &self.state, &mut bus)
-                .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))?
-                .target()
+            crate::llama::eval::prepare_validated_vector(
+                INTERRUPT_VECTOR_ADDR,
+                &self.state,
+                &mut bus,
+            )
+            .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))?
         };
 
         let pc = self.state.pc() & ADDRESS_MASK;
@@ -2848,6 +2830,31 @@ impl CoreRuntime {
             .record_bit_watch_transition("IMR", imr_mem as u8, cleared_imr, pc);
         self.state.set_reg(RegName::IMR, cleared_imr as u32);
         record_stack_write(imr_addr, 8, cleared_imr as u32);
+
+        let vec = {
+            let host_read = self
+                .host_read
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+            let host_peek = self
+                .host_peek
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+            let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
+            let mut bus = VectorBus {
+                mem: &mut self.memory,
+                host_read,
+                host_peek,
+                lcd_ptr,
+                keyboard_active: self.keyboard.is_some(),
+                sio_active: self.sio.is_some(),
+                rtc_active: self.iq7000_rtc.is_some(),
+                pc,
+            };
+            vector_transfer
+                .consume_after_architectural_fetch(INTERRUPT_VECTOR_ADDR, &self.state, &mut bus)
+                .map_err(|error| CoreError::Other(format!("IRQ vector transfer: {error}")))?
+        };
 
         // Emit a single delivery marker (matches Python tracer).
         if src_name == "KEY" {
@@ -4234,7 +4241,7 @@ mod tests {
     }
 
     #[test]
-    fn arm_pending_irq_ignores_keyi_when_kb_irq_disabled() {
+    fn arm_pending_irq_honors_asserted_keyi_when_host_event_generation_is_disabled() {
         let mut rt = CoreRuntime::new();
         rt.timer.set_keyboard_irq_enabled(false);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
@@ -4245,11 +4252,8 @@ mod tests {
 
         rt.arm_pending_irq_from_isr();
 
-        assert!(
-            !rt.timer.irq_pending,
-            "KEYI should be masked when kb IRQs are disabled"
-        );
-        assert!(rt.timer.irq_source.is_none());
+        assert!(rt.timer.irq_pending);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
     }
 
     #[test]
@@ -4305,7 +4309,7 @@ mod tests {
     }
 
     #[test]
-    fn arm_pending_irq_ignored_during_interrupt() {
+    fn arm_pending_irq_records_status_during_interrupt_without_selecting_nested_source() {
         let mut rt = CoreRuntime::new();
         rt.timer.in_interrupt = true;
         rt.memory
@@ -4318,8 +4322,8 @@ mod tests {
         rt.arm_pending_irq_from_isr();
 
         assert!(
-            !rt.timer.irq_pending,
-            "pending should not arm while already in an interrupt"
+            rt.timer.irq_pending,
+            "status remains pending while already in an interrupt"
         );
         assert!(
             rt.timer.irq_source.is_none(),
@@ -4328,7 +4332,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_requires_existing_latch() {
+    fn raw_selected_key_reasserts_without_host_event_latch() {
         let mut rt = CoreRuntime::new();
         let kb = rt.keyboard.as_mut().unwrap();
         // Press a key and strobe columns so scan_tick can debounce and leave FIFO populated.
@@ -4349,37 +4353,30 @@ mod tests {
         rt.timer.key_irq_latched = false;
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & ISR_KEYI,
-            0,
-            "KEYI should not reassert once the latch was cleared"
-        );
+        assert_eq!(isr & ISR_KEYI, ISR_KEYI);
         assert!(
             !rt.timer.key_irq_latched,
             "latch should remain cleared without new events"
         );
-        assert!(
-            !rt.timer.irq_pending,
-            "pending IRQ should stay cleared without a latch"
-        );
-        assert!(rt.timer.irq_source.is_none());
+        assert!(rt.timer.irq_pending);
+        assert_eq!(rt.timer.irq_source.as_deref(), Some("KEY"));
     }
 
     #[test]
-    fn refresh_key_irq_latch_respects_kb_irq_disable() {
+    fn unselected_host_key_event_does_not_assert_raw_keyi() {
         let mut rt = CoreRuntime::new();
         rt.timer.set_keyboard_irq_enabled(false);
         let kb = rt.keyboard.as_mut().unwrap();
         // Inject a matrix event to populate FIFO without relying on IRQ enable.
         kb.inject_matrix_event(0x10, false, &mut rt.memory, rt.timer.kb_irq_enabled);
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_eq!(
             isr & ISR_KEYI,
             0,
-            "KEYI should stay masked when keyboard IRQs are disabled"
+            "an unselected key and host FIFO event are not raw KEYI sources"
         );
         assert!(
             !rt.timer.irq_pending,
@@ -4388,7 +4385,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_respects_kb_irq_disable_with_fifo_data() {
+    fn raw_selected_key_ignores_host_event_irq_disable() {
         let mut rt = CoreRuntime::new();
         rt.timer.set_keyboard_irq_enabled(false);
         let kb = rt.keyboard.as_mut().unwrap();
@@ -4409,18 +4406,11 @@ mod tests {
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
 
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_eq!(
-            isr & ISR_KEYI,
-            0,
-            "KEYI should remain masked when kb IRQs are disabled even with FIFO data"
-        );
-        assert!(
-            !rt.timer.irq_pending,
-            "pending should not arm from FIFO latch when kb IRQs are disabled"
-        );
+        assert_eq!(isr & ISR_KEYI, ISR_KEYI);
+        assert!(rt.timer.irq_pending);
         assert!(
             !rt.timer.key_irq_latched,
             "latch should clear while kb IRQs are disabled"
@@ -4428,7 +4418,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_preserves_latch_when_irq_disabled() {
+    fn selected_raw_key_ignores_host_event_disable_and_preserves_bookkeeping() {
         let mut rt = CoreRuntime::new();
         let kb = rt.keyboard.as_mut().unwrap();
         // Create a latched KEYI while IRQs are enabled.
@@ -4442,7 +4432,7 @@ mod tests {
         }
         kb.write_fifo_to_memory(&mut rt.memory, rt.timer.kb_irq_enabled);
         rt.timer.key_irq_latched = true;
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
         assert!(
             rt.timer.key_irq_latched,
             "latch should be set while enabled"
@@ -4451,7 +4441,7 @@ mod tests {
         rt.timer.set_keyboard_irq_enabled(false);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
         rt.timer.irq_pending = false;
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "KEYI should stay asserted while latched");
@@ -4467,20 +4457,20 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_skips_when_in_interrupt() {
+    fn host_event_latch_alone_does_not_assert_keyi_during_interrupt() {
         let mut rt = CoreRuntime::new();
         rt.timer.in_interrupt = true;
         rt.timer.key_irq_latched = true;
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
         rt.timer.irq_pending = false;
 
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_eq!(
             isr & ISR_KEYI,
             0,
-            "ISR should not change while in interrupt"
+            "host event bookkeeping alone must not assert raw KEYI"
         );
         assert!(
             !rt.timer.irq_pending,
@@ -4489,7 +4479,46 @@ mod tests {
     }
 
     #[test]
-    fn refresh_key_irq_latch_reasserts_when_latched() {
+    fn raw_selected_key_reasserts_during_handler_until_release() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.in_interrupt = true;
+        {
+            let kb = rt.keyboard.as_mut().unwrap();
+            kb.press_matrix_code(0x10, &mut rt.memory);
+            kb.handle_write(IMEM_KOL_OFFSET, 0xFF, &mut rt.memory);
+            kb.handle_write(IMEM_KOH_OFFSET, 0x0F, &mut rt.memory);
+        }
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+
+        rt.refresh_raw_key_irq_level();
+
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            ISR_KEYI
+        );
+        assert!(rt.timer.irq_pending);
+        assert!(
+            rt.timer.irq_source.is_none(),
+            "no nested source is selected"
+        );
+
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .release_matrix_code(0x10, &mut rt.memory);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.timer.irq_pending = false;
+        rt.refresh_raw_key_irq_level();
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            0
+        );
+        assert!(!rt.timer.irq_pending);
+    }
+
+    #[test]
+    fn selected_raw_key_reasserts_independently_of_host_latch() {
         let mut rt = CoreRuntime::new();
         let kb = rt.keyboard.as_mut().unwrap();
         // Generate a debounced key event and mark the latch as active (set at event time).
@@ -4507,7 +4536,7 @@ mod tests {
         rt.timer.irq_pending = false;
         rt.timer.irq_source = None;
 
-        rt.refresh_key_irq_latch();
+        rt.refresh_raw_key_irq_level();
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         assert_ne!(isr & ISR_KEYI, 0, "KEYI should reassert when latched");
@@ -4604,60 +4633,6 @@ mod tests {
     }
 
     #[test]
-    fn selected_irq_fetches_discarded_callback_opcode_once_without_preflight() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let mut rt = CoreRuntime::new();
-        let current_pc = 0x02000;
-        let handler_pc = 0x03000;
-        rt.state.set_pc(current_pc);
-        rt.state.set_reg(RegName::S, 0x00400);
-        rt.memory.write_external_byte(current_pc, 0x20);
-        rt.memory.write_external_byte(handler_pc, 0x00);
-        rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR, handler_pc as u8);
-        rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, (handler_pc >> 8) as u8);
-        rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, (handler_pc >> 16) as u8);
-        rt.memory
-            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_ONK);
-        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
-        rt.onk_level = true;
-        rt.memory.set_python_ranges(vec![(current_pc, current_pc)]);
-
-        let architectural_reads = Arc::new(AtomicUsize::new(0));
-        let silent_peeks = Arc::new(AtomicUsize::new(0));
-        let read_count = Arc::clone(&architectural_reads);
-        rt.set_host_read(move |addr| {
-            assert_eq!(addr, current_pc);
-            read_count.fetch_add(1, Ordering::Relaxed);
-            Some(0x20)
-        });
-        let peek_count = Arc::clone(&silent_peeks);
-        rt.set_host_peek(move |addr| {
-            assert_eq!(addr, current_pc);
-            peek_count.fetch_add(1, Ordering::Relaxed);
-            Some(0x20)
-        });
-
-        rt.step(1)
-            .expect("selected IRQ must replace a reserved callback opcode");
-
-        assert_eq!(architectural_reads.load(Ordering::Relaxed), 1);
-        assert_eq!(silent_peeks.load(Ordering::Relaxed), 0);
-        assert_eq!(rt.metadata.instruction_count, 0);
-        assert_eq!(rt.state.pc(), handler_pc);
-        assert_eq!(rt.state.get_reg(RegName::S), 0x003FB);
-        assert!(rt.timer.in_interrupt);
-        assert_ne!(
-            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
-            0
-        );
-    }
-
-    #[test]
     fn active_interrupt_handler_does_not_preflight_irq_vector() {
         let mut rt = CoreRuntime::new();
         rt.state.set_pc(0);
@@ -4748,17 +4723,23 @@ mod tests {
 
         let kb_irq_enabled = rt.timer.kb_irq_enabled;
         let kb = rt.keyboard.as_mut().expect("keyboard present");
+        kb.handle_write(IMEM_KOL_OFFSET, 0xFF, &mut rt.memory);
+        kb.handle_write(IMEM_KOH_OFFSET, 0x0F, &mut rt.memory);
         let events = kb.inject_matrix_event(0x56, false, &mut rt.memory, kb_irq_enabled);
         assert!(events > 0, "key injection should enqueue an event");
 
         let isr = rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        assert_ne!(isr & ISR_KEYI, 0, "KEYI should be asserted after injection");
+        assert_eq!(isr & ISR_KEYI, 0, "FIFO injection alone is not raw KEYI");
 
         rt.step(1).expect("halt wake step");
 
         assert!(
             !rt.state.is_halted(),
             "HALT should clear on injected key event"
+        );
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            0
         );
     }
 
@@ -4773,10 +4754,18 @@ mod tests {
 
         let kb_irq_enabled = rt.timer.kb_irq_enabled;
         let kb = rt.keyboard.as_mut().expect("keyboard present");
+        kb.handle_write(IMEM_KOL_OFFSET, 0xFF, &mut rt.memory);
+        kb.handle_write(IMEM_KOH_OFFSET, 0x0F, &mut rt.memory);
         let events = kb.inject_matrix_event(0x56, false, &mut rt.memory, kb_irq_enabled);
         assert!(events > 0, "key injection should enqueue an event");
 
         rt.step(1).expect("halt wake step");
+
+        assert!(!rt.state.is_halted(), "wake is an idle boundary");
+        assert_eq!(rt.state.pc(), 0);
+        assert_eq!(rt.instruction_count(), 0);
+
+        rt.step(1).expect("execute HALT after wake");
 
         assert!(rt.state.is_halted(), "HALT should re-enter halt state");
         assert_eq!(rt.state.pc(), 1, "HALT should advance PC");
@@ -5004,8 +4993,8 @@ mod tests {
         let _ = rt.step(1);
         assert_eq!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
-            0x001234,
-            "PC should jump to interrupt vector when IMR master enabled"
+            0x001235,
+            "the selected handler's first NOP executes on the delivery step"
         );
     }
 
@@ -5050,8 +5039,8 @@ mod tests {
         let _ = rt.step(1);
         assert_eq!(
             rt.state.get_reg(RegName::PC) & ADDRESS_MASK,
-            0x005678,
-            "PC should jump to vector on ONK delivery"
+            0x005679,
+            "the ONK handler's first NOP executes on the delivery step"
         );
     }
 
@@ -5064,7 +5053,8 @@ mod tests {
         rt.memory.write_external_byte(0x0FFFFA, 0x10); // vector low
         rt.memory.write_external_byte(0x0FFFFB, 0x00);
         rt.memory.write_external_byte(0x0FFFFC, 0x00);
-        rt.memory.write_external_byte(0x0010, 0x01); // RETI opcode
+        rt.memory.write_external_byte(0x0010, 0x00); // first handler NOP
+        rt.memory.write_external_byte(0x0011, 0x01); // RETI opcode
                                                      // Seed IMR/ISR and pending IRQ.
         rt.memory
             .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
@@ -5075,7 +5065,7 @@ mod tests {
         // First step: deliver IRQ and jump to vector.
         rt.step(1).expect("deliver irq");
         assert!(rt.timer.in_interrupt, "interrupt flag should set on entry");
-        assert_eq!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x0010);
+        assert_eq!(rt.state.get_reg(RegName::PC) & ADDRESS_MASK, 0x0011);
 
         // Second step: RETI restores state and clears emulator bookkeeping only.
         rt.step(1).expect("execute reti");
@@ -5130,7 +5120,7 @@ mod tests {
     }
 
     #[test]
-    fn timers_do_not_tick_during_interrupts() {
+    fn timers_tick_and_latch_status_during_interrupts_without_nesting() {
         let mut rt = CoreRuntime::new();
         rt.timer.enabled = true;
         rt.timer.mti_period = 1;
@@ -5140,13 +5130,21 @@ mod tests {
 
         rt.step(1).expect("step while in interrupt");
         assert!(
-            !rt.timer.irq_pending,
-            "timer should not pend IRQs while in_interrupt"
+            rt.timer.irq_pending,
+            "timer status should pend while the handler is active"
         );
         assert_eq!(
-            rt.timer.next_mti, 1,
-            "next_mti should stay unchanged when ticking is gated"
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_MTI,
+            ISR_MTI,
+            "MTI should latch in ISR while the handler is active"
         );
+        assert_eq!(rt.timer.next_mti, 2, "MTI phase should keep advancing");
+        assert_eq!(
+            rt.state.pc(),
+            1,
+            "the handler executes without a nested frame"
+        );
+        assert!(rt.timer.in_interrupt, "handler service remains active");
     }
 
     #[test]
@@ -5542,12 +5540,14 @@ mod tests {
         assert_eq!(rt.timer.irq_total, 0);
         assert_eq!(rt.timer.irq_key, 0);
 
-        // Deliver the IRQ (one step runs IR intrinsic, second executes RETI).
+        // Delivery and the selected handler's first instruction share this
+        // runtime step; the handler contains RETI.
         rt.step(1).expect("deliver irq");
         assert_eq!(rt.timer.irq_total, 1);
         assert_eq!(rt.timer.irq_key, 1);
-        rt.step(1).expect("execute RETI");
-        // Counters should remain at one after RETI.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.step(1)
+            .expect("execute foreground instruction after acknowledgement");
         assert_eq!(rt.timer.irq_total, 1);
         assert_eq!(rt.timer.irq_key, 1);
     }
@@ -5555,8 +5555,9 @@ mod tests {
     #[test]
     fn hardware_irq_updates_call_depth() {
         let mut rt = CoreRuntime::new();
-        // Vector points to RETI at 0x0000.
-        rt.memory.write_external_byte(0x0000, 0x01);
+        // Vector points to NOP at 0x0000, followed by RETI.
+        rt.memory.write_external_byte(0x0000, 0x00);
+        rt.memory.write_external_byte(0x0001, 0x01);
         rt.memory.write_external_byte(0x0FFFFA, 0x00);
         rt.memory.write_external_byte(0x0FFFFB, 0x00);
         rt.memory.write_external_byte(0x0FFFFC, 0x00);
@@ -5757,29 +5758,40 @@ mod tests {
     }
 
     #[test]
-    fn malformed_current_opcode_precedes_an_aliased_irq_target() {
+    fn deliverable_irq_fetches_but_does_not_decode_reserved_fallthrough() {
         let mut rt = CoreRuntime::new();
         rt.state.set_pc(0);
+        rt.state.set_reg(RegName::S, 0x0200);
         rt.memory.write_external_byte(0, 0x20);
+        rt.memory.write_external_byte(0x0100, 0x00);
         rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
         rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x00);
+            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x01);
         rt.memory
             .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
-        let reads_before = rt.memory.memory_read_count();
-        let writes_before = rt.memory.memory_write_count();
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".to_string());
+        rt.memory.set_python_ranges(vec![(0, 0)]);
+        let fallthrough_reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let callback_reads = std::sync::Arc::clone(&fallthrough_reads);
+        rt.set_host_read(move |address| {
+            assert_eq!(address, 0);
+            callback_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(0x20)
+        });
 
-        let error = rt
-            .step(1)
-            .expect_err("malformed current opcode must not be masked by IRQ target validation");
+        rt.step(1)
+            .expect("reserved fall-through byte is fetched but not decoded");
 
-        assert!(error.to_string().contains("preflight opcode 0x20"));
-        assert!(!error.to_string().contains("IRQ vector preflight"));
-        assert_eq!(rt.state.pc(), 0);
-        assert_eq!(rt.metadata.instruction_count, 0);
-        assert_eq!(rt.metadata.cycle_count, 0);
-        assert_eq!(rt.memory.memory_read_count(), reads_before);
-        assert_eq!(rt.memory.memory_write_count(), writes_before);
+        assert_eq!(rt.state.pc(), 0x0101);
+        assert_eq!(rt.metadata.instruction_count, 1);
+        assert_eq!(
+            fallthrough_reads.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[test]

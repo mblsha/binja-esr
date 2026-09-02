@@ -1,4 +1,4 @@
-"""Host keyboard-bridge latch policy; not a stock-ROM or hardware contract."""
+"""Hardware-backed raw KIL/KEYI and separate host-event bookkeeping."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from pce500 import PCE500Emulator
 INTERNAL_MEMORY_START = 0x100000
 
 
-def test_key_latch_survives_release_until_irq_delivered():
-    """Preserve a synthetic host key event until the emulator can deliver it."""
+def test_raw_keyi_survives_release_until_firmware_acknowledges_it():
     emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
     emu._timer_enabled = False  # type: ignore[attr-defined]
 
@@ -23,22 +22,55 @@ def test_key_latch_survives_release_until_irq_delivered():
 
     assert emu.press_key("KEY_F1") is True
     emu.step()
-    assert emu._key_irq_latched is True  # type: ignore[attr-defined]
     assert (
         emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
         & int(ISRFlag.KEYI)
         != 0
     )
 
-    # User releases the key before firmware unmasks IRQs; latch must remain.
+    # Releasing the key removes the electrical level but does not itself clear
+    # the status bit already latched by hardware.
     emu.release_key("KEY_F1")
-    assert emu._key_irq_latched is True  # type: ignore[attr-defined]
+    assert (
+        emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
+        & int(ISRFlag.KEYI)
+        != 0
+    )
 
-    # Firmware clears ISR while still masked; step() should reassert KEYI from the latch.
+    # Firmware acknowledgement after physical release clears raw KEYI. The
+    # host FIFO latch is separate and must not manufacture another silicon
+    # level request.
     emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
     emu.step()
     assert (
         emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
         & int(ISRFlag.KEYI)
+        == 0
+    )
+
+
+def test_selected_held_key_relatches_keyi_while_handler_is_active():
+    emu = PCE500Emulator(perfetto_trace=False, save_lcd_on_exit=False)
+    emu._timer_enabled = False  # type: ignore[attr-defined]
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x00)
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.KOH, 0x04)
+    assert emu.press_key("KEY_F1") is True
+
+    emu._in_interrupt = True  # type: ignore[attr-defined]
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.step()
+
+    assert (
+        emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
+        & int(ISRFlag.KEYI)
         != 0
+    )
+
+    emu.release_key("KEY_F1")
+    emu.memory.write_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR, 0x00)
+    emu.step()
+    assert (
+        emu.memory.read_byte(INTERNAL_MEMORY_START + IMEMRegisters.ISR)
+        & int(ISRFlag.KEYI)
+        == 0
     )

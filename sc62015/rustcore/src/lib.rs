@@ -12,8 +12,9 @@ use sc62015_core::{
     llama::{
         eval::{
             fetch_validated_vector, perfetto_last_instr_index, perfetto_last_pc,
-            power_on_reset_with_transfer, reset_perf_counters, set_perf_instr_counter,
-            validate_vector_transfer_with_length, LlamaBus, LlamaExecutor, ValidatedVectorTransfer,
+            power_on_reset_with_transfer, prepare_validated_vector, reset_perf_counters,
+            set_perf_instr_counter, validate_vector_transfer_with_length, LlamaBus, LlamaExecutor,
+            ValidatedVectorTransfer,
         },
         opcodes::RegName as LlamaRegName,
         state::{validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
@@ -462,7 +463,7 @@ impl LlamaContractBus {
             }
 
             let kb_irq_enabled = self.timer.kb_irq_enabled;
-            let (mti, sti, key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
+            let (mti, sti, _key_events, _kb_stats) = self.timer.tick_timers_with_keyboard(
                 &mut self.memory,
                 self.cycles,
                 |mem| {
@@ -479,23 +480,6 @@ impl LlamaContractBus {
                 None,
                 None,
             );
-            if kb_irq_enabled {
-                if mti && key_events > 0 && self.keyboard.fifo_len() > 0 {
-                    // Ensure KEYI is asserted; tick_timers_with_keyboard already wrote ISR, but keep parity.
-                    if let Some(isr) = self.memory.read_internal_byte(0xFC) {
-                        if (isr & 0x04) == 0 {
-                            self.memory.write_internal_byte(0xFC, isr | 0x04);
-                        }
-                    }
-                }
-                if sti && self.keyboard.fifo_len() > 0 {
-                    if let Some(cur) = self.memory.read_internal_byte(0xFC) {
-                        if (cur & 0x04) == 0 {
-                            self.memory.write_internal_byte(0xFC, cur | 0x04);
-                        }
-                    }
-                }
-            }
             if mti || sti {
                 let mut value = 0u8;
                 if mti {
@@ -843,102 +827,22 @@ impl LlamaContractBus {
     }
 
     fn keyboard_press_matrix_code(&mut self, code: u8) -> PyResult<bool> {
-        let isr_offset = IMEM_ISR_OFFSET;
-        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
-        let prev_isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
-        self.events.push(ContractEvent {
-            kind: "read",
-            address: isr_addr,
-            value: prev_isr,
-            pc: None,
-            detail: None,
-        });
         let events = self.keyboard.inject_matrix_event(
             code & 0x7F,
             false,
             &mut self.memory,
             self.timer.kb_irq_enabled,
         );
-        let new_isr = self
-            .memory
-            .read_internal_byte(isr_offset)
-            .unwrap_or(prev_isr);
-        if new_isr != prev_isr {
-            self.events.push(ContractEvent {
-                kind: "write",
-                address: isr_addr,
-                value: new_isr,
-                pc: None,
-                detail: None,
-            });
-        }
-        if self.timer.kb_irq_enabled && (events > 0 || self.keyboard.fifo_len() > 0) {
-            self.timer.irq_pending = true;
-            self.timer.irq_source = Some("KEY".to_string());
-            self.timer.last_fired = self.timer.irq_source.clone();
-            self.timer.irq_isr = new_isr;
-            self.timer.irq_imr = self
-                .memory
-                .read_internal_byte(IMEM_IMR_OFFSET)
-                .unwrap_or(self.timer.irq_imr);
-            let mut guard = PERFETTO_TRACER.enter();
-            guard.with_some(|tracer| {
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "imr".to_string(),
-                    AnnotationValue::UInt(self.timer.irq_imr as u64),
-                );
-                payload.insert(
-                    "isr".to_string(),
-                    AnnotationValue::UInt(self.timer.irq_isr as u64),
-                );
-                payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
-                tracer.record_irq_event("KeyIRQ", payload);
-            });
-        }
         Ok(events > 0)
     }
 
     fn keyboard_release_matrix_code(&mut self, code: u8) -> PyResult<bool> {
-        let isr_offset = IMEM_ISR_OFFSET;
-        let isr_addr = INTERNAL_MEMORY_START + isr_offset;
-        let prev_isr = self.memory.read_internal_byte(isr_offset).unwrap_or(0);
-        self.events.push(ContractEvent {
-            kind: "read",
-            address: isr_addr,
-            value: prev_isr,
-            pc: None,
-            detail: None,
-        });
         let events = self.keyboard.inject_matrix_event(
             code & 0x7F,
             true,
             &mut self.memory,
             self.timer.kb_irq_enabled,
         );
-        let new_isr = self
-            .memory
-            .read_internal_byte(isr_offset)
-            .unwrap_or(prev_isr);
-        if new_isr != prev_isr {
-            self.events.push(ContractEvent {
-                kind: "write",
-                address: isr_addr,
-                value: new_isr,
-                pc: None,
-                detail: None,
-            });
-        }
-        if self.timer.kb_irq_enabled && self.keyboard.fifo_len() > 0 {
-            self.timer.irq_pending = true;
-            self.timer.irq_source = Some("KEY".to_string());
-            self.timer.last_fired = self.timer.irq_source.clone();
-            self.timer.irq_isr = new_isr;
-            self.timer.irq_imr = self
-                .memory
-                .read_internal_byte(IMEM_IMR_OFFSET)
-                .unwrap_or(self.timer.irq_imr);
-        }
         Ok(events > 0)
     }
 
@@ -1581,7 +1485,7 @@ impl LlamaBus for LlamaPyBus {
                 }
 
                 let kb_irq_enabled = timer.kb_irq_enabled;
-                let (mti, sti, key_events, _kb_stats) = timer.tick_timers_with_keyboard(
+                let (mti, sti, _key_events, _kb_stats) = timer.tick_timers_with_keyboard(
                     mirror,
                     *cycles_counter,
                     |mem| {
@@ -1594,13 +1498,6 @@ impl LlamaBus for LlamaPyBus {
                     None,
                     None,
                 );
-                if kb_irq_enabled && (key_events > 0 || keyboard.fifo_len() > 0) {
-                    if let Some(cur) = mirror.read_internal_byte(IMEM_ISR_OFFSET) {
-                        if (cur & 0x04) == 0 {
-                            mirror.write_internal_byte(IMEM_ISR_OFFSET, cur | 0x04);
-                        }
-                    }
-                }
                 if mti || sti {
                     let mut value = mirror.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
                     if mti {
@@ -2402,9 +2299,10 @@ impl LlamaCpu {
             (0..u32::from(target_len)).map(|index| target.wrapping_add(index) & ADDRESS_MASK),
         )?;
 
-        // Re-certify both ranges immediately before the sole architectural
-        // vector read, then let the core repeat silent validation and bind the
-        // resulting proof to the live provenance epoch.
+        // Re-certify both ranges immediately before binding the proof to the
+        // live provenance epoch. IR retains a silent-only proof because its
+        // architectural vector fetch occurs after the frame writes. RESET
+        // keeps its fetched-before-mutation fail-closed contract.
         require_python_instruction_stability(
             py,
             &self.memory,
@@ -2430,7 +2328,11 @@ impl LlamaCpu {
             &mut self.mirror,
             &mut self.cycles,
         )?;
-        let transfer_result = fetch_validated_vector(vector_address, &source_state, &mut bus);
+        let transfer_result = if vector_address == ROM_RESET_VECTOR_ADDR {
+            fetch_validated_vector(vector_address, &source_state, &mut bus)
+        } else {
+            prepare_validated_vector(vector_address, &source_state, &mut bus)
+        };
         self.memory_reads = self.memory_reads.saturating_add(bus.memory_reads);
         let callback_error = bus.take_callback_error();
         drop(bus);
@@ -3103,34 +3005,9 @@ impl LlamaCpu {
                 &mut cpu.mirror,
                 cpu.timer.kb_irq_enabled,
             );
-            if cpu.timer.kb_irq_enabled && (events > 0 || cpu.keyboard.fifo_len() > 0) {
-                // Mirror Python scheduler: latch KEYI and pending IRQ immediately.
-                cpu.timer.irq_pending = true;
-                cpu.timer.irq_source = Some("KEY".to_string());
-                cpu.timer.last_fired = cpu.timer.irq_source.clone();
-                cpu.timer.irq_isr = cpu
-                    .mirror
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .unwrap_or(cpu.timer.irq_isr);
-                cpu.timer.irq_imr = cpu
-                    .mirror
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(cpu.timer.irq_imr);
-                let mut guard = PERFETTO_TRACER.enter();
-                guard.with_some(|tracer| {
-                    let mut payload = HashMap::new();
-                    payload.insert(
-                        "imr".to_string(),
-                        AnnotationValue::UInt(cpu.timer.irq_imr as u64),
-                    );
-                    payload.insert(
-                        "isr".to_string(),
-                        AnnotationValue::UInt(cpu.timer.irq_isr as u64),
-                    );
-                    payload.insert("src".to_string(), AnnotationValue::Str("KEY".to_string()));
-                    tracer.record_irq_event("KeyIRQ", payload);
-                });
-            }
+            // Host injection updates physical matrix and FIFO bookkeeping.
+            // The machine scheduler, not this helper, samples selected KIL
+            // and asserts raw KEYI at an instruction boundary.
             events > 0
         })
     }
@@ -3223,19 +3100,8 @@ impl LlamaCpu {
                 &mut cpu.mirror,
                 cpu.timer.kb_irq_enabled,
             );
-            if cpu.timer.kb_irq_enabled && cpu.keyboard.fifo_len() > 0 {
-                cpu.timer.irq_pending = true;
-                cpu.timer.irq_source = Some("KEY".to_string());
-                cpu.timer.last_fired = cpu.timer.irq_source.clone();
-                cpu.timer.irq_isr = cpu
-                    .mirror
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .unwrap_or(cpu.timer.irq_isr);
-                cpu.timer.irq_imr = cpu
-                    .mirror
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(cpu.timer.irq_imr);
-            }
+            // Release changes physical/event state only. It neither
+            // acknowledges an existing KEYI bit nor creates a new one.
             events > 0
         })
     }

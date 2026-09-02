@@ -419,7 +419,7 @@ def test_vector_static_preflight_rejects_invalid_pre_and_tcl_targets(
         validate_vector_transfer(memory, emu.regs, 0xFFFFD)
 
 
-def test_ir_architectural_vector_mismatch_fails_before_frame_or_imr_write():
+def test_ir_architectural_vector_mismatch_fails_after_frame_and_imr_write():
     raw = bytearray([0x00] * ADDRESS_SPACE_SIZE)
     source = 0x1000
     target = 0x0200
@@ -444,14 +444,23 @@ def test_ir_architectural_vector_mismatch_fails_before_frame_or_imr_write():
     emu.regs.set(RegisterName.PC, source)
     emu.regs.set(RegisterName.S, 0x400)
     before_regs = dict(emu.regs._values)
-    before_memory = bytes(raw)
-
     with pytest.raises(RuntimeError, match="fetch disagrees with safe preflight"):
         emu.execute_instruction(source)
 
+    # HW-014 places the architectural vector read after the complete frame.
+    # The evaluator rolls back its register transaction on failure, but the
+    # already-observable frame/IMR writes remain and poison further execution.
     assert dict(emu.regs._values) == before_regs
-    assert bytes(raw) == before_memory
-    assert writes == []
+    assert writes == [
+        (0x3FF, 0x00),
+        (0x3FE, 0x10),
+        (0x3FD, 0x00),
+        (0x3FC, 0x00),
+        (0x3FB, 0xA5),
+        (INTERNAL_MEMORY_START + IMEMRegisters.IMR, 0x25),
+    ]
+    assert raw[0x3FB:0x400] == bytes((0xA5, 0x00, 0x00, 0x10, 0x00))
+    assert raw[INTERNAL_MEMORY_START + IMEMRegisters.IMR] == 0x25
     assert emu._poisoned is not None
 
 

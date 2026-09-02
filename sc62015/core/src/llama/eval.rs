@@ -145,8 +145,8 @@ pub const VECTOR_CHANGED_DURING_PREFLIGHT_ERROR: &str =
 pub const PREPARED_VECTOR_MISMATCH_ERROR: &str =
     "prepared SC62015 vector transfer does not match the current instruction";
 
-/// Opaque proof that one fixed vector was silently validated, fetched once
-/// through the architectural bus, and found to match that silent view.
+/// Opaque proof that one fixed vector was silently validated.  The proof also
+/// records whether its one architectural fetch has already happened.
 ///
 /// Private fields prevent wrappers from manufacturing a target scalar and
 /// bypassing the destination checks. A machine may hold this value across its
@@ -159,6 +159,7 @@ pub struct ValidatedVectorTransfer {
     target: u32,
     target_len: u8,
     provenance: (usize, u64),
+    architectural_fetch_validated: bool,
 }
 
 impl ValidatedVectorTransfer {
@@ -182,6 +183,58 @@ impl ValidatedVectorTransfer {
         self.vector_addr == vector_addr
             && self.source_pc == state.pc() & mask_for(RegName::PC)
             && self.provenance == bus.vector_transfer_provenance()
+    }
+
+    pub fn architectural_fetch_validated(&self) -> bool {
+        self.architectural_fetch_validated
+    }
+
+    /// Consume this proof at the architectural vector-read boundary.
+    ///
+    /// IR/IRQ callers use a silent-only proof and call this after the complete
+    /// five-byte frame has been written. RESET callers use an already-fetched
+    /// proof so reset remains fail-closed before its first mutation.
+    pub fn consume_after_architectural_fetch<B: LlamaBus>(
+        self,
+        vector_addr: u32,
+        state: &LlamaState,
+        bus: &mut B,
+    ) -> Result<u32, &'static str> {
+        if !self.matches(vector_addr, state, bus) {
+            return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+        }
+        if self.architectural_fetch_validated {
+            return Ok(self.target);
+        }
+
+        let fetched_vector = bus.load(vector_addr, 8)
+            | (bus.load(vector_addr.wrapping_add(1), 8) << 8)
+            | (bus.load(vector_addr.wrapping_add(2), 8) << 16);
+        if bus.vector_transfer_provenance() != self.provenance {
+            return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+        }
+        if fetched_vector == self.target {
+            return Ok(fetched_vector);
+        }
+        if fetched_vector & 0xF0_0000 != 0 {
+            return Err(VECTOR_UPPER_NIBBLE_ERROR);
+        }
+
+        // A volatile but canonical vector still needs the same destination
+        // validation as the silently observed value.
+        let opcode = bus
+            .peek_byte_silent_at(fetched_vector, fetched_vector)
+            .ok_or(SILENT_PEEK_UNAVAILABLE_ERROR)?;
+        let mut target_state = state.clone();
+        target_state.set_pc(fetched_vector);
+        LlamaExecutor.validate_before_scheduling_with_options(
+            opcode,
+            &target_state,
+            bus,
+            false,
+            false,
+        )?;
+        Err(VECTOR_CHANGED_DURING_PREFLIGHT_ERROR)
     }
 }
 
@@ -611,7 +664,9 @@ pub fn power_on_reset_with_transfer<B: LlamaBus>(
     state: &mut LlamaState,
     transfer: ValidatedVectorTransfer,
 ) -> Result<(), &'static str> {
-    if !transfer.matches(ROM_RESET_VECTOR_ADDR, state, bus) {
+    if !transfer.architectural_fetch_validated()
+        || !transfer.matches(ROM_RESET_VECTOR_ADDR, state, bus)
+    {
         return Err(PREPARED_VECTOR_MISMATCH_ERROR);
     }
     apply_power_on_reset(bus, state, transfer.target());
@@ -666,6 +721,30 @@ pub fn validate_vector_transfer_with_length<B: LlamaBus>(
     LlamaExecutor.validate_vector_transfer_inner(vector_addr, state, bus)
 }
 
+/// Prepare an IRQ/IR vector transfer using only side-effect-free peeks.
+/// The architectural low-to-high vector reads must be performed later, after
+/// the complete interrupt frame has been written.
+pub fn prepare_validated_vector<B: LlamaBus>(
+    vector_addr: u32,
+    state: &LlamaState,
+    bus: &mut B,
+) -> Result<ValidatedVectorTransfer, &'static str> {
+    let provenance = bus.vector_transfer_provenance();
+    let (target, target_len) =
+        LlamaExecutor.validate_vector_transfer_inner(vector_addr, state, bus)?;
+    if bus.vector_transfer_provenance() != provenance {
+        return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+    }
+    Ok(ValidatedVectorTransfer {
+        vector_addr,
+        source_pc: state.pc() & mask_for(RegName::PC),
+        target,
+        target_len,
+        provenance,
+        architectural_fetch_validated: false,
+    })
+}
+
 /// Perform the one architectural vector fetch after silent validation and
 /// validate the fetched value again if a volatile bus disagrees with the peek.
 /// All rejection points occur before the caller mutates architectural state.
@@ -690,6 +769,7 @@ pub fn fetch_validated_vector<B: LlamaBus>(
             target: fetched_vector,
             target_len,
             provenance,
+            architectural_fetch_validated: true,
         });
     }
     if fetched_vector & 0xF0_0000 != 0 {
@@ -2741,18 +2821,27 @@ impl LlamaExecutor {
         if resolved_entry.kind == InstrKind::Tcl && !bus.supports_timer_phase_clear() {
             return Err(TCL_UNIMPLEMENTED_ERROR);
         }
-        // Finish the architectural vector fetch before reserving trace state
-        // or synchronizing register mirrors. execute_with receives the exact
-        // validated value so IR/RESET cannot re-read a volatile bus later.
-        let prefetched_vector = match (resolved_entry.kind, prepared_transfer) {
-            (InstrKind::Ir, Some(transfer)) | (InstrKind::Reset, Some(transfer)) => {
-                Some(transfer.target())
+        // IRQ/IR retains a silent-only proof until after the frame writes;
+        // RESET retains its historical fail-closed fetch-before-mutation
+        // contract.
+        let vector_transfer = match (resolved_entry.kind, prepared_transfer) {
+            (InstrKind::Ir, Some(transfer)) => {
+                if transfer.architectural_fetch_validated() {
+                    return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+                }
+                Some(transfer)
+            }
+            (InstrKind::Reset, Some(transfer)) => {
+                if !transfer.architectural_fetch_validated() {
+                    return Err(PREPARED_VECTOR_MISMATCH_ERROR);
+                }
+                Some(transfer)
             }
             (InstrKind::Ir, None) => {
-                Some(fetch_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?.target())
+                Some(prepare_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?)
             }
             (InstrKind::Reset, None) => {
-                Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?.target())
+                Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?)
             }
             (_, Some(_)) => return Err(PREPARED_VECTOR_MISMATCH_ERROR),
             (_, None) => None,
@@ -2835,7 +2924,7 @@ impl LlamaExecutor {
                 pc_override,
                 prefix_len,
                 instr_index,
-                prefetched_vector,
+                vector_transfer,
             ),
             None => reject_unknown(),
         };
@@ -2930,7 +3019,7 @@ impl LlamaExecutor {
         pc_override: Option<u32>,
         prefix_len: u8,
         instr_index: u64,
-        prefetched_vector: Option<u32>,
+        vector_transfer: Option<ValidatedVectorTransfer>,
     ) -> Result<u8, &'static str> {
         match entry.kind {
             InstrKind::Nop => {
@@ -3377,7 +3466,9 @@ impl LlamaExecutor {
                 Ok(len)
             }
             InstrKind::Reset => {
-                let reset_vector = prefetched_vector.ok_or("RESET vector was not prefetched")?;
+                let reset_vector = vector_transfer
+                    .ok_or("RESET vector was not prefetched")?
+                    .consume_after_architectural_fetch(ROM_RESET_VECTOR_ADDR, state, bus)?;
                 apply_power_on_reset(bus, state, reset_vector);
                 let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
                 state.set_reg(RegName::IMR, mem_imr as u32);
@@ -3411,7 +3502,6 @@ impl LlamaExecutor {
                 // fallthrough here would make the software-interrupt slot unreachable.
                 let saved_pc = pc_before;
                 let fallthrough = pc_before.wrapping_add(instr_len as u32) & mask_for(RegName::PC);
-                let vec = prefetched_vector.ok_or("IR vector was not prefetched")?;
                 Self::push_stack(state, bus, RegName::S, saved_pc, 24, false);
                 let f = state.get_reg(RegName::F) & 0xFF;
                 Self::push_stack(state, bus, RegName::S, f, 8, false);
@@ -3422,6 +3512,9 @@ impl LlamaExecutor {
                 let cleared_imr = imr & 0x7F;
                 Self::store_traced(bus, imr_addr, 8, cleared_imr);
                 state.set_reg(RegName::IMR, cleared_imr);
+                let vec = vector_transfer
+                    .ok_or("IR vector was not prepared")?
+                    .consume_after_architectural_fetch(INTERRUPT_VECTOR_ADDR, state, bus)?;
                 state.call_depth_inc();
                 state.set_pc(vec);
                 // Parity: emit perfetto IRQ entry like Python IR intrinsic.
@@ -5443,12 +5536,14 @@ mod tests {
         fetched: [u8; 3],
         vector_reads: Vec<u32>,
         writes: Vec<(u32, u8, u32)>,
+        events: Vec<(&'static str, u32)>,
     }
 
     impl LlamaBus for VolatileVectorBus {
         fn load(&mut self, addr: u32, bits: u8) -> u32 {
             if bits == 8 && (INTERRUPT_VECTOR_ADDR..=INTERRUPT_VECTOR_ADDR + 2).contains(&addr) {
                 self.vector_reads.push(addr);
+                self.events.push(("vector-read", addr));
                 return u32::from(self.fetched[(addr - INTERRUPT_VECTOR_ADDR) as usize]);
             }
             u32::from(self.silent.get(addr as usize).copied().unwrap_or(0))
@@ -5456,6 +5551,7 @@ mod tests {
 
         fn store(&mut self, addr: u32, bits: u8, value: u32) {
             self.writes.push((addr, bits, value));
+            self.events.push(("write", addr));
         }
 
         fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
@@ -5468,7 +5564,7 @@ mod tests {
     }
 
     #[test]
-    fn synchronous_ir_rejects_vector_changed_after_preflight_before_frame_mutation() {
+    fn synchronous_ir_detects_volatile_vector_change_after_frame_mutation() {
         let _perfetto_lock = crate::perfetto::perfetto_test_guard();
         let mut exec = LlamaExecutor::new();
         reset_perf_counters();
@@ -5490,6 +5586,7 @@ mod tests {
             ],
             vector_reads: Vec::new(),
             writes: Vec::new(),
+            events: Vec::new(),
         };
         let mut state = LlamaState::new();
         state.set_pc(pc as u32);
@@ -5499,18 +5596,22 @@ mod tests {
 
         let err = exec
             .execute(0xFE, &mut state, &mut bus)
-            .expect_err("volatile vector mismatch must fail atomically");
+            .expect_err("volatile vector mismatch must fail after the frame");
 
         assert_eq!(err, VECTOR_CHANGED_DURING_PREFLIGHT_ERROR);
         assert_eq!(state.pc(), pc as u32);
-        assert_eq!(state.get_reg(RegName::S), 0x00400);
+        assert_eq!(state.get_reg(RegName::S), 0x003FB);
         assert_eq!(state.get_reg(RegName::F), 0x03);
-        assert_eq!(state.get_reg(RegName::IMR), 0xA5);
+        assert_eq!(state.get_reg(RegName::IMR), 0x00);
         assert_eq!(state.call_depth(), 0);
         assert_eq!(perfetto_last_instr_index(), 17);
-        assert_eq!(perfetto_last_pc(), 0);
+        assert_eq!(perfetto_last_pc(), pc as u32);
         assert_eq!(perfetto_instr_context(), None);
-        assert!(bus.writes.is_empty());
+        assert_eq!(bus.writes.len(), 6, "five frame bytes plus IMR.IRM clear");
+        assert!(
+            bus.events[..6].iter().all(|(kind, _)| *kind == "write"),
+            "all frame/IMR writes must precede the vector fetch"
+        );
         assert_eq!(
             bus.vector_reads,
             vec![
