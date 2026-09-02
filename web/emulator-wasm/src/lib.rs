@@ -10,7 +10,8 @@ use wasm_bindgen::prelude::*;
 
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
-use sc62015_core::memory::{ADDRESS_MASK, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
+use sc62015_core::llama::state::mask_for;
+use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::{
     CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
@@ -81,11 +82,12 @@ fn pop_stack(
 ) -> u32 {
     let bytes = bits.div_ceil(8);
     let mut value = 0u32;
-    let mut sp = state.get_reg(RegName::S) & ADDRESS_MASK;
+    let stack_mask = mask_for(RegName::S);
+    let mut sp = state.get_reg(RegName::S) & stack_mask;
     for i in 0..bytes {
         let byte = memory.load(sp, 8).unwrap_or(0) & 0xFF;
         value |= byte << (8 * i);
-        sp = sp.wrapping_add(1) & ADDRESS_MASK;
+        sp = sp.wrapping_add(1) & stack_mask;
     }
     state.set_reg(RegName::S, sp);
     value & mask_for_width(bits)
@@ -182,6 +184,13 @@ struct ProbeSample {
     regs: std::collections::HashMap<String, u32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct StubUse {
+    id: u32,
+    pc: u32,
+    hits: u32,
+}
+
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 struct CallOptions {
     #[serde(default)]
@@ -275,6 +284,7 @@ struct CallArtifacts {
     memory_writes: Vec<MemoryWriteByte>,
     lcd_writes: Vec<sc62015_core::lcd::LcdDisplayWrite>,
     probe_samples: Vec<ProbeSample>,
+    stubs_used: Vec<StubUse>,
     perfetto_trace_b64: Option<String>,
     report: CallReport,
 }
@@ -438,10 +448,17 @@ impl Sc62015Emulator {
         self.runtime.set_reg(name, value);
     }
 
+    /// Side-effect-free debugger peek. This intentionally does not perform an
+    /// architectural device read or increment bus counters.
     pub fn read_u8(&self, addr: u32) -> u8 {
-        self.runtime.memory.load(addr, 8).unwrap_or(0) as u8
+        self.runtime
+            .memory
+            .read_byte_for_preflight(addr, None)
+            .unwrap_or(0)
     }
 
+    /// Host/debugger memory patch. Device behavior is exercised only by CPU
+    /// execution; this API updates the emulated memory image directly.
     pub fn write_u8(&mut self, addr: u32, value: u8) {
         let _ = self.runtime.memory.store(addr, 8, value as u32);
     }
@@ -708,11 +725,15 @@ impl Sc62015Emulator {
         if opts.probe_max_samples == 0 {
             opts.probe_max_samples = 256;
         }
-        let stub_map: HashMap<u32, u32> = opts
-            .stubs
-            .iter()
-            .map(|stub| (stub.pc & 0x000f_ffff, stub.id))
-            .collect();
+        let mut stub_map = HashMap::with_capacity(opts.stubs.len());
+        for stub in &opts.stubs {
+            let pc = stub.pc & 0x000f_ffff;
+            if stub_map.insert(pc, stub.id).is_some() {
+                return Err(JsValue::from_str(&format!(
+                    "duplicate stub address after 20-bit masking: 0x{pc:05X}"
+                )));
+            }
+        }
 
         if opts.trace {
             let mut guard = sc62015_core::PERFETTO_TRACER.enter();
@@ -732,11 +753,35 @@ impl Sc62015Emulator {
         let sentinel_low16: u32 = 0xD00D;
         let sentinel_pc = ((addr & 0x0f_0000) | sentinel_low16) & 0x000f_ffff;
 
-        // Push a 24-bit sentinel return address (little-endian) onto the S stack.
-        let new_sp = before_sp.wrapping_sub(3) & 0x00ff_ffff;
+        // Push a 20-bit sentinel return address (little-endian) onto the S stack.
+        // Preserve the overwritten bytes so this debugger helper does not
+        // perturb later machine execution.
+        let stack_mask = mask_for(RegName::S);
+        let new_sp = before_sp.wrapping_sub(3) & stack_mask;
+        let mut saved_stack = Vec::with_capacity(3);
         for i in 0..3u32 {
+            let stack_addr = new_sp.wrapping_add(i) & stack_mask;
+            if self.runtime.memory.is_read_only_range(stack_addr, 1)
+                || !self.runtime.memory.instruction_byte_is_stable(stack_addr)
+            {
+                return Err(JsValue::from_str(&format!(
+                    "call sentinel stack byte 0x{stack_addr:05X} is not writable static RAM"
+                )));
+            }
+            let previous = self
+                .runtime
+                .memory
+                .read_byte_for_preflight(stack_addr, None)
+                .ok_or_else(|| {
+                    JsValue::from_str(&format!(
+                        "call sentinel stack byte 0x{stack_addr:05X} is unavailable"
+                    ))
+                })?;
+            saved_stack.push((stack_addr, previous));
+        }
+        for (i, (stack_addr, _)) in saved_stack.iter().enumerate() {
             let byte = ((sentinel_pc >> (8 * i)) & 0xff) as u32;
-            let _ = self.runtime.memory.store(new_sp.wrapping_add(i), 8, byte);
+            let _ = self.runtime.memory.store(*stack_addr, 8, byte);
         }
         self.runtime.state.set_reg(RegName::S, new_sp);
         // Bookkeeping for call-stack tracing; RET/RETF will unwind this.
@@ -766,6 +811,7 @@ impl Sc62015Emulator {
         let mut fault: Option<CallFault> = None;
         let mut probe_samples: Vec<ProbeSample> = Vec::new();
         let mut probe_hits: u32 = 0;
+        let mut stub_hits: HashMap<(u32, u32), u32> = HashMap::new();
         let mut forced_writes: HashMap<u32, u8> = HashMap::new();
         while steps < max_instructions {
             let current_pc = self.runtime.state.pc() & 0x000f_ffff;
@@ -786,6 +832,8 @@ impl Sc62015Emulator {
                 }
             }
             if let Some(stub_id) = stub_map.get(&current_pc).copied() {
+                let hits = stub_hits.entry((stub_id, current_pc)).or_default();
+                *hits = hits.saturating_add(1);
                 let stub_result: Result<StubPatch, String> = (|| {
                     let regs_snapshot = sc62015_core::collect_registers(&self.runtime.state);
                     let regs_entries: Vec<StubRegEntry> = regs_snapshot
@@ -931,6 +979,13 @@ impl Sc62015Emulator {
             .map(|lcd| lcd.take_display_write_capture())
             .unwrap_or_default();
 
+        for (stack_addr, previous) in saved_stack {
+            let _ = self
+                .runtime
+                .memory
+                .store(stack_addr, 8, u32::from(previous));
+        }
+
         let perfetto_trace_b64 = if opts.trace {
             let mut guard = sc62015_core::PERFETTO_TRACER.enter();
             let trace_bytes = guard
@@ -950,6 +1005,11 @@ impl Sc62015Emulator {
         self.runtime.state.restore_call_metrics(before_call_metrics);
 
         let after_regs = sc62015_core::collect_registers(&self.runtime.state);
+        let mut stubs_used: Vec<StubUse> = stub_hits
+            .into_iter()
+            .map(|((id, pc), hits)| StubUse { id, pc, hits })
+            .collect();
+        stubs_used.sort_by_key(|stub| (stub.pc, stub.id));
 
         let report = CallReport {
             reason,
@@ -970,6 +1030,7 @@ impl Sc62015Emulator {
             memory_writes,
             lcd_writes,
             probe_samples,
+            stubs_used,
             perfetto_trace_b64,
             report,
         };
@@ -1157,6 +1218,14 @@ mod tests {
         fn last_flags() -> JsValue;
     }
 
+    fn function_test_emulator() -> Pce500Emulator {
+        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
+        let mut emulator = Pce500Emulator::new();
+        emulator.load_rom(rom).expect("load");
+        emulator.set_reg("S", 0xB9003);
+        emulator
+    }
+
     #[wasm_bindgen_test]
     fn reset_reads_rom_vector() {
         let mut emulator = Pce500Emulator::new();
@@ -1189,6 +1258,20 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn debugger_read_is_a_side_effect_free_peek() {
+        let mut emulator = Pce500Emulator::new();
+        let mut rom = vec![0u8; ROM_WINDOW_LEN];
+        rom[ROM_WINDOW_LEN - 3] = 0x34;
+        rom[ROM_WINDOW_LEN - 2] = 0x12;
+        emulator.load_rom(&rom).expect("load rom");
+        let reads_before = emulator.runtime.memory.memory_read_count();
+
+        let _ = emulator.read_u8(0x001234);
+
+        assert_eq!(emulator.runtime.memory.memory_read_count(), reads_before);
+    }
+
+    #[wasm_bindgen_test]
     fn lcd_buffer_has_expected_size() {
         let emulator = Pce500Emulator::new();
         let pixels = emulator.lcd_pixels();
@@ -1210,9 +1293,7 @@ mod tests {
             trace: bool,
         }
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let js = emulator
@@ -1298,7 +1379,15 @@ mod tests {
     struct CallArtifactsDecoded {
         memory_writes: Vec<MemoryWriteByteDecoded>,
         after_regs: std::collections::HashMap<String, u32>,
+        stubs_used: Vec<StubUseDecoded>,
         report: CallReportDecoded,
+    }
+
+    #[derive(Deserialize)]
+    struct StubUseDecoded {
+        id: u32,
+        pc: u32,
+        hits: u32,
     }
 
     #[wasm_bindgen_test]
@@ -1306,9 +1395,7 @@ mod tests {
         install_stub_dispatch();
         clear_stub_state();
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let patch = StubPatch {
@@ -1363,6 +1450,87 @@ mod tests {
         let flags_val = last_flags();
         let flags: Vec<StubRegEntry> = serde_wasm_bindgen::from_value(flags_val).expect("flags");
         assert!(flags.iter().any(|entry| entry.name == "C"));
+        assert_eq!(decoded.stubs_used.len(), 1);
+        assert_eq!(decoded.stubs_used[0].id, 1);
+        assert_eq!(decoded.stubs_used[0].pc, pc);
+        assert_eq!(decoded.stubs_used[0].hits, 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_restores_sentinel_stack_bytes() {
+        install_stub_dispatch();
+        clear_stub_state();
+        let mut emulator = function_test_emulator();
+        let pc = emulator.get_reg("PC");
+        emulator.set_reg("S", 0xB9003);
+        for (offset, byte) in [0xA1, 0xB2, 0xC3].into_iter().enumerate() {
+            emulator.write_u8(0xB9000 + offset as u32, byte);
+        }
+        set_stub_patch(
+            serde_wasm_bindgen::to_value(&StubPatch {
+                mem_writes: vec![],
+                regs: vec![],
+                flags: vec![],
+                ret: StubReturn::Retf { pc: None },
+            })
+            .expect("patch"),
+        );
+        let opts = StubOptions {
+            stubs: vec![StubSpec { pc, id: 6 }],
+        };
+
+        emulator
+            .call_function_ex(pc, 4, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect("call");
+
+        assert_eq!(emulator.get_reg("S"), 0xB9003);
+        assert_eq!(emulator.read_u8(0xB9000), 0xA1);
+        assert_eq!(emulator.read_u8(0xB9001), 0xB2);
+        assert_eq!(emulator.read_u8(0xB9002), 0xC3);
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_rejects_20bit_stack_wrap_into_rom() {
+        let mut emulator = function_test_emulator();
+        emulator.set_reg("S", 1);
+
+        let error = emulator
+            .call_function(emulator.get_reg("PC"), 1)
+            .expect_err("wrapped sentinel must not bypass the ROM write guard");
+
+        assert!(
+            error
+                .as_string()
+                .is_some_and(|message| message.contains("0xFFFFE")),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(emulator.get_reg("S"), 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_rejects_duplicate_masked_stub_addresses() {
+        let mut emulator = function_test_emulator();
+        let pc = emulator.get_reg("PC");
+        let opts = StubOptions {
+            stubs: vec![
+                StubSpec { pc, id: 7 },
+                StubSpec {
+                    pc: pc | 0x0010_0000,
+                    id: 8,
+                },
+            ],
+        };
+
+        let error = emulator
+            .call_function_ex(pc, 1, serde_wasm_bindgen::to_value(&opts).unwrap())
+            .expect_err("masked alias must not silently replace a stub");
+
+        assert!(
+            error
+                .as_string()
+                .is_some_and(|message| message.contains("duplicate stub address")),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[wasm_bindgen_test]
@@ -1370,9 +1538,7 @@ mod tests {
         install_stub_dispatch();
         clear_stub_state();
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let patch = StubPatch {
@@ -1400,9 +1566,7 @@ mod tests {
         clear_stub_state();
         set_stub_error("boom");
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let opts = StubOptions {
@@ -1425,9 +1589,7 @@ mod tests {
         install_stub_dispatch();
         clear_stub_state();
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let sentinel_pc = (pc & 0x0f_0000) | 0xD00D;
@@ -1457,9 +1619,7 @@ mod tests {
         install_stub_dispatch();
         clear_stub_state();
 
-        let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
-        let mut emulator = Pce500Emulator::new();
-        emulator.load_rom(rom).expect("load");
+        let mut emulator = function_test_emulator();
 
         let pc = emulator.get_reg("PC");
         let patch = StubPatch {
