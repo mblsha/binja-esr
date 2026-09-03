@@ -1,3 +1,9 @@
+//! Minimal virtual-time future driver used by legacy diagnostics.
+//!
+//! Its `cycle` is an isolated generic virtual-time coordinate. It is not
+//! connected to `CoreRuntime::cycle_count`, SC62015 instruction timing, or
+//! wall-clock/realtime pacing.
+
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;

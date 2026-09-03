@@ -189,7 +189,7 @@ impl IrqPerfetto {
     about = "Standalone Rust LLAMA runner (ROM selectable; defaults to PC-E500)."
 )]
 struct Args {
-    /// Number of instructions to execute before exiting.
+    /// Maximum machine-scheduler boundaries to execute before exiting.
     #[arg(long, default_value_t = DEFAULT_RUN_STEPS)]
     steps: u64,
 
