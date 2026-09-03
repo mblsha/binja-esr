@@ -1,6 +1,7 @@
 # SC62015 assembler and LLIL audit
 
 Date: 2026-08-30
+Live Binary Ninja requalification: 2026-09-03
 
 This audit covers the Python decoder, assembler, LLIL evaluator, the Rust
 LLAMA decoder/evaluator, the Python-to-Rust bridge, v4 checkpoints, timer
@@ -61,9 +62,19 @@ unit's PCB, package, and unit revisions were not
 recorded, so claims are scoped to that unit. The
 capture tools were invoked from a relocated path, but their private-recorded
 hashes match byte-identical files at tracked legacy paths in the gateware base.
-The live Binary Ninja session was not available for this pass, so no conclusion
-is presented as a live-decompiler finding. The current decoder was preferred
-over stale text exports.
+The merged checkout was subsequently qualified through Binary Ninja's real
+2026 API with `tools/live_binja_llil_qualify.py`. The isolated current-source
+architecture accepted and finalized LLIL for all 905 canonical rows in the
+opcode manifest, rejected the 17 reserved/prefix-only rows, emitted no
+`LLIL_UNIMPL` roots, and passed deterministic 128-entry samples spanning 2,553
+analyzed PC-E500 and 9,412 analyzed IQ-7000 function-entry addresses. One
+PC-E500 and 80 IQ-7000 analysis-skipped functions were excluded rather than
+queried. The current canonicality policy accepted every sampled PC-E500 entry
+and 124 IQ-7000 entries; four IQ-7000 addresses identified as functions by the
+older installed plugin correctly rejected under the current source. The
+harness deliberately loads the checkout under a source-hashed temporary
+architecture name, so an older installed plugin copy cannot make the result
+self-confirming. Static text exports remain secondary evidence.
 
 ## Disposition
 
@@ -188,7 +199,7 @@ is promoted to an ISA fact.
 | Host-authoritative PCE/native shadow | Some host-originated writes bypassed the Rust mirror, while native snapshot defaults could replace live host SFR/IRQ state | Treat the PCE memory image and its `IMR`/`ISR` bytes as authoritative; synchronize every host write into the native shadow, reject split host/native latch or scheduler state, and never let native defaults overwrite the host image. This is bridge-regression evidence (level 5), not hardware evidence |
 | Wide-write/callback atomicity | WAIT/timer writes could remain pending, retrying callback signatures after a body `TypeError` could invoke a side effect twice, and a later byte failure could leave native counters, mirror state, or trace ordering partially advanced | Invoke each callback once after arity inspection, flush deferred writes in order before reporting success, and roll back native CPU/device state, mirror/dirty queues, counters, and global trace ordering on failure. Because an external host byte may already have committed, record uncertain addresses and poison mutation until RESET rereads them from authoritative host memory |
 | Poisoned key APIs | Key injection/release could mutate native keyboard, IRQ, or mirror state and call the host after an earlier callback failure | Gate all four Rust key APIs while poisoned; make each key operation a mirror/keyboard/timer transaction, stop after the first failed callback, roll back native state, and retain the original poison reason. This is bridge-regression evidence (level 5), not hardware evidence |
-| ON-key transaction | Host ON press/release could update SSR, ISR, pending-source metadata, or the native keyboard in different orders and retain a partial state when a callback failed | Treat SSR.ONK, ISR.ONKI, pending-source selection, native keyboard state, and timer bookkeeping as one fail-closed transaction. Release reselects any remaining asserted source instead of inventing or discarding one |
+| ON-key transaction and model input bit | Host ON press/release could update SSR, ISR, pending-source metadata, or the native keyboard in different orders and retain a partial state when a callback failed; the shared runtime also exposed PC-E500's `SSR.3` ON level to IQ-7000 even though its ROM samples `SSR.1` at `F54EF` | Treat the physical SSR level, `ISR.ONKI`, pending-source selection, native keyboard state, and timer bookkeeping as one fail-closed transaction. Select `0x08` for PC-E500 from hardware capture and `0x02` for IQ-7000 from its ROM, keep the level outside raw SSR storage, and make release reselect any remaining asserted source instead of inventing or discarding one |
 | Rust bridge image extraction | A malformed or partial Python memory export could leave the active native mirror partly replaced or produce a padded/truncated snapshot; a rejected LLAMA snapshot could then be silently retried through a different serializer | Require an exact three-item export, exact 1 MiB external and 256-byte internal images, and validated ranges for both mirror initialization and snapshot capture; build a complete candidate off to the side and commit or serialize it only after every extraction and shape check succeeds. When LLAMA is explicitly active, propagate its native saver errors instead of falling back. This is bridge-regression evidence (level 5), not hardware evidence |
 | Snapshot v4 validation and restoration | A malformed late field could mutate a live machine before rejection; Rust JSON duplicate keys were collapsed; LLAMA output could replace scheduler/call state with defaults, truncate timer targets, lose a physically held ON-key level, save stale runtime/range metadata, overwrite read-only ROM, or be silently retried through another serializer; v3 omitted memory-card payload/configuration and carried no proof that its producer had rejected other unrepresented host state; standalone load could add PC-E500 read-only ranges to an IQ-7000 | Reject legacy v3 outright and require a duplicate-free v4 archive with recursively duplicate-free JSON, exact memory/register shapes, strict external/ON-key input-level booleans, internally consistent call/timer/IRQ/keyboard/LCD state, an exact live fallback/read-only range contract, matching device model and active read-only bytes, host-authoritative `IMR`/`ISR`, and a typed card mode/capacity/writability contract plus exact `memory_card.bin`. Core round-trips its held input levels; the PCE host refuses asserted native-only levels rather than erasing them. Refresh metadata from live runtime, validate represented subsystem candidates before commit, save to a temporary file, strict-read it back, sync, and atomically replace the destination. Core/standalone still refuse active SIO, peripheral, RTC, callback, trace-resume, or generic overlay state that v4 does not encode; the Python PCE wrapper likewise refuses custom handler/writable overlays, ambiguous or out-of-image static overlays, custom IMEM callbacks, and queued serial/cassette state. Never change serializer after an explicitly selected LLAMA path fails. These are format/integrity guarantees (level 5), not hardware evidence |
 | Wrapping timer catch-up | Repeatedly adding a period could take unbounded time for a stale deadline or hang near the host `u64` cycle-counter wrap | Compare deadlines with half-range wrapping order and advance missed periods with one widened division, preserving phase in O(1); reject ambiguous periods at or above half-range. This is scheduler-integrity behavior, not a claim about the silicon counter width or timer phase |
@@ -372,9 +383,12 @@ outside that closure:
    asynchronous latency questions. Raw matrix KEYI and MTI/STI-in-handler
    latching are resolved; the remaining items belong to device scheduling and
    peripherals, not alternate meanings of HALT/OFF/WAIT/RETI.
-6. Preserve equivalent raw artifacts for any older cited report that still has
-   only a decoded event table. This is evidence reproducibility, not a silicon
-   semantic question.
+
+The former evidence-reproducibility item is complete in the paired private
+repository: 616 recovered raw JSON captures are checked in as byte-exact
+`.json.zst` artifacts with compressed and restored SHA-256 identities, the
+probe/runner sources, and an executable verification manifest. This archival
+closure does not promote exploratory or excluded captures to hardware evidence.
 
 Static byte matches in a ROM are insufficient evidence: data and misaligned
 instruction streams contain opcode-looking bytes.  A control-flow xref,
@@ -390,6 +404,12 @@ python scripts/check_llama_pre_tables.py
 FORCE_BINJA_MOCK=1 pytest -q sc62015/pysc62015 sc62015/test_arch.py sc62015/test_view.py
 cargo test --manifest-path sc62015/core/Cargo.toml --all-features
 cargo test --manifest-path sc62015/rustcore/Cargo.toml
+```
+
+With the current ROM open in Binary Ninja, run the real-API integration pass:
+
+```bash
+binja-cli --filename /path/to/rom.bin python -f "$(pwd)/tools/live_binja_llil_qualify.py"
 ```
 
 The paired private ROM-evidence repository contains exact decoder commands,

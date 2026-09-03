@@ -13,6 +13,31 @@ descriptions of a valid, implemented opcode. The public evaluator keeps
 unsupported or malformed encodings fail-closed. This does **not** promote
 unobserved peripheral timing or reserved encodings into ISA facts.
 
+## 2026-09-03 post-audit qualification
+
+- A real Binary Ninja session, isolated from the older installed plugin copy,
+  accepted and finalized all 905 canonical manifest rows, rejected all 17
+  reserved/prefix-only rows, and emitted no root `LLIL_UNIMPL`. Distributed
+  128-entry ROM samples passed for both PC-E500 and IQ-7000.
+- The PC-E500 full-ROM boot and PF1 flow passed on the Python and shared Rust
+  runtime paths. The IQ-7000 full-ROM Function Runner reached `LINK READY`,
+  returned a checksummed seven-entry directory, imported two MEMOs through the
+  paced COM/SIO bridge, exited through the ROM's ON-key path, and recalled the
+  final MEMO through the normal UI.
+- The final local suites passed 1,162 Python tests with two skips, 510 shared
+  core Rust tests with six explicitly ignored cases, 26 PyO3 bridge tests, and
+  31 PC-Link host-tool tests.
+- That IQ-7000 proof exposed a real machine-profile bug rather than an ISA
+  defect: PC-E500 hardware observes the physical ON level at `SSR.3` (`0x08`),
+  while IQ-7000 ROM helper `F54EF` explicitly samples `SSR.1` (`0x02`). Both
+  complete Rust runtimes now select the input mask from the device profile.
+  A held input remains external to raw SSR storage.
+- The private FCS/IOCS trace sweep completed all 123 PC-E500 entries without a
+  runtime error, missing trace, or generic call-graph name. IQ-7000 produced
+  traces for 104 of 105 applicable IOCS entries; command `0x61` is unreachable
+  through that ROM dispatcher. One device-specific `0x18` return code and
+  uncertain ROM symbol names remain analysis/spec work, not CPU-core failures.
+
 ## Runtime contract table
 
 | Area | Current basis | Runtime policy |
@@ -21,8 +46,8 @@ unobserved peripheral timing or reserved encodings into ISA facts.
 | Reserved opcodes, malformed PRE/modes/selectors, unsupported `F` bits, noncanonical address encodings | No valid-ISA claim | Reject atomically before observable scheduling or device mutation |
 | Interrupt bit layout and RX, EX, TX, ON, KEY, ST, MT dispatcher priority | Stock-ROM control flow | Match both ROM dispatchers; do not claim that priority is hard-wired in silicon |
 | Raw selected-matrix `KEYI` and MTI/STI status latching during an active handler | Archived PC-E500 device probes | Preserve the measured narrow behavior; host translated events remain separate |
-| `RETI` acknowledgement | ROM explicitly acknowledges ISR before `RETI`; isolated silicon case is unmeasured | Do not invent an implicit acknowledgement |
-| ON-key assertion/re-latch timing | Functional model plus ROM acknowledgement path | Level-style emulator contract; exact latency and debounce remain unverified |
+| `RETI` acknowledgement | Archived PC-E500 probes with each defined ISR bit, and all bits together, deliberately left asserted | Restore the frame and leave `ISR` unchanged; acknowledgement remains handler/peripheral work |
+| ON-key input and assertion/re-latch timing | PC-E500 hardware level/latch traces plus IQ-7000 ROM `F54EF` | Use model-specific SSR input bits (`0x08` PC-E500, `0x02` IQ-7000) with a shared `ISR.ONKI` latch; exact latency and debounce remain unverified |
 | Neutral external `EXI` input | Functional test hook only | Level-style emulator contract with no claimed connector or peripheral meaning |
 | SIO RX/TX ready interrupts and delays | ROM-compatible functional model | Advance from relative instruction timing; do not claim measured baud/status latency |
 | PC-E500 timer cadence | Published nominal periods mapped onto a compatibility timebase | Mark absolute cadence and SCR divider phase provisional |
@@ -56,9 +81,7 @@ instruction descriptions:
 4. Identify the physical source and level/edge policy of `EXI` on each machine.
 5. Measure SIO TX-ready, RX-ready, handshake, timeout, and interrupt latency at
    representative UCR settings.
-6. Isolate `RETI` with an unacknowledged ISR bit to determine whether silicon
-   performs any acknowledgement beyond restoring the frame.
-7. Capture write data/partial visibility for external boundary-crossing writes;
+6. Capture write data/partial visibility for external boundary-crossing writes;
    existing gateware established address/count/order but not trustworthy data.
 
 Until a capture with source, raw output, hashes, and tested scope is archived,

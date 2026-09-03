@@ -26,7 +26,7 @@ configuration knobs, and how pytest exercises those behaviours.
 - `sc62015.pysc62015.cached_decoder`
   - `CachedFetchDecoder`: drop-in replacement for `binja_test_mocks.coding.Decoder` with an LRU byte cache (`_CACHE_LIMIT = 32`). Provides `peek`, `unsigned_byte`, `advance`, `get_cache_stats`, and `clear_cache`. The emulator falls back to the uncached `FetchDecoder` when importing fails.
 - `sc62015.pysc62015.intrinsics`
-  - Intrinsic evaluators: `eval_intrinsic_halt`, `eval_intrinsic_off`, and `eval_intrinsic_reset` accept the LLIL node, register interface, memory, state, and flag callbacks and perform the current model side effects. `eval_intrinsic_tcl` deliberately raises because the timer-phase behavior is not implemented or hardware-traced.
+  - Intrinsic evaluators: `eval_intrinsic_halt`, `eval_intrinsic_off`, and `eval_intrinsic_reset` accept the LLIL node, register interface, memory, state, and flag callbacks and perform the current model side effects. `eval_intrinsic_tcl` applies the hardware-verified independent `LCC.STCL`/`LCC.MTCL` phase restarts through a required timer hook, while leaving `LCC` and already-latched `ISR` bits unchanged; it fails closed only when the host has no phase-clear hook.
   - `_enter_low_power_state`: shared helper for HALT/OFF side effects.
   - `register_sc62015_intrinsics`: registers the above handlers with `binja_test_mocks.eval_llil.register_intrinsic()`; called by `Emulator.__init__`.
 - `sc62015.pysc62015.instr` package
