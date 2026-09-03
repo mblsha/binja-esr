@@ -255,6 +255,7 @@ pub struct MemoryImage {
     memory_card_state: MemoryCardState,
     retained_memory_card: Option<RetainedMemoryCard>,
     overlay_epoch: u64,
+    overlay_logging: bool,
     read_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_log: RefCell<VecDeque<MemoryAccessLog>>,
     write_capture: Option<HashMap<u32, u8>>,
@@ -305,6 +306,9 @@ impl MemoryImage {
             memory_card_state: MemoryCardState::Unconfigured,
             retained_memory_card: None,
             overlay_epoch: 0,
+            // Direct MemoryImage diagnostics historically collect a bounded
+            // access history. Standalone CoreRuntime disables it explicitly.
+            overlay_logging: true,
             read_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_log: RefCell::new(VecDeque::with_capacity(OVERLAY_LOG_LIMIT)),
             write_capture: None,
@@ -1054,6 +1058,19 @@ impl MemoryImage {
         self.write_log.borrow_mut().clear();
     }
 
+    /// Enable the bounded, allocation-heavy overlay access history used by
+    /// diagnostics. Perfetto events and exact write capture are independent.
+    pub fn set_overlay_logging(&mut self, enabled: bool) {
+        self.overlay_logging = enabled;
+        if !enabled {
+            self.clear_overlay_logs();
+        }
+    }
+
+    pub fn overlay_logging_enabled(&self) -> bool {
+        self.overlay_logging
+    }
+
     pub fn set_internal_ram_mirror(&mut self, enabled: bool) {
         self.internal_ram_mirror = enabled;
     }
@@ -1368,16 +1385,19 @@ impl MemoryImage {
                 if !self.overlays[idx].contains(addr) {
                     continue;
                 }
-                let name = self.overlays[idx].name.clone();
                 let (ok, previous) = {
                     let overlay = &mut self.overlays[idx];
                     overlay.write(addr, byte, pc)
                 };
                 if ok {
                     self.record_write_capture(addr, byte);
-                    self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
+                    if self.overlay_logging {
+                        let name = self.overlays[idx].name.clone();
+                        self.push_overlay_log(AccessKind::Write, addr, byte, pc, &name, previous);
+                    }
                     let mut guard = perfetto_guard();
                     guard.with_some(|tracer| {
+                        let name = &self.overlays[idx].name;
                         if let Some((op_idx, pc_ctx)) = crate::llama::eval::perfetto_instr_context()
                         {
                             let substep = crate::llama::eval::perfetto_next_substep();
@@ -1386,12 +1406,12 @@ impl MemoryImage {
                                 pc_ctx,
                                 addr,
                                 byte as u32,
-                                &name,
+                                name,
                                 8,
                                 substep,
                             );
                         } else {
-                            tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, &name, 8);
+                            tracer.record_mem_write_at_cycle(0, pc, addr, byte as u32, name, 8);
                         }
                     });
                     handled = true;
@@ -1414,6 +1434,9 @@ impl MemoryImage {
         overlay: &str,
         previous: Option<u8>,
     ) {
+        if !self.overlay_logging {
+            return;
+        }
         let log = MemoryAccessLog {
             kind,
             address,
@@ -2045,6 +2068,19 @@ mod tests {
         assert_eq!(log[0].overlay, "test_overlay");
         assert_eq!(log[0].value, 0xAB);
         assert_eq!(log[0].pc, Some(0x0100));
+    }
+
+    #[test]
+    fn disabled_overlay_history_does_not_change_overlay_access() {
+        let mut mem = MemoryImage::new();
+        mem.add_ram_overlay(0x2000, 1, "test_overlay");
+        mem.set_overlay_logging(false);
+
+        assert_eq!(mem.store_with_pc(0x2000, 8, 0xAB, Some(0x0100)), Some(()));
+        assert_eq!(mem.load_with_pc(0x2000, 8, Some(0x0101)), Some(0xAB));
+
+        assert!(mem.overlay_read_log().is_empty());
+        assert!(mem.overlay_write_log().is_empty());
     }
 
     #[test]

@@ -427,6 +427,9 @@ impl CoreRuntime {
         // synchronously, so a second unconsumed dirty queue only grows without
         // bound. The PyO3 mirror keeps tracking enabled on its own MemoryImage.
         memory.set_dirty_tracking(false);
+        // Overlay access history is a diagnostic feature that clones a label
+        // on every transaction. Perfetto and exact write capture remain live.
+        memory.set_overlay_logging(false);
         let mut rt = Self {
             metadata: SnapshotMetadata::default(),
             memory,
@@ -3159,6 +3162,7 @@ mod tests {
     fn core_runtime_does_not_accumulate_host_mirror_dirty_queues() {
         let mut runtime = CoreRuntime::new();
         assert!(!runtime.memory.dirty_tracking_enabled());
+        assert!(!runtime.memory.overlay_logging_enabled());
 
         runtime.memory.write_external_byte(0x1234, 0x56);
         runtime.memory.write_internal_byte(IMEM_SCR_OFFSET, 0x78);
@@ -6451,6 +6455,7 @@ mod tests {
     #[test]
     fn runtime_overlay_helpers_route_through_memory_image() {
         let mut rt = CoreRuntime::new();
+        rt.memory.set_overlay_logging(true);
         rt.add_ram_overlay(0x8000, 2, "runtime_ram");
         rt.clear_overlay_logs();
         let _ = rt.memory.store_with_pc(0x8000, 16, 0xBEEF, Some(0x0100));
