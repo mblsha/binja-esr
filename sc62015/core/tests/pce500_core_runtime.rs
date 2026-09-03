@@ -68,14 +68,10 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     rt.power_on_reset().expect("valid ROM reset vector");
 
     rt.step(15_000).expect("boot before key press");
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, false, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, true);
     // Mirror the ROM test harness: hold PF1 for a while so firmware polling/IRQ delivery sees it.
     rt.step(40_000).expect("run while PF1 is held");
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, true, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, false);
     rt.step(800_000 - 15_000 - 40_000)
         .expect("execute after PF1 release");
 
@@ -118,13 +114,9 @@ fn pce500_pf1_reaches_next_screen_via_core_runtime() {
         "expected boot header before PF1, got {boot_lines:?}"
     );
 
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, false, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, true);
     rt.step(PF1_HOLD_STEPS).expect("run while PF1 is held");
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, true, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, false);
     rt.step(MAIN_MENU_STEPS - BOOT_STEPS - PF1_HOLD_STEPS)
         .expect("execute after first PF1 release");
 
@@ -135,14 +127,10 @@ fn pce500_pf1_reaches_next_screen_via_core_runtime() {
         "expected main menu header after PF1, got {main_lines:?}"
     );
 
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, false, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, true);
     rt.step(PF1_HOLD_STEPS)
         .expect("run while PF1 is held (second screen)");
-    if let Some(kb) = rt.keyboard.as_mut() {
-        kb.inject_matrix_event(PF1_CODE, true, &mut rt.memory, rt.timer.kb_irq_enabled);
-    }
+    rt.set_physical_matrix_key(PF1_CODE, false);
 
     let mut waited: usize = 0;
     let mut last_lines = main_lines;

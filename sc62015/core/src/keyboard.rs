@@ -270,6 +270,10 @@ impl KeyboardMatrix {
         self.raw_kil = enabled;
     }
 
+    pub fn matrix_code_capacity(&self) -> usize {
+        self.states.len()
+    }
+
     #[inline]
     fn active_column_mask(&self) -> u16 {
         let columns = u16::from(self.kol) | (u16::from(self.koh) << 8);

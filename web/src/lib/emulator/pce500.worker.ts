@@ -314,7 +314,7 @@ function applyVirtualReleaseBudget(stepped: number) {
 		if (next <= 0) {
 			pendingVirtualRelease.delete(code);
 			pressedCodes.delete(code);
-			emulator.inject_matrix_event?.(code, true);
+			emulator.release_matrix_code?.(code);
 		} else {
 			pendingVirtualRelease.set(code, next);
 		}
@@ -578,7 +578,7 @@ async function handleRequest(msg: WorkerRequest) {
 					if (!pressedCodes.has(msg.code)) {
 						pressedCodes.add(msg.code);
 						pendingVirtualRelease.delete(msg.code);
-						emulator.inject_matrix_event?.(msg.code, false);
+						emulator.press_matrix_code?.(msg.code);
 					}
 				} else {
 					if (pressedCodes.has(msg.code)) {

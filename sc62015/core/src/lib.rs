@@ -645,6 +645,61 @@ impl CoreRuntime {
             .write_external_byte(iq7000::CLOCK_INITIALIZED_FLAG, 0);
     }
 
+    /// Change one physical keyboard-matrix contact. The selected electrical
+    /// KIL level is sampled at the next scheduler boundary; this path does not
+    /// inject a translated FIFO byte or directly assert `ISR.KEYI`.
+    pub fn set_physical_matrix_key(&mut self, code: u8, pressed: bool) -> bool {
+        let Some(keyboard) = self.keyboard.as_mut() else {
+            return false;
+        };
+        if usize::from(code) >= keyboard.matrix_code_capacity() {
+            return false;
+        }
+        if pressed {
+            keyboard.press_matrix_code(code, &mut self.memory);
+        } else {
+            keyboard.release_matrix_code(code, &mut self.memory);
+        }
+        true
+    }
+
+    /// Queue an already-translated host input byte without changing the
+    /// physical matrix or manufacturing a silicon KEYI level. This is used for
+    /// non-matrix inputs such as digitizer samples.
+    pub fn queue_translated_key_event(&mut self, code: u8) -> usize {
+        let Some(keyboard) = self.keyboard.as_mut() else {
+            return 0;
+        };
+        let events = keyboard.inject_input_event(code, &mut self.memory, self.timer.kb_irq_enabled);
+        if events > 0 {
+            self.timer.key_irq_latched = true;
+        }
+        events
+    }
+
+    /// Compatibility helper for tests that require an immediate debounced
+    /// matrix FIFO event as well as a physical contact transition. Normal UI
+    /// input should use `set_physical_matrix_key`.
+    pub fn inject_immediate_matrix_event_for_diagnostics(
+        &mut self,
+        code: u8,
+        release: bool,
+    ) -> usize {
+        let Some(keyboard) = self.keyboard.as_mut() else {
+            return 0;
+        };
+        let events = keyboard.inject_matrix_event(
+            code,
+            release,
+            &mut self.memory,
+            self.timer.kb_irq_enabled,
+        );
+        if events > 0 {
+            self.timer.key_irq_latched = true;
+        }
+        events
+    }
+
     pub fn enable_sio_stub(&mut self) {
         if self.sio.is_none() {
             let mut stub = SioStub::new();
@@ -4502,6 +4557,49 @@ mod tests {
         assert!(
             !rt.timer.irq_pending,
             "pending IRQ should not arm when kb IRQs are disabled"
+        );
+    }
+
+    #[test]
+    fn translated_input_does_not_change_physical_matrix_or_assert_keyi() {
+        let mut rt = CoreRuntime::for_model(DeviceModel::Iq7000, &[]).unwrap();
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.memory.write_internal_byte(IMEM_KOL_OFFSET, 0xFF);
+        rt.memory.write_internal_byte(IMEM_KOH_OFFSET, 0xFF);
+
+        assert_eq!(rt.queue_translated_key_event(0xA3), 1);
+        assert_eq!(rt.keyboard.as_ref().unwrap().compute_physical_kil(), 0);
+        assert_eq!(rt.keyboard.as_ref().unwrap().fifo_snapshot(), vec![0xA3]);
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            0
+        );
+        assert!(!rt.timer.irq_pending);
+        assert!(rt.timer.key_irq_latched, "host FIFO state remains visible");
+    }
+
+    #[test]
+    fn physical_input_reaches_keyi_only_when_selected() {
+        let mut rt = CoreRuntime::for_model(DeviceModel::PcE500, &[]).unwrap();
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        assert!(rt.set_physical_matrix_key(0x10, true));
+        assert!(rt.keyboard.as_ref().unwrap().fifo_snapshot().is_empty());
+
+        rt.refresh_raw_key_irq_level();
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            0,
+            "an unselected physical contact is not a KEYI source"
+        );
+
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .handle_write(IMEM_KOL_OFFSET, 0x04, &mut rt.memory);
+        rt.refresh_raw_key_irq_level();
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_KEYI,
+            0
         );
     }
 

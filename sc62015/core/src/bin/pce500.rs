@@ -4276,16 +4276,8 @@ fn validate_stable_vector_transfer(
     Ok((target, target_len))
 }
 
-fn runtime_inject_matrix_event(runtime: &mut CoreRuntime, code: u8, release: bool) {
-    let Some(keyboard) = runtime.keyboard.as_mut() else {
-        return;
-    };
-    keyboard.inject_matrix_event(
-        code,
-        release,
-        &mut runtime.memory,
-        runtime.timer.kb_irq_enabled,
-    );
+fn runtime_set_physical_matrix_event(runtime: &mut CoreRuntime, code: u8, release: bool) {
+    runtime.set_physical_matrix_key(code, !release);
 }
 
 fn runtime_tap_event(
@@ -4293,9 +4285,9 @@ fn runtime_tap_event(
     code: u8,
     hold_instructions: usize,
 ) -> Result<(), Box<dyn Error>> {
-    runtime_inject_matrix_event(runtime, code, false);
+    runtime_set_physical_matrix_event(runtime, code, false);
     runtime.step(hold_instructions)?;
-    runtime_inject_matrix_event(runtime, code, true);
+    runtime_set_physical_matrix_event(runtime, code, true);
     Ok(())
 }
 
@@ -4315,14 +4307,7 @@ fn runtime_tap_key(
 fn runtime_apply_key_event(runtime: &mut CoreRuntime, key: AutoKeyKind, release: bool) {
     match key {
         AutoKeyKind::Matrix(code) => {
-            let Some(keyboard) = runtime.keyboard.as_mut() else {
-                return;
-            };
-            if release {
-                keyboard.release_matrix_code(code, &mut runtime.memory);
-            } else {
-                keyboard.press_matrix_code(code, &mut runtime.memory);
-            }
+            runtime.set_physical_matrix_key(code, !release);
         }
         AutoKeyKind::Chord { modifier, code } => {
             if release {
@@ -4333,15 +4318,12 @@ fn runtime_apply_key_event(runtime: &mut CoreRuntime, key: AutoKeyKind, release:
                 runtime_apply_key_event(runtime, AutoKeyKind::Matrix(code), false);
             }
         }
-        AutoKeyKind::Event(code) => runtime_inject_matrix_event(runtime, code, release),
+        AutoKeyKind::Event(code) => runtime_set_physical_matrix_event(runtime, code, release),
         AutoKeyKind::InputEvent(code) => {
             if release {
                 return;
             }
-            let Some(keyboard) = runtime.keyboard.as_mut() else {
-                return;
-            };
-            keyboard.inject_input_event(code, &mut runtime.memory, runtime.timer.kb_irq_enabled);
+            runtime.queue_translated_key_event(code);
         }
         AutoKeyKind::OnKey => {
             if release {
@@ -4574,14 +4556,14 @@ fn run_iq7000_pclink_ui_path(
         runtime_tap_event(&mut runtime, 0x08, 1_000)?; // return to a fresh MEMO prompt
         runtime.step(250_000)?;
     }
-    runtime_inject_matrix_event(&mut runtime, 0x02, false); // physical SHIFT down
+    runtime_set_physical_matrix_event(&mut runtime, 0x02, false); // physical SHIFT down
     runtime.step(80_000)?;
-    runtime_inject_matrix_event(&mut runtime, 0x1D, false); // shifted C / OPTION
+    runtime_set_physical_matrix_event(&mut runtime, 0x1D, false); // shifted C / OPTION
     runtime.step(500_000)?;
-    runtime_inject_matrix_event(&mut runtime, 0x1D, true);
-    runtime_inject_matrix_event(&mut runtime, 0x02, true); // SHIFT up before selecting 4
+    runtime_set_physical_matrix_event(&mut runtime, 0x1D, true);
+    runtime_set_physical_matrix_event(&mut runtime, 0x02, true); // SHIFT up before selecting 4
     runtime.step(80_000)?;
-    runtime_tap_event(&mut runtime, 0x22, 1_000)?; // 4 -> PC LINK
+    runtime_tap_event(&mut runtime, 0x22, 35_000)?; // physical 4 -> PC LINK
     runtime.step(800_000)?;
 
     let lcd_lines = runtime_lcd_lines(&runtime, text_decoder);
