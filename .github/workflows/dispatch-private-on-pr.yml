@@ -5,7 +5,7 @@ on:
     types: [opened, reopened, synchronize]
 
 jobs:
-  dispatch:
+  dispatch-private-rom-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-latest
     steps:
@@ -19,12 +19,4 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: token $TOKEN" \
             https://api.github.com/repos/mblsha/binja-esr-tests/dispatches \
-            -d "{\"event_type\":\"rom-tests\",\"client_payload\":{\"sha\":\"$SHA\",\"pr\":$PR}}"
-
-  rom_tests_check:
-    name: private/rom-tests
-    needs: dispatch
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Triggered private ROM tests via repository_dispatch."
+            -d "{\"event_type\":\"rom-tests\",\"client_payload\":{\"sha\":\"$SHA\",\"pr\":$PR,\"suite\":\"bounded\",\"models\":[\"pc-e500\",\"iq-7000\"]}}"
