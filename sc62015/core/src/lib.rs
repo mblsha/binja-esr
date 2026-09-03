@@ -1713,7 +1713,9 @@ impl CoreRuntime {
         // synchronous call. Sample once so the untraced hot path does not
         // enter the process-global tracer handle for every boundary.
         let perfetto_active = PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some();
-        for _ in 0..boundaries {
+        let mut remaining = boundaries;
+        while remaining != 0 {
+            remaining -= 1;
             let halted_at_step_entry = self.state.is_halted();
             let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
             // Reject quarantined/invalid encodings before level re-latching,
@@ -2116,6 +2118,37 @@ impl CoreRuntime {
                     self.arm_pending_irq_from_isr();
                 }
                 self.refresh_raw_key_irq_level();
+                // With no trace active, a synchronous step call cannot
+                // receive new host input between idle boundaries. Skip to
+                // the next sub-timer deadline (or the end of the caller's
+                // budget) while preserving the frozen main-timer phase.
+                if self.state.is_halted() && !perfetto_active && remaining != 0 {
+                    let idle_budget = u64::try_from(remaining)
+                        .unwrap_or(u64::MAX)
+                        .min((1_u64 << 63) - 1);
+                    let end_cycle = new_cycle.wrapping_add(idle_budget);
+                    let target_cycle = self
+                        .timer
+                        .next_fire_cycle_in_span_selected(new_cycle, end_cycle, false, true)
+                        .unwrap_or(end_cycle);
+                    let skipped = target_cycle.wrapping_sub(new_cycle);
+                    if skipped != 0 {
+                        self.timer.defer_mti(skipped);
+                        self.metadata.cycle_count = target_cycle;
+                        self.tick_timers_and_keyboard_selected(target_cycle, false, true);
+                        remaining -= usize::try_from(skipped)
+                            .expect("idle skip is bounded by the usize input budget");
+                        if self
+                            .memory
+                            .read_internal_byte(IMEM_ISR_OFFSET)
+                            .is_some_and(|isr| isr != 0)
+                        {
+                            self.state.set_halted(false);
+                            self.arm_pending_irq_from_isr();
+                        }
+                        self.refresh_raw_key_irq_level();
+                    }
+                }
                 if perfetto_active {
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
@@ -4998,6 +5031,58 @@ mod tests {
             "the subclock must continue during HALT"
         );
         assert!(!rt.state.is_halted(), "STI must wake HALT");
+    }
+
+    #[test]
+    fn batched_halt_idle_matches_one_boundary_steps_through_sti_wake() {
+        fn halted_runtime() -> CoreRuntime {
+            let mut runtime = CoreRuntime::new();
+            runtime.timer.enabled = true;
+            runtime.timer.configure_scr_periods(3, 3, 7, 7, 0, 0);
+            runtime.timer.next_mti = 3;
+            runtime.timer.next_sti = 7;
+            runtime.state.set_halted(true);
+            runtime
+        }
+
+        let mut batched = halted_runtime();
+        let mut iterative = halted_runtime();
+        batched.step(25).expect("batched HALT run");
+        for _ in 0..25 {
+            iterative.step(1).expect("one HALT boundary");
+        }
+
+        assert_eq!(batched.cycle_count(), iterative.cycle_count());
+        assert_eq!(batched.instruction_count(), iterative.instruction_count());
+        assert_eq!(batched.state.pc(), iterative.state.pc());
+        assert_eq!(batched.state.power_state(), iterative.state.power_state());
+        assert_eq!(batched.timer.next_mti, iterative.timer.next_mti);
+        assert_eq!(batched.timer.next_sti, iterative.timer.next_sti);
+        assert_eq!(
+            batched.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
+            iterative.memory.read_internal_byte_silent(IMEM_ISR_OFFSET)
+        );
+    }
+
+    #[test]
+    fn batched_halt_idle_matches_one_boundary_steps_without_timers() {
+        let mut batched = CoreRuntime::new();
+        batched.timer.enabled = false;
+        batched.state.set_halted(true);
+        let mut iterative = CoreRuntime::new();
+        iterative.timer.enabled = false;
+        iterative.state.set_halted(true);
+
+        batched.step(100_000).expect("batched HALT run");
+        for _ in 0..100_000 {
+            iterative.step(1).expect("one HALT boundary");
+        }
+
+        assert_eq!(batched.cycle_count(), 100_000);
+        assert_eq!(batched.cycle_count(), iterative.cycle_count());
+        assert_eq!(batched.timer.next_mti, iterative.timer.next_mti);
+        assert_eq!(batched.timer.next_sti, iterative.timer.next_sti);
+        assert_eq!(batched.state.power_state(), iterative.state.power_state());
     }
 
     #[test]
