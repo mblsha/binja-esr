@@ -3576,6 +3576,23 @@ fn write_runtime_diagnostic_artifacts(
     Ok(())
 }
 
+fn print_runtime_lcd_bus_writes(runtime: &mut CoreRuntime, enabled: bool) {
+    if !enabled {
+        return;
+    }
+    for (count, write) in runtime.take_lcd_bus_write_capture().into_iter().enumerate() {
+        println!(
+            "[lcd-write] op={} timing={} pc=0x{:05X} addr=0x{:05X} value=0x{:02X} count={}",
+            write.instruction_index,
+            write.timing_units,
+            write.pc,
+            write.address,
+            write.value,
+            count + 1
+        );
+    }
+}
+
 fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
@@ -4664,6 +4681,9 @@ fn run_iq7000_pclink_ui_path(
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
+    if args.lcd_log {
+        runtime.begin_lcd_bus_write_capture(args.lcd_log_limit.unwrap_or(50) as usize);
+    }
 
     runtime.step(500_000)?;
     runtime_tap_event(&mut runtime, 0x08, 1_000)?; // MEMO
@@ -4750,6 +4770,7 @@ fn run_iq7000_pclink_ui_path(
             println!("  {line}");
         }
     }
+    print_runtime_lcd_bus_writes(&mut runtime, args.lcd_log);
     if let Some(path) = args.snapshot_out.as_ref() {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -4767,9 +4788,6 @@ fn run_iq7000_pclink_ui_path(
 
 fn core_runtime_unsupported_options(args: &Args) -> Vec<&'static str> {
     let mut unsupported = Vec::new();
-    if args.lcd_log || args.lcd_log_limit.is_some() {
-        unsupported.push("--lcd-log/--lcd-log-limit");
-    }
     if args.dump_bus_trace.is_some() {
         unsupported.push("--dump-bus-trace");
     }
@@ -5017,6 +5035,9 @@ fn run_core_runtime_path(
         }
         guard.replace(Some(PerfettoTracer::new(args.perfetto_path.clone())));
     }
+    if args.lcd_log {
+        runtime.begin_lcd_bus_write_capture(args.lcd_log_limit.unwrap_or(50) as usize);
+    }
 
     let started = Instant::now();
     let execution_result = (|| -> Result<(), Box<dyn Error>> {
@@ -5055,6 +5076,7 @@ fn run_core_runtime_path(
     } else {
         Ok(None)
     };
+    print_runtime_lcd_bus_writes(&mut runtime, args.lcd_log);
     execution_result?;
     trace_result?;
 

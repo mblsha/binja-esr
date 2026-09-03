@@ -69,7 +69,7 @@ The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captur
 ```bash
 cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
   --model iq-7000 \
-  --runtime legacy \
+  --runtime core \
   --key-seq "memo,text:PASSPORT NO.\\nM6711888\\nEXPIRES 12/25/90,memo-enter,memo,search-down" \
   --capture-png /tmp/iq7000-a0.png \
   --capture-json /tmp/iq7000-a0.json \
@@ -79,10 +79,10 @@ cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
 
 Ordinary headless execution uses the shared `CoreRuntime`, matching the WASM,
 terminal, and IQ-7000 PC-Link frontends. PC stop/trace, final LCD provenance,
-and structured memory probes now run on that same scheduler. Historical
-trace-replay boot overlays, raw bus/LCD transaction logging, and snapshots
-still require an explicit `--runtime legacy`; unsupported combinations fail
-instead of silently changing schedulers.
+structured memory probes, and exact bounded LCD-write logging now run on that
+same scheduler. Historical trace-replay boot overlays, raw external-bus
+transaction logging, and snapshots still require an explicit legacy runtime;
+unsupported combinations fail instead of silently changing schedulers.
 
 Runtime `cycle_count` advances in the SC62015 relative timing units documented
 by the instruction table: a NOP is one unit, conditional/counting forms use
