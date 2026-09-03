@@ -83,10 +83,14 @@ snapshot, and structured debug-probe switches require an explicit
 `--runtime legacy`; unsupported combinations fail instead of silently changing
 schedulers.
 
-Runtime `cycle_count` and timer periods currently use provisional scheduler
-timing units. They are not calibrated oscillator cycles: PC-E500 absolute timer
-cadence and IQ-7000 timing still require machine-level qualification. CLI timing
-diagnostics label this basis explicitly.
+Runtime `cycle_count` advances in the SC62015 relative timing units documented
+by the instruction table: a NOP is one unit, conditional/counting forms use
+their selected path and initial `I`, and each fused PRE adds one unit. Forms
+without a complete published total (the D8-DB transfer direction, HALT/OFF
+entry, IR, and RESET) retain explicitly provisional compatibility values.
+These units are not calibrated oscillator cycles: PC-E500 absolute timer
+cadence and IQ-7000 timing still require machine-level qualification. CLI
+timing diagnostics label this basis explicitly.
 
 The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
 CPU differential/parity tools. Their machine scheduler and peripheral callbacks

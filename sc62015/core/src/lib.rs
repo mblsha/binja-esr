@@ -1716,7 +1716,18 @@ impl CoreRuntime {
                             ));
                         }
                     }
-                    Some(silent_opcode)
+                    let timing = crate::llama::timing::PreparedInstructionTiming::prepare(
+                        silent_opcode,
+                        pc,
+                        crate::llama::dispatch::lookup,
+                        |address| bus.peek_byte_silent_at(address, pc),
+                    )
+                    .map_err(|error| {
+                        CoreError::Other(format!(
+                            "preflight timing for opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
+                        ))
+                    })?;
+                    Some((silent_opcode, timing))
                 } else {
                     None
                 };
@@ -1753,7 +1764,7 @@ impl CoreRuntime {
                     let _discarded_opcode = bus.load(pc, 8);
                 }
 
-                if let Some(silent_opcode) = silent_prepared_opcode {
+                if let Some((silent_opcode, timing)) = silent_prepared_opcode {
                     let opcode = bus.load(pc, 8) as u8;
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
@@ -1784,7 +1795,7 @@ impl CoreRuntime {
                         ),
                         _ => None,
                     };
-                    Some((opcode, transfer))
+                    Some((opcode, transfer, timing))
                 } else {
                     None
                 }
@@ -1983,13 +1994,14 @@ impl CoreRuntime {
                     .map(LoopIrqSource::from_name);
 
                 let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                let (prepared_opcode, prepared_transfer) =
-                    prepared_instruction.ok_or_else(|| {
+                let (prepared_opcode, prepared_transfer, prepared_timing) = prepared_instruction
+                    .ok_or_else(|| {
                         CoreError::Other(
                             "running CPU reached execution without a prepared opcode".to_string(),
                         )
                     })?;
-                let (opcode, instr_len, pc_after, wait_loops) = {
+                let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
+                let (opcode, instr_len, pc_after) = {
                     let keyboard_ptr = self
                         .keyboard
                         .as_mut()
@@ -2039,17 +2051,6 @@ impl CoreRuntime {
                         state_ptr: &self.state as *const LlamaState,
                     };
                     let opcode = prepared_opcode;
-                    // Capture WAIT loop count before execution (executor clears I).
-                    let wait_loops = if opcode == 0xEF {
-                        let raw_i = self.state.get_reg(RegName::I) & mask_for(RegName::I);
-                        if raw_i == 0 {
-                            mask_for(RegName::I) + 1
-                        } else {
-                            raw_i
-                        }
-                    } else {
-                        0
-                    };
                     let instr_len = match self.executor.execute_with_vector_transfer(
                         opcode,
                         &mut self.state,
@@ -2064,7 +2065,7 @@ impl CoreRuntime {
                         }
                     };
                     let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                    (opcode, instr_len, pc_after, wait_loops)
+                    (opcode, instr_len, pc_after)
                 };
                 if opcode == 0xFF {
                     // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
@@ -2106,10 +2107,14 @@ impl CoreRuntime {
                 }
                 self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
-                // Advance cycles: one for the opcode plus simulated WAIT idle cycles, mirroring Python
-                // _simulate_wait which burns I cycles and ticks timers/keyboard each iteration.
+                // Advance in documented SC62015 relative timing units.  The
+                // evaluator has already performed every fail-closed check, so
+                // devices only observe time for an instruction that retired.
                 let run_timer_cycles = true;
-                let cycle_increment = 1u64.wrapping_add(wait_loops as u64);
+                let sequential_pc = pc_before.wrapping_add(u32::from(instr_len)) & ADDRESS_MASK;
+                let branch_taken = matches!(prepared_timing.resolved_opcode(), 0x14..=0x1f)
+                    && pc_after != sequential_pc;
+                let cycle_increment = prepared_timing.timing_units(initial_i, branch_taken);
                 let prev_cycle = self.metadata.cycle_count;
                 let new_cycle = prev_cycle.wrapping_add(cycle_increment);
                 if run_timer_cycles {
@@ -5651,6 +5656,26 @@ mod tests {
         let isr = rt.memory.read_internal_byte(0xFC).unwrap_or(0);
         assert_eq!(isr & 0x01, 0x01, "MTI should set ISR bit after first step");
         assert_eq!(rt.metadata.cycle_count, 1);
+    }
+
+    #[test]
+    fn runtime_cycle_counter_uses_documented_instruction_units() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_slice(
+            0,
+            &[
+                0x08, 0x55, // MV A,55H: 2
+                0x32, 0xc8, 0x20, 0x21, // PRE + MV (20H),(21H): 1 + 6
+            ],
+        );
+        rt.memory.write_internal_byte(0x21, 0xa5);
+        rt.state.set_pc(0);
+
+        rt.step(1).expect("execute immediate move");
+        assert_eq!(rt.cycle_count(), 2);
+        rt.step(1).expect("execute fused PRE move");
+        assert_eq!(rt.cycle_count(), 9);
+        assert_eq!(rt.memory.read_internal_byte(0x20), Some(0xa5));
     }
 
     #[test]
