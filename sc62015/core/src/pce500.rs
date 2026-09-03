@@ -29,8 +29,14 @@ pub const BOOTSTRAP_ISR_VALUE: u8 = 0x00;
 // fallback.
 pub const COMPATIBILITY_TIMEBASE_HZ: u64 = 1_024_000;
 pub const DEFAULT_CPU_HZ: u64 = COMPATIBILITY_TIMEBASE_HZ;
-pub const DEFAULT_MTI_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 1000 * 2;
-pub const DEFAULT_STI_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 2;
+pub const MTI_SHORT_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 1000 * 4;
+pub const MTI_LONG_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 1000 * 16;
+pub const STI_SHORT_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 2;
+pub const STI_LONG_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ * 2;
+/// Reset-state (`SCR.MTS=0`) compatibility alias.
+pub const DEFAULT_MTI_PERIOD: u64 = MTI_SHORT_PERIOD;
+/// Reset-state (`SCR.STS=0`) compatibility alias.
+pub const DEFAULT_STI_PERIOD: u64 = STI_SHORT_PERIOD;
 
 pub const PF1_CODE: u8 = 0x56; // col=10, row=6
 pub const PF2_CODE: u8 = 0x55; // col=10, row=5

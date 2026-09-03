@@ -4761,11 +4761,13 @@ fn run_core_runtime_path(
     let card_profile = args.card.resolve(args.model);
     eprintln!("[runtime] shared-core");
     eprintln!(
-        "[timing] model={} timebase_hz={} unit=scheduler-tick mti={} sti={} source={}",
+        "[timing] model={} timebase_hz={} unit=sc62015-relative mti_short={} mti_long={} sti_short={} sti_long={} source={}",
         args.model.label(),
         timer_profile.timebase_hz,
         timer_profile.mti_period,
+        timer_profile.mti_long_period,
         timer_profile.sti_period,
+        timer_profile.sti_long_period,
         timer_profile.provenance_label()
     );
     eprintln!(
@@ -5071,11 +5073,13 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
     let timer_profile = args.model.timer_profile();
     eprintln!(
-        "[timing] model={} timebase_hz={} unit=scheduler-tick mti={} sti={} source={}",
+        "[timing] model={} timebase_hz={} unit=sc62015-relative mti_short={} mti_long={} sti_short={} sti_long={} source={}",
         args.model.label(),
         timer_profile.timebase_hz,
         timer_profile.mti_period,
+        timer_profile.mti_long_period,
         timer_profile.sti_period,
+        timer_profile.sti_long_period,
         timer_profile.provenance_label()
     );
     let perfetto = args.perfetto.then(|| {

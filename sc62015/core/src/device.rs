@@ -84,17 +84,28 @@ pub struct DeviceTimerProfile {
     /// This is not yet a hardware-calibrated oscillator frequency.
     pub timebase_hz: u64,
     pub mti_period: u64,
+    pub mti_long_period: u64,
     pub sti_period: u64,
+    pub sti_long_period: u64,
     pub provenance: TimerProfileProvenance,
 }
 
 impl DeviceTimerProfile {
     pub fn new_context(self, enabled: bool) -> TimerContext {
-        if enabled {
-            TimerContext::new(true, self.mti_period as i32, self.sti_period as i32)
-        } else {
-            TimerContext::new(false, 0, 0)
-        }
+        let mut timer = TimerContext::new(
+            enabled,
+            if enabled { self.mti_period as i32 } else { 0 },
+            if enabled { self.sti_period as i32 } else { 0 },
+        );
+        timer.configure_scr_periods(
+            self.mti_period,
+            self.mti_long_period,
+            self.sti_period,
+            self.sti_long_period,
+            0,
+            0,
+        );
+        timer
     }
 
     pub fn is_provisional(self) -> bool {
@@ -198,7 +209,9 @@ impl DeviceModel {
                 timer: DeviceTimerProfile {
                     timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    mti_long_period: pce500::MTI_LONG_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
+                    sti_long_period: pce500::STI_LONG_PERIOD,
                     provenance: TimerProfileProvenance::Iq7000PcCompatibilityFallback,
                 },
                 internal_ram_mirror: false,
@@ -223,7 +236,9 @@ impl DeviceModel {
                 timer: DeviceTimerProfile {
                     timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    mti_long_period: pce500::MTI_LONG_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
+                    sti_long_period: pce500::STI_LONG_PERIOD,
                     provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
@@ -248,7 +263,9 @@ impl DeviceModel {
                 timer: DeviceTimerProfile {
                     timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
+                    mti_long_period: pce500::MTI_LONG_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
+                    sti_long_period: pce500::STI_LONG_PERIOD,
                     provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
@@ -378,7 +395,7 @@ impl DeviceTextDecoder {
 mod tests {
     use super::*;
     use crate::llama::opcodes::RegName;
-    use crate::memory::MemoryCardMode;
+    use crate::memory::{MemoryCardMode, IMEM_SCR_OFFSET};
 
     #[test]
     fn timer_profiles_preserve_model_specific_provenance() {
@@ -396,7 +413,9 @@ mod tests {
         );
         assert!(iq.is_provisional());
         assert_eq!(iq.mti_period, pc.mti_period);
+        assert_eq!(iq.mti_long_period, pc.mti_long_period);
         assert_eq!(iq.sti_period, pc.sti_period);
+        assert_eq!(iq.sti_long_period, pc.sti_long_period);
     }
 
     #[test]
@@ -414,6 +433,11 @@ mod tests {
             assert!(runtime.timer.enabled);
             assert_eq!(runtime.timer.mti_period, expected.mti_period);
             assert_eq!(runtime.timer.sti_period, expected.sti_period);
+
+            runtime.memory.write_internal_byte(IMEM_SCR_OFFSET, 0x06);
+            runtime.step(1).expect("apply timer selection");
+            assert_eq!(runtime.timer.mti_period, expected.mti_long_period);
+            assert_eq!(runtime.timer.sti_period, expected.sti_long_period);
         }
     }
 
