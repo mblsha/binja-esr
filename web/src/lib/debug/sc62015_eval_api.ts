@@ -324,7 +324,7 @@ const IQ7000_APP_EVENT_CODES = Object.freeze({
 	card: 0x1a,
 	'card-samples': 0x1a,
 	samples: 0x1a,
-	world: 0x1b,
+	world: 0x11,
 } satisfies Record<string, number>);
 
 const IQ7000_CALENDAR_DAY_ONES_X = [5, 19, 33, 47, 61, 75, 89];

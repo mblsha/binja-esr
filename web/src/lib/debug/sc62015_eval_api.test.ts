@@ -268,12 +268,16 @@ describe('createEvalApi', () => {
 		};
 		const api = createEvalApi(adapter as any);
 		await api.keys.tap('app:calendar', 1);
+		await api.keys.app.tap('world', 1);
 		await api.keys.tap('event:0x0B', 2);
 		await api.keys.tap('phys:0x56', 3);
 		expect(ops).toEqual([
 			'event:24:0',
 			'step:1',
 			'event:24:1',
+			'event:17:0',
+			'step:1',
+			'event:17:1',
 			'event:11:0',
 			'step:2',
 			'event:11:1',

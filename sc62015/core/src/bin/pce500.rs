@@ -3043,7 +3043,7 @@ fn iq7000_named_key(raw: &str) -> Option<AutoKeyKind> {
         "calendar" => 0x18,
         "schedule" => 0x19,
         "card" | "card-samples" | "samples" => 0x1A,
-        "world" => 0x1B,
+        "world" => 0x11,
         "option" | "opts" | "settings" => 0x1D,
         "line" | "newline" | "memo-line" | "memo-return" | "hooked-return" => 0x3D,
         "memo-enter" | "store" | "enter" | "return" | "ret" => 0x45,
@@ -7296,7 +7296,7 @@ mod tests {
     #[test]
     fn key_seq_accepts_named_iq_controls() {
         let actions = parse_key_seq(
-            "memo,text:XMAS\\nPRESENTS,memo-enter,search-down",
+            "memo,text:XMAS\\nPRESENTS,memo-enter,search-down,world",
             10,
             DeviceModel::Iq7000,
         )
@@ -7304,12 +7304,16 @@ mod tests {
         assert_eq!(actions[0].key, Some(AutoKeyKind::Event(0x08)));
         assert_eq!(actions[5].key, Some(AutoKeyKind::Event(0x3D)));
         assert_eq!(
-            actions[actions.len() - 2].key,
+            actions[actions.len() - 3].key,
             Some(AutoKeyKind::Event(0x45))
         );
         assert_eq!(
-            actions[actions.len() - 1].key,
+            actions[actions.len() - 2].key,
             Some(AutoKeyKind::Event(0x0B))
+        );
+        assert_eq!(
+            actions[actions.len() - 1].key,
+            Some(AutoKeyKind::Event(0x11))
         );
     }
 
