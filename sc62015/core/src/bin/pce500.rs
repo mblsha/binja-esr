@@ -3463,6 +3463,119 @@ fn build_debug_probe(
     })
 }
 
+fn build_runtime_debug_probe(
+    model: DeviceModel,
+    runtime: &CoreRuntime,
+    ranges: &[DebugProbeRange],
+) -> Value {
+    let range_json: Vec<Value> = ranges
+        .iter()
+        .map(|range| {
+            let bytes = read_memory_bytes(&runtime.memory, range.addr, range.len);
+            json!({
+                "name": range.name,
+                "addr": format!("0x{:05X}", range.addr),
+                "len": range.len,
+                "bytes": bytes,
+                "hex": bytes_hex(&bytes),
+            })
+        })
+        .collect();
+
+    let keyboard = runtime.keyboard.as_ref().map(|keyboard| {
+        let telemetry = keyboard.telemetry();
+        json!({
+            "fifo": keyboard.fifo_snapshot(),
+            "fifo_len": keyboard.fifo_len(),
+            "pressed_physical_keys": telemetry.pressed,
+            "strobe_count": telemetry.strobe_count,
+            "kol": format!("0x{:02X}", telemetry.kol),
+            "koh": format!("0x{:02X}", telemetry.koh),
+            "active_columns": telemetry.active_columns,
+        })
+    });
+    let storage_workspace = read_memory_bytes(&runtime.memory, 0x1FD00, 0x40);
+    let iocs_workspace_ptr = read_memory_bytes(&runtime.memory, 0x1FE36, 3);
+    let annunciators = lcd_annunciators(model, &runtime.memory);
+
+    json!({
+        "schema": "sc62015-core-runtime-debug-probe-v1",
+        "model": model.label(),
+        "executed": runtime.instruction_count(),
+        "timing_units": runtime.cycle_count(),
+        "pc": format!("0x{:05X}", runtime.state.pc() & ADDRESS_MASK),
+        "halted": runtime.state.is_halted(),
+        "off": runtime.state.is_off(),
+        "keyboard": keyboard,
+        "interrupts": {
+            "pending": runtime.timer.irq_pending,
+            "source": runtime.timer.irq_source,
+            "last_source": runtime.timer.last_irq_src,
+            "last_pc": runtime.timer.last_irq_pc.map(|pc| format!("0x{pc:05X}")),
+            "last_vector": runtime.timer.last_irq_vector.map(|pc| format!("0x{pc:05X}")),
+        },
+        "imem": {
+            "imr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0)),
+            "isr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0)),
+            "kol": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_KOL_OFFSET).unwrap_or(0)),
+            "koh": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_KOH_OFFSET).unwrap_or(0)),
+            "kil": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_KIL_OFFSET).unwrap_or(0)),
+            "scr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_SCR_OFFSET).unwrap_or(0)),
+            "ssr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0)),
+            "ucr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_UCR_OFFSET).unwrap_or(0)),
+            "usr": format!("0x{:02X}", runtime.memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0)),
+        },
+        "iq7000": {
+            "storage_workspace_addr": "0x1FD00",
+            "storage_workspace": storage_workspace,
+            "storage_workspace_hex": bytes_hex(&storage_workspace),
+            "iocs_workspace_ptr_addr": "0x1FE36",
+            "iocs_workspace_ptr": iocs_workspace_ptr,
+            "iocs_workspace_ptr_hex": bytes_hex(&iocs_workspace_ptr),
+            "lcd_annunciators": annunciators,
+        },
+        "ranges": range_json,
+    })
+}
+
+fn write_runtime_diagnostic_artifacts(
+    args: &Args,
+    runtime: &CoreRuntime,
+    lcd_lines: &[String],
+) -> Result<(), Box<dyn Error>> {
+    if let Some(path) = &args.dump_lcd_trace {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
+        let dump = LcdTraceDump {
+            executed: runtime.instruction_count(),
+            pc: runtime.state.pc(),
+            halted: runtime.state.is_halted(),
+            lcd_lines: lcd_lines.to_vec(),
+            vram: lcd.display_vram_bytes().map(|row| row.to_vec()).to_vec(),
+            trace: lcd.display_trace_buffer().map(|row| row.to_vec()).to_vec(),
+        };
+        fs::write(path, serde_json::to_string_pretty(&dump)?)?;
+        println!("Wrote LCD trace dump: {}", path.display());
+    }
+    if let Some(path) = &args.debug_probe_json {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        let ranges = parse_debug_probe_ranges(&args.debug_probe_range)
+            .map_err(|error| format!("--debug-probe-range: {error}"))?;
+        let probe = build_runtime_debug_probe(args.model, runtime, &ranges);
+        fs::write(path, serde_json::to_string_pretty(&probe)?)?;
+        println!("Wrote debug probe JSON: {}", path.display());
+    }
+    Ok(())
+}
+
 fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
@@ -4392,6 +4505,7 @@ fn run_runtime_key_seq(
     model: DeviceModel,
     text_decoder: Option<&DeviceTextDecoder>,
     log_enabled: bool,
+    diagnostics: &mut RuntimeDiagnostics,
 ) -> Result<u64, Box<dyn Error>> {
     let actions = parse_key_seq(raw_key_seq, KEY_SEQ_DEFAULT_HOLD, model)
         .map_err(|err| format!("--key-seq: {err}"))?;
@@ -4464,8 +4578,11 @@ fn run_runtime_key_seq(
         }
         let remaining = max_instructions.saturating_sub(elapsed);
         let bounded = step_count.min(remaining).max(1);
-        runtime.step(usize::try_from(bounded).unwrap_or(usize::MAX))?;
-        elapsed = elapsed.saturating_add(bounded);
+        let consumed = step_runtime_boundaries(runtime, bounded, diagnostics)?;
+        elapsed = elapsed.saturating_add(consumed);
+        if diagnostics.stopped {
+            return Ok(elapsed);
+        }
     }
     Err(format!("--key-seq did not complete within {max_instructions} instruction(s)").into())
 }
@@ -4611,6 +4728,7 @@ fn run_iq7000_pclink_ui_path(
         .map(|raw| raw.trim())
         .filter(|raw| !raw.is_empty())
     {
+        let mut diagnostics = RuntimeDiagnostics::from_args(args)?;
         run_runtime_key_seq(
             &mut runtime,
             raw_key_seq,
@@ -4618,6 +4736,7 @@ fn run_iq7000_pclink_ui_path(
             args.model,
             text_decoder,
             args.key_seq_log,
+            &mut diagnostics,
         )?;
         let final_lines = write_runtime_lcd_capture(
             args.model,
@@ -4640,6 +4759,8 @@ fn run_iq7000_pclink_ui_path(
         runtime.save_snapshot(path)?;
         println!("Saved snapshot to {}", path.display());
     }
+    let final_lcd_lines = runtime_lcd_lines(&runtime, text_decoder);
+    write_runtime_diagnostic_artifacts(args, &runtime, &final_lcd_lines)?;
 
     Ok(())
 }
@@ -4649,23 +4770,11 @@ fn core_runtime_unsupported_options(args: &Args) -> Vec<&'static str> {
     if args.lcd_log || args.lcd_log_limit.is_some() {
         unsupported.push("--lcd-log/--lcd-log-limit");
     }
-    if args.stop_pc.is_some() {
-        unsupported.push("--stop-pc");
-    }
-    if !args.trace_pc.is_empty() || args.trace_pc_window.is_some() || args.trace_regs {
-        unsupported.push("--trace-pc/--trace-pc-window/--trace-regs");
-    }
-    if args.dump_lcd_trace.is_some() {
-        unsupported.push("--dump-lcd-trace");
-    }
     if args.dump_bus_trace.is_some() {
         unsupported.push("--dump-bus-trace");
     }
     if args.snapshot_in.is_some() || args.snapshot_out.is_some() {
         unsupported.push("--snapshot-in/--snapshot-out");
-    }
-    if args.debug_probe_json.is_some() || !args.debug_probe_range.is_empty() {
-        unsupported.push("--debug-probe-json/--debug-probe-range");
     }
     if args.turnon2_resume || args.turnon_profile.is_some() {
         unsupported.push("--turnon2-resume/--turnon-profile");
@@ -4682,16 +4791,138 @@ fn core_runtime_unsupported_options(args: &Args) -> Vec<&'static str> {
     unsupported
 }
 
+struct RuntimeDiagnostics {
+    stop_pc: Option<u32>,
+    trace_pcs: Vec<u32>,
+    trace_pc_window: u64,
+    trace_regs: bool,
+    trace_pc_counts: HashMap<u32, u64>,
+    trace_window_active: u64,
+    trace_window_anchor: Option<u32>,
+    stopped: bool,
+}
+
+impl RuntimeDiagnostics {
+    fn from_args(args: &Args) -> Result<Self, Box<dyn Error>> {
+        let stop_pc = args.stop_pc.as_deref().map(parse_address).transpose()?;
+        let trace_pcs = args
+            .trace_pc
+            .iter()
+            .map(|raw| parse_address(raw))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            stop_pc: stop_pc.map(|pc| pc & ADDRESS_MASK),
+            trace_pcs: trace_pcs.into_iter().map(|pc| pc & ADDRESS_MASK).collect(),
+            trace_pc_window: args.trace_pc_window.unwrap_or(0),
+            trace_regs: args.trace_regs,
+            trace_pc_counts: HashMap::new(),
+            trace_window_active: 0,
+            trace_window_anchor: None,
+            stopped: false,
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.stop_pc.is_some() || !self.trace_pcs.is_empty()
+    }
+
+    fn log_pc(&self, runtime: &CoreRuntime, label: &str, pc: u32, extra: &str) {
+        let imr = runtime
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(0);
+        let isr = runtime
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(0);
+        if self.trace_regs {
+            let a = runtime.state.get_reg(RegName::A) & 0xFF;
+            let f = runtime.state.get_reg(RegName::F) & 0xFF;
+            let s = runtime.state.get_reg(RegName::S) & ADDRESS_MASK;
+            let y = runtime.state.get_reg(RegName::Y) & ADDRESS_MASK;
+            let ssr = runtime
+                .memory
+                .read_internal_byte(IMEM_SSR_OFFSET)
+                .unwrap_or(0);
+            println!(
+                "[{label}] {extra}pc=0x{pc:05X} imr=0x{imr:02X} isr=0x{isr:02X} \
+                 ssr=0x{ssr:02X} a=0x{a:02X} f=0x{f:02X} sp=0x{s:05X} y=0x{y:05X}"
+            );
+        } else {
+            println!("[{label}] {extra}pc=0x{pc:05X} imr=0x{imr:02X} isr=0x{isr:02X}");
+        }
+    }
+
+    fn before_boundary(&mut self, runtime: &CoreRuntime) {
+        if runtime.state.is_halted() || runtime.state.is_off() {
+            return;
+        }
+        let pc = runtime.state.pc() & ADDRESS_MASK;
+        if self.trace_pcs.contains(&pc) {
+            let count = self
+                .trace_pc_counts
+                .entry(pc)
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+            let count = *count;
+            if count <= 10 || count.is_multiple_of(1000) {
+                self.log_pc(runtime, "pc-trace", pc, &format!("hits={count} "));
+            }
+            if self.trace_pc_window != 0 {
+                self.trace_window_active = self.trace_pc_window;
+                self.trace_window_anchor = Some(pc);
+            }
+        } else if self.trace_window_active != 0 {
+            let anchor = self
+                .trace_window_anchor
+                .map(|anchor| format!("0x{anchor:05X}"))
+                .unwrap_or_else(|| "n/a".to_string());
+            self.log_pc(
+                runtime,
+                "pc-trace-window",
+                pc,
+                &format!("anchor={anchor} remaining={} ", self.trace_window_active),
+            );
+            self.trace_window_active = self.trace_window_active.saturating_sub(1);
+        }
+    }
+
+    fn after_boundary(&mut self, runtime: &CoreRuntime, instruction_count_before: u64) {
+        if runtime.instruction_count() == instruction_count_before {
+            return;
+        }
+        if self
+            .stop_pc
+            .is_some_and(|stop| runtime.state.pc() & ADDRESS_MASK == stop)
+        {
+            self.stopped = true;
+        }
+    }
+}
+
 fn step_runtime_boundaries(
     runtime: &mut CoreRuntime,
     mut boundaries: u64,
-) -> Result<(), Box<dyn Error>> {
+    diagnostics: &mut RuntimeDiagnostics,
+) -> Result<u64, Box<dyn Error>> {
+    let mut consumed = 0_u64;
     while boundaries != 0 {
-        let chunk = usize::try_from(boundaries).unwrap_or(usize::MAX);
+        if diagnostics.stopped {
+            break;
+        }
+        let chunk = if diagnostics.is_active() {
+            1
+        } else {
+            usize::try_from(boundaries).unwrap_or(usize::MAX)
+        };
+        diagnostics.before_boundary(runtime);
+        let instruction_count_before = runtime.instruction_count();
         runtime.step(chunk)?;
+        diagnostics.after_boundary(runtime, instruction_count_before);
         boundaries -= chunk as u64;
+        consumed = consumed.saturating_add(chunk as u64);
     }
-    Ok(())
+    Ok(consumed)
 }
 
 fn validate_lcd_expectations(args: &Args, lcd_lines: &[String]) -> Result<(), Box<dyn Error>> {
@@ -4771,6 +5002,7 @@ fn run_core_runtime_path(
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
+    let mut diagnostics = RuntimeDiagnostics::from_args(args)?;
 
     if args.perfetto {
         if let Ok(symbols) = load_bnida_names(args.model, args.bnida.clone()) {
@@ -4801,11 +5033,17 @@ fn run_core_runtime_path(
                 args.model,
                 text_decoder,
                 args.key_seq_log,
+                &mut diagnostics,
             )?
         } else {
             0
         };
-        step_runtime_boundaries(&mut runtime, args.steps.saturating_sub(consumed))
+        step_runtime_boundaries(
+            &mut runtime,
+            args.steps.saturating_sub(consumed),
+            &mut diagnostics,
+        )?;
+        Ok(())
     })();
 
     let trace_result = if args.perfetto {
@@ -4827,12 +5065,13 @@ fn run_core_runtime_path(
         args.capture_png.as_ref(),
         args.capture_json.as_ref(),
     )?;
+    write_runtime_diagnostic_artifacts(args, &runtime, &lcd_lines)?;
     println!("LCD (decoded text):");
     for line in &lcd_lines {
         println!("  {line}");
     }
     println!(
-        "Executed {} instruction(s) across {} scheduler boundaries; PC=0x{:05X}",
+        "Executed {} instruction(s) across at most {} scheduler boundaries; PC=0x{:05X}",
         runtime.instruction_count(),
         args.steps,
         runtime.state.pc() & ADDRESS_MASK
@@ -7895,9 +8134,48 @@ mod tests {
     }
 
     #[test]
+    fn model_independent_diagnostics_use_the_shared_runtime() {
+        let args = Args::try_parse_from([
+            "pce500-llama",
+            "--stop-pc",
+            "0x12345",
+            "--trace-pc",
+            "0x10000",
+            "--trace-regs",
+            "--dump-lcd-trace",
+            "lcd.json",
+            "--debug-probe-json",
+            "probe.json",
+            "--debug-probe-range",
+            "work@0x100:0x10",
+        ])
+        .expect("parse shared diagnostics");
+        assert!(core_runtime_unsupported_options(&args).is_empty());
+    }
+
+    #[test]
+    fn shared_runtime_stop_pc_halts_the_cli_boundary_loop() {
+        let mut runtime = CoreRuntime::new();
+        runtime.memory.write_external_slice(0, &[0x00, 0x00]);
+        runtime.state.set_pc(0);
+        let args = Args::try_parse_from(["pce500-llama", "--stop-pc", "1"]).expect("parse stop PC");
+        let mut diagnostics = RuntimeDiagnostics::from_args(&args).expect("diagnostics");
+
+        let consumed = step_runtime_boundaries(&mut runtime, 100, &mut diagnostics)
+            .expect("execute until stop PC");
+
+        assert_eq!(consumed, 1);
+        assert_eq!(runtime.instruction_count(), 1);
+        assert_eq!(runtime.state.pc(), 1);
+        assert!(diagnostics.stopped);
+    }
+
+    #[test]
     fn runtime_key_sequence_budget_advances_while_cpu_is_off() {
         let mut runtime = CoreRuntime::new();
         runtime.state.set_power_state(PowerState::Off);
+        let args = Args::try_parse_from(["pce500-llama"]).expect("parse defaults");
+        let mut diagnostics = RuntimeDiagnostics::from_args(&args).expect("diagnostics");
 
         let consumed = run_runtime_key_seq(
             &mut runtime,
@@ -7906,6 +8184,7 @@ mod tests {
             DeviceModel::PcE500,
             None,
             false,
+            &mut diagnostics,
         )
         .expect("OFF-state key sequence must remain bounded");
 
