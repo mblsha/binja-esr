@@ -3390,6 +3390,30 @@ mod tests {
     }
 
     #[test]
+    fn iq7000_runtime_routes_rtc_e_port_handshake() {
+        let mut rt = CoreRuntime::new();
+        rt.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        rt.set_iq7000_clock_seed_yyyymmddhhmm("202604261330")
+            .expect("install RTC seed");
+        let pc = 0x0200;
+        rt.memory.write_external_slice(
+            pc as usize,
+            &[0x30, 0x79, 0xF3, 0x01, 0x30, 0x65, 0xF5, 0x10],
+        );
+        rt.state.set_pc(pc);
+
+        rt.step_scheduler_boundaries(2)
+            .expect("execute RTC ready handshake");
+
+        assert_eq!(
+            rt.state.get_reg(RegName::FZ),
+            0,
+            "RTC EIL.ready must assert"
+        );
+    }
+
+    #[test]
     fn snapshot_roundtrip_preserves_call_and_temps() {
         let tmp = std::env::temp_dir().join("core_snapshot_test.pcsnap");
         let _ = fs::remove_file(&tmp);

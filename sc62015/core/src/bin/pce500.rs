@@ -1,7 +1,7 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/cli.py
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Timelike, Utc};
 use clap::Parser;
 use crc32fast::Hasher as Crc32Hasher;
 use flate2::{write::ZlibEncoder, Compression};
@@ -337,7 +337,7 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     reset_trace2_profile: Option<PathBuf>,
 
-    /// IQ-7000 clock seed: host, off, or YYYYMMDDHHMM.
+    /// IQ-7000 clock seed: host UTC, off, or UTC YYYYMMDDHHMM.
     #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
     iq7000_rtc: String,
 
@@ -460,7 +460,7 @@ struct Iq7000RtcSeed {
 
 impl Iq7000RtcSeed {
     fn from_host_now() -> Result<Self, String> {
-        let now = Local::now();
+        let now = Utc::now();
         let raw = format!(
             "{:04}{:02}{:02}{:02}{:02}",
             now.year(),

@@ -51,8 +51,9 @@ cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model p
 Notes:
 - Use `--model iq-7000` to switch ROM/profile.
 - IQ-7000 date/time screens seed the CLOCK workspace from the host clock by default; use
-  `--iq7000-rtc YYYYMMDDHHMM` for deterministic captures or `--iq7000-rtc off` for raw ROM
-  behavior.
+  `--iq7000-rtc YYYYMMDDHHMM` (UTC) for deterministic captures or `--iq7000-rtc off` for
+  raw ROM behavior. The RTC peripheral converts UTC to the ROM's UTC+13 hardware basis before
+  the World/Home city-offset code runs; the ROM applies its separate per-city summer-time flag.
 - Use `--refresh-steps 20000` to control redraw cadence.
 - Use `--input-steps 1000` to poll for key presses more frequently.
 - Use `--no-alt-screen` for tmux capture panes.

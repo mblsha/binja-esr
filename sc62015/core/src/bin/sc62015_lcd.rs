@@ -1,6 +1,6 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Timelike, Utc};
 use clap::Parser;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -119,7 +119,7 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     bnida: Option<PathBuf>,
 
-    /// IQ-7000 clock seed: host, off, or YYYYMMDDHHMM.
+    /// IQ-7000 clock seed: host UTC, off, or UTC YYYYMMDDHHMM.
     #[arg(long, value_name = "host|off|YYYYMMDDHHMM", default_value = "host")]
     iq7000_rtc: String,
 
@@ -1573,7 +1573,7 @@ fn handle_key_event(
 }
 
 fn iq7000_host_rtc_seed() -> String {
-    let now = Local::now();
+    let now = Utc::now();
     format!(
         "{:04}{:02}{:02}{:02}{:02}",
         now.year(),
