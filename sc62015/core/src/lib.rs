@@ -1,10 +1,7 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:RegisterName
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
-pub mod async_cpu;
-pub mod async_devices;
 pub mod async_driver;
-pub mod async_runtime;
 pub mod device;
 pub mod generated_key_input;
 pub mod iq7000;
@@ -31,12 +28,9 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use thiserror::Error;
 
-pub use async_cpu::{AsyncCpuHandle, AsyncCpuStats, CpuTraceEvent};
-pub use async_devices::{AsyncDisplayTask, AsyncTimerKeyboardTask};
 pub use async_driver::{
     current_cycle, emit_event, sleep_cycles, AsyncDriver, CycleSleep, DriverEvent, DriverRunResult,
 };
-pub use async_runtime::AsyncRuntimeRunner;
 pub use device::{
     DeviceKeyboardProfile, DeviceMemoryCardProfile, DeviceModel, DeviceTextDecoder,
     DeviceTimerProfile, TimerProfileProvenance,

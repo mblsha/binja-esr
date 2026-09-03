@@ -8,7 +8,6 @@
 
 #![allow(dead_code)]
 
-pub mod async_eval;
 pub mod dispatch;
 pub mod eval;
 pub mod opcodes;

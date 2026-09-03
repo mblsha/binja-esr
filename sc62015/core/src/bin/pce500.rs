@@ -13,11 +13,10 @@ use sc62015_core::{
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
     lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
     llama::{
-        async_eval::{AsyncLlamaExecutor, TickHelper},
         eval::{
             fetch_validated_vector, perfetto_next_substep, power_on_reset,
             prepare_validated_vector, set_perf_instr_counter, validate_vector_transfer_with_length,
-            LlamaBus, TimerTrace, ValidatedVectorTransfer,
+            LlamaBus, LlamaExecutor, TimerTrace, ValidatedVectorTransfer,
         },
         opcodes::RegName,
         state::{mask_for, validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
@@ -4172,7 +4171,7 @@ fn prepare_preflighted_transfer_and_tick(
 }
 
 fn preflight_and_tick_instruction(
-    executor: &AsyncLlamaExecutor,
+    executor: &LlamaExecutor,
     opcode: u8,
     state: &LlamaState,
     bus: &mut StandaloneBus,
@@ -4216,7 +4215,7 @@ fn preflight_and_tick_instruction(
 /// Decode and validate the instruction at the state's current PC without
 /// consuming an architectural read or advancing trace-replay input.
 fn preflight_current_instruction_silently(
-    executor: &AsyncLlamaExecutor,
+    executor: &LlamaExecutor,
     state: &LlamaState,
     bus: &mut StandaloneBus,
 ) -> Result<SilentInstructionPreflight, &'static str> {
@@ -5127,7 +5126,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     // Keep default timer-driven scans unless tests override the flag.
     bus.timer.set_preserve_phase(false);
     let mut state = LlamaState::new();
-    let executor = AsyncLlamaExecutor::new();
+    let executor = LlamaExecutor::new();
     let mut base_instruction_count: u64 = 0;
     if let Some(snapshot_path) = args.snapshot_in.as_ref() {
         let metadata =
@@ -5467,25 +5466,13 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             if perfetto_dbg {
                 eprintln!("[perfetto-debug] executing opcode=0x{opcode:02X}");
             }
-            let bus_ptr: *mut StandaloneBus = &mut bus;
-            let cycle_ptr: *mut u64 = &mut bus.cycle_count;
-            // SAFETY: tick_cb is only invoked while the CPU loop owns &mut bus/state.
-            let mut tick_cb = move |cycle| unsafe { (*bus_ptr).tick_timers_only(cycle) };
-            // SAFETY: cycle_count is only mutated through this tick helper in the loop.
-            let mut ticker = TickHelper::new(
-                unsafe { &mut *cycle_ptr },
-                run_timer_cycles,
-                Some(&mut tick_cb),
-            );
             match executor
                 .execute_with_vector_transfer(
                     opcode,
                     &mut state,
                     &mut bus,
-                    &mut ticker,
                     prepared_transfer,
                 )
-                .await
             {
                 Ok(_instr_len) => {
                     bus.handle_irq_return(opcode, &state);
@@ -5845,7 +5832,7 @@ mod tests {
         bus.timer.next_sti = 0;
         let mut state = LlamaState::new();
         state.set_reg(RegName::I, 0);
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let isr_before = bus.memory.read_internal_byte(IMEM_ISR_OFFSET);
 
         let transfer =
@@ -5868,7 +5855,7 @@ mod tests {
         bus.timer.next_mti = 0;
         bus.timer.next_sti = 0;
         let state = LlamaState::new();
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let isr_before = bus.memory.read_internal_byte(IMEM_ISR_OFFSET);
 
         let transfer =
@@ -5891,7 +5878,7 @@ mod tests {
         bus.timer.next_mti = 0;
         bus.timer.next_sti = 0;
         let state = LlamaState::new();
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let isr_before = bus.memory.read_internal_byte(IMEM_ISR_OFFSET);
 
         let error = preflight_and_tick_instruction(&executor, 0x20, &state, &mut bus, true, false)
@@ -5964,7 +5951,7 @@ mod tests {
         );
         bus.set_pc(state.pc());
         bus.set_instr_index(23);
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let reads_before = bus.memory.memory_read_count();
 
         let error = preflight_current_instruction_silently(&executor, &state, &mut bus)
@@ -5981,7 +5968,7 @@ mod tests {
         let mut bus = test_standalone_bus();
         let state = LlamaState::new();
         bus.memory.write_external_byte(0, 0x00);
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let proof = preflight_current_instruction_silently(&executor, &state, &mut bus)
             .expect("preflight NOP");
 
@@ -6013,7 +6000,7 @@ mod tests {
                 _ => unreachable!(),
             };
             bus.memory.write_external_slice(0, bytes);
-            let executor = AsyncLlamaExecutor::new();
+            let executor = LlamaExecutor::new();
             let reads_before = bus.memory.memory_read_count();
             let writes_before = bus.memory.memory_write_count();
             let isr_before = bus
@@ -6053,7 +6040,7 @@ mod tests {
             let mut state = LlamaState::new();
             state.set_reg(stack_reg, stack_addr);
             state.set_reg(RegName::F, 0x03);
-            let executor = AsyncLlamaExecutor::new();
+            let executor = LlamaExecutor::new();
             let reads_before = bus.memory.memory_read_count();
             let writes_before = bus.memory.memory_write_count();
 
@@ -6082,7 +6069,7 @@ mod tests {
         let mut state = LlamaState::new();
         state.set_reg(RegName::S, 0x190);
         state.set_reg(RegName::F, 0x03);
-        let executor = AsyncLlamaExecutor::new();
+        let executor = LlamaExecutor::new();
         let reads_before = bus.memory.memory_read_count();
         let writes_before = bus.memory.memory_write_count();
 
@@ -6140,7 +6127,7 @@ mod tests {
                 read_count.fetch_add(1, Ordering::Relaxed);
                 Some(0)
             }));
-            let executor = AsyncLlamaExecutor::new();
+            let executor = LlamaExecutor::new();
             let memory_reads_before = bus.memory.memory_read_count();
             let memory_writes_before = bus.memory.memory_write_count();
 
