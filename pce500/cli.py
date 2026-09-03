@@ -27,7 +27,9 @@ def _apply_llama_fast_defaults(ns: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PC-E500 CLI (snapshot-friendly)")
+    parser = argparse.ArgumentParser(
+        description="Legacy Python-scheduled PC-E500 validation CLI"
+    )
     parser.add_argument(
         "--rom", type=str, help="Optional 128 KiB, 256 KiB, or full-memory ROM image"
     )

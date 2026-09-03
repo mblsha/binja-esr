@@ -83,6 +83,13 @@ snapshot, and structured debug-probe switches require an explicit
 `--runtime legacy`; unsupported combinations fail instead of silently changing
 schedulers.
 
+The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
+CPU differential/parity tools. Their machine scheduler and peripheral callbacks
+are Python-owned, so they are not another Rust machine runtime and should not be
+used to benchmark or qualify the shared emulator. `backend_stats()` reports
+`execution_scope=cpu-only` and `scheduler_owner=python-caller` to make this
+boundary visible to tooling.
+
 `digitizer:0xNN` and `event:0xNN` still inject exact translated input bytes. For
 IQ-7000 app/editor work, the runner also accepts named event keys such as
 `calendar`, `memo`, `tel`, `home`, `world`, `shift`, `caps`, `caps-off`,

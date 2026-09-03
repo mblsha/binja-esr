@@ -107,7 +107,11 @@ def select_backend(
 
 
 class CPU:
-    """Facade that delegates to either the Python Emulator or the Rust core."""
+    """CPU-only facade for Python/Rust differential validation.
+
+    Machine scheduling, timers, and peripherals remain owned by the Python
+    caller. Production Rust machine frontends use ``CoreRuntime`` instead.
+    """
 
     def __init__(
         self,
@@ -172,18 +176,22 @@ class CPU:
         return self._impl
 
     def backend_stats(self) -> dict[str, int | str]:
-        """Expose backend-specific counters (e.g., Rust bridge stats)."""
+        """Expose backend counters without implying ownership of a machine scheduler."""
 
+        scope = {
+            "execution_scope": "cpu-only",
+            "scheduler_owner": "python-caller",
+        }
         if self.backend == "python":
-            return {"backend": "python"}
+            return {"backend": "python", **scope}
         rust_impl = cast(Any, self._impl)
         getter = getattr(rust_impl, "get_stats", None)
         if not callable(getter):
-            return {"backend": self.backend}
+            return {"backend": self.backend, **scope}
         stats = getter()
         if not isinstance(stats, dict):
-            return {"backend": self.backend}
-        return {"backend": self.backend, **stats}
+            return {"backend": self.backend, **scope}
+        return {"backend": self.backend, **scope, **stats}
 
     def runtime_profile_stats(self) -> dict[str, object]:
         return {}
