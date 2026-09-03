@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::opcodes::RegName;
 
 pub const MODELED_F_MASK: u32 = 0x03;
+const FAST_TEMP_REGISTERS: usize = 16;
 
 pub fn validate_f_image(value: u32) -> Result<u32, &'static str> {
     if value & !MODELED_F_MASK != 0 {
@@ -48,7 +49,22 @@ pub enum PowerState {
 
 #[derive(Clone, Default)]
 pub struct LlamaState {
-    regs: HashMap<RegName, u32>,
+    // Architectural registers are hot enough that hashing every access (and
+    // cloning a hash table for fail-closed preflight) dominates ROM runs.
+    // Aliases A/B and IL/IH are derived from BA/I; FC/FZ are derived from F.
+    ba: u32,
+    i: u32,
+    x: u32,
+    y: u32,
+    u: u32,
+    s: u32,
+    f: u32,
+    pc: u32,
+    imr: u32,
+    temps: [u32; FAST_TEMP_REGISTERS],
+    // Retain the public RegName behavior for malformed/out-of-range helper
+    // inputs without putting a HashMap on normal execution paths.
+    extra_regs: HashMap<RegName, u32>,
     power_state: PowerState,
     last_off_pc: Option<u32>,
     last_off_call_stack: Vec<u32>,
@@ -71,7 +87,17 @@ pub struct CallMetricsSnapshot {
 impl LlamaState {
     pub fn new() -> Self {
         Self {
-            regs: HashMap::new(),
+            ba: 0,
+            i: 0,
+            x: 0,
+            y: 0,
+            u: 0,
+            s: 0,
+            f: 0,
+            pc: 0,
+            imr: 0,
+            temps: [0; FAST_TEMP_REGISTERS],
+            extra_regs: HashMap::new(),
             power_state: PowerState::Running,
             last_off_pc: None,
             last_off_call_stack: Vec::new(),
@@ -86,92 +112,71 @@ impl LlamaState {
     pub fn set_reg(&mut self, name: RegName, value: u32) {
         let masked = value & mask_for(name);
         match name {
-            RegName::BA => {
-                self.regs.insert(RegName::BA, masked);
-            }
+            RegName::BA => self.ba = masked,
             RegName::A => {
                 let b = (self.get_reg(RegName::BA) >> 8) & 0xFF;
-                let ba = ((b << 8) | (masked & 0xFF)) & mask_for(RegName::BA);
-                self.regs.insert(RegName::BA, ba);
+                self.ba = ((b << 8) | (masked & 0xFF)) & mask_for(RegName::BA);
             }
             RegName::B => {
                 let a = self.get_reg(RegName::BA) & 0xFF;
-                let ba = (((masked & 0xFF) << 8) | a) & mask_for(RegName::BA);
-                self.regs.insert(RegName::BA, ba);
+                self.ba = (((masked & 0xFF) << 8) | a) & mask_for(RegName::BA);
             }
-            RegName::I => {
-                self.regs.insert(RegName::I, masked);
-            }
+            RegName::I => self.i = masked,
             RegName::IL => {
                 // Hardware behaviour: writing IL updates the low byte and clears IH.
-                let i = masked & mask_for(RegName::I);
-                self.regs.insert(RegName::I, i);
+                self.i = masked & mask_for(RegName::I);
             }
             RegName::IH => {
                 let low = self.get_reg(RegName::IL);
-                let i = ((masked & 0xFF) << 8) | (low & 0xFF);
-                self.regs.insert(RegName::I, i & mask_for(RegName::I));
+                self.i = (((masked & 0xFF) << 8) | (low & 0xFF)) & mask_for(RegName::I);
             }
-            RegName::F => {
-                // Raw callers validate unless an instruction explicitly
-                // normalizes its input. POPU F and POPS F are measured
-                // exceptions.
-                self.regs.insert(RegName::F, masked);
-                self.regs.insert(RegName::FC, masked & 0x1);
-                self.regs.insert(RegName::FZ, (masked >> 1) & 0x1);
-            }
+            RegName::X => self.x = masked,
+            RegName::Y => self.y = masked,
+            RegName::U => self.u = masked,
+            RegName::S => self.s = masked,
+            // Raw callers validate unless an instruction explicitly
+            // normalizes its input. POPU F and POPS F are measured exceptions.
+            RegName::F => self.f = masked,
+            RegName::PC => self.pc = masked,
+            RegName::IMR => self.imr = masked,
             RegName::FC => {
-                let bit = masked & 0x1;
-                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
-                let new_f = (f & !0x1) | bit;
-                self.regs.insert(RegName::F, new_f);
-                self.regs.insert(RegName::FC, bit);
+                self.f = (self.f & !0x1) | (masked & 0x1);
             }
             RegName::FZ => {
-                let bit = masked & 0x1;
-                let f = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
-                let new_f = (f & !0x2) | (bit << 1);
-                self.regs.insert(RegName::F, new_f);
-                self.regs.insert(RegName::FZ, bit);
+                self.f = (self.f & !0x2) | ((masked & 0x1) << 1);
             }
-            RegName::Temp(_) => {
-                self.regs.insert(name, masked);
+            RegName::Temp(index) if usize::from(index) < self.temps.len() => {
+                self.temps[usize::from(index)] = masked;
             }
-            _ => {
-                self.regs.insert(name, masked);
+            RegName::Temp(_) | RegName::Unknown(_) => {
+                self.extra_regs.insert(name, masked);
             }
         }
     }
 
     pub fn get_reg(&self, name: RegName) -> u32 {
         match name {
-            RegName::BA => *self.regs.get(&RegName::BA).unwrap_or(&0) & mask_for(RegName::BA),
+            RegName::BA => self.ba,
             RegName::A => self.get_reg(RegName::BA) & 0xFF,
             RegName::B => (self.get_reg(RegName::BA) >> 8) & 0xFF,
-            RegName::I => *self.regs.get(&RegName::I).unwrap_or(&0) & mask_for(RegName::I),
+            RegName::I => self.i,
             RegName::IL => self.get_reg(RegName::I) & 0xFF,
             RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
-            RegName::F => {
-                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & mask_for(RegName::F);
-                let fc = self.regs.get(&RegName::FC).copied().unwrap_or(raw & 0x1) & 0x1;
-                let fz = self
-                    .regs
-                    .get(&RegName::FZ)
-                    .copied()
-                    .unwrap_or((raw >> 1) & 0x1)
-                    & 0x1;
-                (raw & !0x3) | fc | (fz << 1)
+            RegName::X => self.x,
+            RegName::Y => self.y,
+            RegName::U => self.u,
+            RegName::S => self.s,
+            RegName::F => self.f,
+            RegName::PC => self.pc,
+            RegName::FC => self.f & 0x1,
+            RegName::FZ => (self.f >> 1) & 0x1,
+            RegName::IMR => self.imr,
+            RegName::Temp(index) if usize::from(index) < self.temps.len() => {
+                self.temps[usize::from(index)]
             }
-            RegName::FC => {
-                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
-                *self.regs.get(&RegName::FC).unwrap_or(&raw) & 0x1
+            RegName::Temp(_) | RegName::Unknown(_) => {
+                self.extra_regs.get(&name).copied().unwrap_or(0) & mask_for(name)
             }
-            RegName::FZ => {
-                let raw = self.regs.get(&RegName::F).copied().unwrap_or(0) & 0xFF;
-                (*self.regs.get(&RegName::FZ).unwrap_or(&((raw >> 1) & 0x1))) & 0x1
-            }
-            RegName::Temp(_) => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
-            _ => *self.regs.get(&name).unwrap_or(&0) & mask_for(name),
         }
     }
 
@@ -230,7 +235,17 @@ impl LlamaState {
     }
 
     pub fn reset(&mut self) {
-        self.regs.clear();
+        self.ba = 0;
+        self.i = 0;
+        self.x = 0;
+        self.y = 0;
+        self.u = 0;
+        self.s = 0;
+        self.f = 0;
+        self.pc = 0;
+        self.imr = 0;
+        self.temps = [0; FAST_TEMP_REGISTERS];
+        self.extra_regs.clear();
         self.power_state = PowerState::Running;
         self.last_off_pc = None;
         self.last_off_call_stack.clear();
