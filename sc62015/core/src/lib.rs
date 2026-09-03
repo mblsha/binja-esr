@@ -451,7 +451,7 @@ impl CoreRuntime {
     /// Construct a complete machine runtime from one authoritative model profile.
     pub fn for_model(model: DeviceModel, rom: &[u8]) -> Result<Self> {
         let mut runtime = Self::new();
-        model.configure_runtime(&mut runtime, rom)?;
+        model.configure_fresh_runtime(&mut runtime, rom)?;
         Ok(runtime)
     }
 
