@@ -105,6 +105,12 @@ PC-E500 serial ROM entries are disabled by default and available only through
 an explicit diagnostic opt-in; normal model runs execute the ROM and never
 manufacture a serial peer response.
 
+Keyboard ingress is likewise explicit. Physical matrix contacts affect KIL
+and can assert `ISR.KEYI` only while their column is selected. Translated host
+events (for example digitizer samples) enter the host event FIFO without
+changing KIL or manufacturing a silicon interrupt. The legacy combined
+immediate-matrix/FIFO injection remains available only as a diagnostic helper.
+
 The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
 CPU differential/parity tools. Their machine scheduler and peripheral callbacks
 are Python-owned, so they are not another Rust machine runtime and should not be

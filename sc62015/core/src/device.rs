@@ -218,7 +218,7 @@ impl DeviceModel {
                 keyboard: DeviceKeyboardProfile {
                     columns_active_high: true,
                     fifo_mirroring: false,
-                    keyi_on_any_press: true,
+                    keyi_on_any_press: false,
                     raw_kil: true,
                     press_threshold: 6,
                 },
@@ -455,7 +455,7 @@ mod tests {
             .expect("IQ-7000 keyboard")
             .snapshot_state();
         assert!(!iq_keyboard.emit_events);
-        assert!(iq_keyboard.keyi_on_any_press);
+        assert!(!iq_keyboard.keyi_on_any_press);
         assert!(iq_keyboard.raw_kil);
         assert!(runtime.sio.is_none());
         assert_eq!(

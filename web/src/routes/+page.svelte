@@ -429,14 +429,13 @@
 		if (down) {
 			if (pressedCodes.has(code)) return;
 			pressedCodes.add(code);
-			// Inject directly so short taps are observable even if firmware polling is sparse.
-			emulator.inject_matrix_event?.(code, false);
+			emulator.press_matrix_code?.(code);
 			logDebug(`press ${hex(code, 2)}`);
 		} else {
 			if (!pressedCodes.has(code)) return;
 			pressedCodes.delete(code);
 			pendingVirtualRelease.delete(code);
-			emulator.inject_matrix_event?.(code, true);
+			emulator.release_matrix_code?.(code);
 			logDebug(`release ${hex(code, 2)}`);
 		}
 	}
