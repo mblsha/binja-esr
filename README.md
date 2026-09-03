@@ -78,10 +78,11 @@ cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
 ```
 
 Ordinary headless execution uses the shared `CoreRuntime`, matching the WASM,
-terminal, and IQ-7000 PC-Link frontends. Historical trace-replay, raw bus dump,
-snapshot, and structured debug-probe switches require an explicit
-`--runtime legacy`; unsupported combinations fail instead of silently changing
-schedulers.
+terminal, and IQ-7000 PC-Link frontends. PC stop/trace, final LCD provenance,
+and structured memory probes now run on that same scheduler. Historical
+trace-replay boot overlays, raw bus/LCD transaction logging, and snapshots
+still require an explicit `--runtime legacy`; unsupported combinations fail
+instead of silently changing schedulers.
 
 Runtime `cycle_count` advances in the SC62015 relative timing units documented
 by the instruction table: a NOP is one unit, conditional/counting forms use
@@ -145,8 +146,14 @@ Caps Lock is also accepted when the terminal reports it. The status line shows
 `UNMAPPED_STATE:0xNN` and/or `UNMAPPED_SHADOW:0xNN` without drawing an icon.
 
 `CoreRuntime::set_external_interrupt_level` is currently a neutral API/test
-hook for level-sensitive EXI behavior. Neither command-line frontend exposes a
+hook. Its level-sensitive EXI re-latch policy is an explicit emulator model
+contract, not a measured device fact. Neither command-line frontend exposes a
 host switch for that input yet.
+
+See [`docs/sc62015_runtime_evidence.md`](docs/sc62015_runtime_evidence.md) for
+the concise boundary between real-device-derived instruction behavior,
+ROM-grounded interrupt dispatch, provisional machine timing/peripherals, and
+implementation-only safeguards.
 
 For repeatable captures, put the same settings in a scenario JSON file:
 
