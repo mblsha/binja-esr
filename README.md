@@ -92,6 +92,12 @@ These units are not calibrated oscillator cycles: PC-E500 absolute timer
 cadence and IQ-7000 timing still require machine-level qualification. CLI
 timing diagnostics label this basis explicitly.
 
+`CoreRuntime::step_scheduler_boundaries(n)` is the unambiguous execution API.
+The shorter `step(n)` remains a compatibility alias. A running boundary usually
+retires one instruction, while HALT/OFF can consume a boundary without retiring
+one; neither argument is a timing-unit or wall-clock duration. Use
+`instruction_count()` for retired work and `cycle_count()` for relative timing.
+
 `SCR.MTS` selects the 4 ms or 16 ms main-timer compatibility period and
 `SCR.STS` selects the approximately 0.5 s or 2 s sub-timer period. Changing a
 selector currently starts a fresh period; exact divider phase at an `SCR`

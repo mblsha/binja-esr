@@ -422,10 +422,16 @@ impl Sc62015Emulator {
         Ok(())
     }
 
-    pub fn step(&mut self, instructions: u32) -> Result<(), JsValue> {
+    pub fn step_scheduler_boundaries(&mut self, boundaries: u32) -> Result<(), JsValue> {
         self.runtime
-            .step(instructions as usize)
+            .step_scheduler_boundaries(boundaries as usize)
             .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Compatibility name. The argument counts scheduler boundaries, not
+    /// retired instructions, timing units, or real-time cycles.
+    pub fn step(&mut self, scheduler_boundaries: u32) -> Result<(), JsValue> {
+        self.step_scheduler_boundaries(scheduler_boundaries)
     }
 
     pub fn instruction_count(&self) -> u64 {

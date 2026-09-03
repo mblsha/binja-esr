@@ -1318,7 +1318,13 @@ impl CoreRuntime {
         }
     }
 
-    pub fn step(&mut self, instructions: usize) -> Result<()> {
+    /// Advance at most `boundaries` machine-scheduler boundaries.
+    ///
+    /// A running boundary normally retires one instruction, while HALT/OFF
+    /// boundaries may retire none. `cycle_count()` advances by SC62015
+    /// relative timing units and is therefore neither this boundary count nor
+    /// calibrated wall-clock time.
+    pub fn step_scheduler_boundaries(&mut self, boundaries: usize) -> Result<()> {
         if let Some(reason) = self.poisoned.as_deref() {
             return Err(CoreError::Other(format!(
                 "SC62015 CoreRuntime is poisoned after a failed side-effecting operation; \
@@ -1695,7 +1701,7 @@ impl CoreRuntime {
             }
         }
 
-        for _ in 0..instructions {
+        for _ in 0..boundaries {
             let halted_at_step_entry = self.state.is_halted();
             let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
             // Reject quarantined/invalid encodings before level re-latching,
@@ -2326,6 +2332,11 @@ impl CoreRuntime {
             }
         }
         Ok(())
+    }
+
+    /// Compatibility spelling for `step_scheduler_boundaries`.
+    pub fn step(&mut self, scheduler_boundaries: usize) -> Result<()> {
+        self.step_scheduler_boundaries(scheduler_boundaries)
     }
 
     #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
