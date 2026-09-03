@@ -78,7 +78,8 @@ const IMR_TX: u8 = 0x10;
 const IMR_RX: u8 = 0x20;
 const IMR_EX: u8 = 0x40;
 #[cfg(test)]
-const SSR_CI: u8 = 0x02;
+const SSR_CI: u8 = 0x04;
+#[cfg(test)]
 const SSR_ONK: u8 = 0x08;
 const PF1_CODE: u8 = 0x56; // col=10, row=6
 const PF2_CODE: u8 = 0x55; // col=10, row=5
@@ -770,6 +771,7 @@ struct StandaloneBus {
     delivered_irq_count: u32,
     pending_kil: bool,
     pending_onk: bool,
+    on_key_ssr_mask: u8,
     deferred_key_irq: bool,
     deferred_pending_kil: bool,
     last_kbd_access: Option<String>,
@@ -1160,6 +1162,7 @@ impl StandaloneBus {
             delivered_irq_count: 0,
             pending_kil: false,
             pending_onk: false,
+            on_key_ssr_mask: DeviceModel::DEFAULT.on_key_ssr_mask(),
             deferred_key_irq: false,
             deferred_pending_kil: false,
             last_kbd_access: None,
@@ -1642,10 +1645,8 @@ impl StandaloneBus {
     }
 
     fn press_on_key(&mut self) {
-        // ON key is not part of the matrix; assert ONK input and pending IRQ.
-        let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
-        let new_ssr = ssr | SSR_ONK;
-        self.memory.write_internal_byte(0xFF, new_ssr);
+        // ON is a physical input level, not writable SSR storage. Runtime bus
+        // reads merge the selected model's input bit while the key is held.
         if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             if (isr & ISR_ONKI) == 0 {
                 self.memory
@@ -1661,7 +1662,7 @@ impl StandaloneBus {
 
     fn clear_on_key(&mut self) {
         let ssr = self.memory.read_internal_byte(0xFF).unwrap_or(0);
-        let new_ssr = ssr & !SSR_ONK;
+        let new_ssr = ssr & !self.on_key_ssr_mask;
         self.memory.write_internal_byte(0xFF, new_ssr);
         self.pending_onk = false;
     }
@@ -2376,7 +2377,8 @@ fn apply_reset_trace2_main_display_profile(
     state.clear_call_page_stack();
 
     bus.cycle_count = 0;
-    bus.pending_onk = (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & SSR_ONK) != 0;
+    bus.pending_onk =
+        (bus.memory.read_internal_byte(IMEM_SSR_OFFSET).unwrap_or(0) & bus.on_key_ssr_mask) != 0;
     bus.pending_kil = false;
     bus.deferred_key_irq = false;
     bus.deferred_pending_kil = false;
@@ -2640,7 +2642,7 @@ impl LlamaBus for StandaloneBus {
                 if offset == IMEM_SSR_OFFSET {
                     let mut val = self.memory.read_internal_byte(offset).unwrap_or(0);
                     if self.ssr_onk_visible() {
-                        val |= SSR_ONK;
+                        val |= self.on_key_ssr_mask;
                     }
                     self.trace_imem_access("read", addr, bits, val as u32);
                     return (val as u32) & mask_bits(bits);
@@ -2686,7 +2688,7 @@ impl LlamaBus for StandaloneBus {
             if offset == IMEM_SSR_OFFSET {
                 let mut value = self.memory.read_internal_byte_silent(offset)?;
                 if self.ssr_onk_visible() {
-                    value |= SSR_ONK;
+                    value |= self.on_key_ssr_mask;
                 }
                 return Some(value);
             }
@@ -2985,6 +2987,7 @@ fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
     }
     model.configure_keyboard(&mut bus.keyboard);
     bus.memory.set_internal_ram_mirror(model.is_pce500_family());
+    bus.on_key_ssr_mask = model.on_key_ssr_mask();
 }
 
 fn parse_matrix_code(raw: &str) -> Result<Option<AutoKeyKind>, Box<dyn Error>> {
@@ -6517,10 +6520,7 @@ mod tests {
             .write_internal_byte(super::IMEM_SSR_OFFSET, super::SSR_CI);
         // Assert ONK input and ISR bit.
         bus.press_on_key();
-        let ssr = bus
-            .memory
-            .read_internal_byte(super::IMEM_SSR_OFFSET)
-            .unwrap_or(0);
+        let ssr = bus.load(INTERNAL_MEMORY_START + IMEM_SSR_OFFSET, 8) as u8;
         assert_eq!(
             ssr & super::SSR_CI,
             super::SSR_CI,
@@ -6574,6 +6574,31 @@ mod tests {
             super::SSR_CI,
             "releasing ON must not clear the independent SSR.CI input"
         );
+    }
+
+    #[test]
+    fn iq7000_on_key_uses_rom_observed_ssr_bit_one() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(true, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        configure_bus_for_model(&mut bus, DeviceModel::Iq7000);
+
+        bus.press_on_key();
+        let ssr = bus.load(INTERNAL_MEMORY_START + IMEM_SSR_OFFSET, 8) as u8;
+        assert_eq!(ssr & 0x02, 0x02, "IQ-7000 ROM F54EF samples SSR.1");
+        assert_eq!(ssr & 0x08, 0, "PC-E500 SSR.ONK must not leak into IQ-7000");
+
+        bus.clear_on_key();
+        let released = bus.load(INTERNAL_MEMORY_START + IMEM_SSR_OFFSET, 8) as u8;
+        assert_eq!(released & 0x02, 0);
     }
 
     #[test]
