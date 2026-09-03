@@ -451,4 +451,23 @@ mod tests {
             .expect("switch back to IQ-7000");
         assert!(runtime.sio.is_none());
     }
+
+    #[test]
+    fn complete_pc_and_iq_profiles_execute_the_same_core_scheduler() {
+        for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+            let mut rom = vec![0_u8; model.rom_window_len()];
+            let target = model.rom_window_start() & 0x000F_FFFF;
+            let vector = target.to_le_bytes();
+            let vector_offset = rom.len() - 3;
+            rom[vector_offset..].copy_from_slice(&vector[..3]);
+
+            let mut runtime = CoreRuntime::for_model(model, &rom).expect("construct runtime");
+            runtime.power_on_reset().expect("reset from ROM vector");
+            assert_eq!(runtime.state.pc(), target);
+
+            runtime.step(1).expect("execute NOP through CoreRuntime");
+            assert_eq!(runtime.state.pc(), target + 1);
+            assert_eq!(runtime.instruction_count(), 1);
+        }
+    }
 }

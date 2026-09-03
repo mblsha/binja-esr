@@ -171,7 +171,7 @@ describe('PC-E500 web emulator', () => {
 await e.reset({ fresh: true, warmupTicks: 1_000 });
 await e.keyboard.tap(0x56, 100); // PF1
 const pc = e.reg(Reg.PC);
-await e.call(pc, undefined, { maxInstructions: 2_000, trace: true });
+await e.call(pc, { S: 0xB9003 }, { maxInstructions: 2_000, trace: true });
 `;
 		await fireEvent.input(editor, { target: { value: script } });
 

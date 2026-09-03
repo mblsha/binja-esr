@@ -70,6 +70,7 @@ describe('FunctionRunnerPanel', () => {
 						memoryBlocks: [],
 						lcdWrites: [],
 						probeSamples: [],
+						stubsUsed: [],
 						perfettoTraceB64: 'ZHVtbXk=',
 						result: { reason: 'returned', steps: 1, pc: 0, sp: 0, halted: false, fault: null },
 						infoLog: [],
