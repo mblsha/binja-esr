@@ -48,6 +48,8 @@ def test_cpu_facade_executes_nop(cpu_backend: str) -> None:
     info = cpu.execute_instruction(0x0000)
 
     assert info.instruction.name() == "NOP"
+    assert cpu.backend_stats()["execution_scope"] == "cpu-only"
+    assert cpu.backend_stats()["scheduler_owner"] == "python-caller"
 
 
 def test_cpu_stepper_round_trip(cpu_backend: str) -> None:
