@@ -251,6 +251,8 @@ pub struct SnapshotMetadata {
     #[serde(deserialize_with = "crate::snapshot::deserialize_range")]
     pub imem: (u32, u32),
     pub memory_dump_pc: u32,
+    /// Legacy host-runner optimization hint retained in snapshot JSON for
+    /// schema compatibility. It is not architectural machine state.
     pub fast_mode: bool,
     pub memory_image_size: usize,
     pub lcd_payload_size: usize,
@@ -401,7 +403,6 @@ pub struct CoreRuntime {
     metadata: SnapshotMetadata,
     pub memory: MemoryImage,
     pub state: LlamaState,
-    pub fast_mode: bool,
     loop_detector: Option<LoopDetector>,
     executor: crate::llama::eval::LlamaExecutor,
     pub keyboard: Option<KeyboardMatrix>,
@@ -431,7 +432,6 @@ impl CoreRuntime {
             metadata: SnapshotMetadata::default(),
             memory: MemoryImage::new(),
             state: LlamaState::new(),
-            fast_mode: false,
             loop_detector: None,
             executor: crate::llama::eval::LlamaExecutor::new(),
             keyboard: Some(KeyboardMatrix::new()),
@@ -2249,7 +2249,9 @@ impl CoreRuntime {
         metadata.pc = self.get_reg("PC");
         metadata.memory_reads = self.memory.memory_read_count();
         metadata.memory_writes = self.memory.memory_write_count();
-        metadata.fast_mode = self.fast_mode;
+        // CoreRuntime has one execution path. Preserve the v4 JSON member for
+        // compatibility, but never claim an inert tuning mode is active.
+        metadata.fast_mode = false;
         metadata.fallback_ranges = self.memory.python_ranges().to_vec();
         metadata.readonly_ranges = self.memory.readonly_ranges().to_vec();
         metadata.call_depth = self.state.call_depth();
@@ -2472,7 +2474,6 @@ impl CoreRuntime {
         *self.timer = timer_candidate;
         self.keyboard = keyboard_candidate;
         self.lcd = lcd_candidate;
-        self.fast_mode = metadata.fast_mode;
         self.external_interrupt_level = metadata.external_interrupt_level;
         self.onk_level = metadata.onk_level;
         self.metadata = metadata;
@@ -3124,12 +3125,14 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_roundtrip_keeps_timer_and_fast_mode() {
+    fn snapshot_roundtrip_keeps_timer_state_without_inert_runtime_modes() {
         let tmp = std::env::temp_dir().join("core_snapshot_timer.pcsnap");
         let _ = fs::remove_file(&tmp);
 
         let mut rt = CoreRuntime::new();
-        rt.fast_mode = true;
+        // Simulate loading historical v4 metadata that claimed the old hint
+        // was enabled. A new CoreRuntime save must normalize the inert field.
+        rt.metadata.fast_mode = true;
         rt.timer.enabled = true;
         rt.timer.mti_period = 7;
         rt.timer.sti_period = 11;
@@ -3155,7 +3158,7 @@ mod tests {
 
         let mut rt2 = CoreRuntime::new();
         rt2.load_snapshot(&tmp).expect("load snapshot");
-        assert!(rt2.fast_mode, "fast_mode should round-trip");
+        assert!(!rt2.metadata.fast_mode);
         assert!(rt2.timer.enabled);
         assert_eq!(rt2.timer.mti_period, 7);
         assert_eq!(rt2.timer.sti_period, 11);

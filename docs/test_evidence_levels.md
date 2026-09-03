@@ -55,7 +55,8 @@ absent. Core and standalone Rust reject remaining active device, callback, or
 generic-overlay state that v4 cannot encode. The Python PCE wrapper similarly
 rejects queued serial/cassette state, custom handler/writable overlays,
 ambiguous or out-of-image static overlays, and custom IMEM callbacks. Rust
-saves refresh `fast_mode` and range metadata from the live runtime, and loads
+saves refresh range metadata from the live runtime; the legacy `fast_mode`
+JSON member is always false because it is not architectural state. Loads
 require the destination machine's fallback/read-only range contract to match
 exactly. An
 unexpected late native bridge hook failure poisons execution instead of
