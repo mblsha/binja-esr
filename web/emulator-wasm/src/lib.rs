@@ -1239,6 +1239,25 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn iq7000_model_executes_through_the_shared_runtime() {
+        let mut emulator = Pce500Emulator::new();
+        let mut rom = vec![0u8; ROM_WINDOW_LEN];
+        rom[0] = 0x00; // NOP at 0xC0000.
+        rom[ROM_WINDOW_LEN - 3] = 0x00;
+        rom[ROM_WINDOW_LEN - 2] = 0x00;
+        rom[ROM_WINDOW_LEN - 1] = 0x0C;
+        emulator
+            .load_rom_with_model(&rom, "iq-7000")
+            .expect("load IQ-7000 ROM");
+
+        assert_eq!(emulator.device_model(), "iq-7000");
+        assert_eq!(emulator.get_reg("PC"), 0x0C0000);
+        emulator.step(1).expect("execute IQ-7000 NOP");
+        assert_eq!(emulator.get_reg("PC"), 0x0C0001);
+        assert_eq!(emulator.instruction_count(), 1);
+    }
+
+    #[wasm_bindgen_test]
     fn reset_rejects_noncanonical_rom_vector() {
         let mut emulator = Pce500Emulator::new();
         let mut rom = vec![0u8; ROM_WINDOW_LEN];

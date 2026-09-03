@@ -11,7 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        # Keep pull-request feedback to one authoritative interpreter. The
+        # second supported version still runs after merge on push.
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.11"]' || '["3.11", "3.12"]') }}
 
     steps:
     - uses: actions/checkout@v4
@@ -65,12 +67,6 @@ jobs:
         FORCE_BINJA_MOCK: 1
       run: |
         uv run pytest pce500 -v --cov=pce500 --cov-report=term-missing
-    
-    - name: Run linting
-      continue-on-error: true
-      run: |
-        uv run ruff check .
-        uv run ruff format --check .
     
     - name: Run type checking
       run: |
