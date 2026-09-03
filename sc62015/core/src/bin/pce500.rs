@@ -4137,6 +4137,40 @@ fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &Stand
     !irq_replaces_pc
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SilentInstructionPreflight {
+    source_pc: u32,
+    opcode: u8,
+    instruction_len: u8,
+    provenance: (usize, u64),
+}
+
+fn prepare_preflighted_transfer_and_tick(
+    opcode: u8,
+    state: &LlamaState,
+    bus: &mut StandaloneBus,
+    preflight: SilentInstructionPreflight,
+    run_timer_cycles: bool,
+    pre_tick_done: bool,
+) -> Result<Option<ValidatedVectorTransfer>, &'static str> {
+    if state.pc() & ADDRESS_MASK != preflight.source_pc || opcode != preflight.opcode {
+        return Err("silent instruction preflight does not match architectural fetch");
+    }
+    if bus.vector_transfer_provenance() != preflight.provenance {
+        return Err("silent instruction preflight memory mapping changed");
+    }
+    debug_assert!(preflight.instruction_len > 0);
+    let transfer = match opcode {
+        0xFE => Some(prepare_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?),
+        0xFF => Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?),
+        _ => None,
+    };
+    if run_timer_cycles && !pre_tick_done {
+        bus.tick_timers_only(bus.cycle_count);
+    }
+    Ok(transfer)
+}
+
 fn preflight_and_tick_instruction(
     executor: &AsyncLlamaExecutor,
     opcode: u8,
@@ -4155,21 +4189,28 @@ fn preflight_and_tick_instruction(
     }) {
         return Err("callback-backed instruction bytes cannot cross scheduler tick");
     }
-    let transfer = match opcode {
+    match opcode {
         0xFE => {
             validate_stable_vector_transfer(INTERRUPT_VECTOR_ADDR, state, bus)?;
-            Some(prepare_validated_vector(INTERRUPT_VECTOR_ADDR, state, bus)?)
         }
         0xFF => {
             validate_stable_vector_transfer(ROM_RESET_VECTOR_ADDR, state, bus)?;
-            Some(fetch_validated_vector(ROM_RESET_VECTOR_ADDR, state, bus)?)
         }
-        _ => None,
-    };
-    if run_timer_cycles && !pre_tick_done {
-        bus.tick_timers_only(bus.cycle_count);
+        _ => {}
     }
-    Ok(transfer)
+    prepare_preflighted_transfer_and_tick(
+        opcode,
+        state,
+        bus,
+        SilentInstructionPreflight {
+            source_pc,
+            opcode,
+            instruction_len,
+            provenance: bus.vector_transfer_provenance(),
+        },
+        run_timer_cycles,
+        pre_tick_done,
+    )
 }
 
 /// Decode and validate the instruction at the state's current PC without
@@ -4178,7 +4219,7 @@ fn preflight_current_instruction_silently(
     executor: &AsyncLlamaExecutor,
     state: &LlamaState,
     bus: &mut StandaloneBus,
-) -> Result<(u8, u8), &'static str> {
+) -> Result<SilentInstructionPreflight, &'static str> {
     let source_pc = state.pc() & ADDRESS_MASK;
     let opcode = bus
         .peek_byte_silent_at(source_pc, source_pc)
@@ -4201,7 +4242,12 @@ fn preflight_current_instruction_silently(
         }
         _ => {}
     }
-    Ok((opcode, instruction_len))
+    Ok(SilentInstructionPreflight {
+        source_pc,
+        opcode,
+        instruction_len,
+        provenance: bus.vector_transfer_provenance(),
+    })
 }
 
 /// Validate a vector and every decoded destination byte with the exact
@@ -5376,11 +5422,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             }
             let opcode = bus.load(pc, 8) as u8;
             if pc == current_pc {
-                if let Some((silent_opcode, _)) = silent_current {
-                    if opcode != silent_opcode {
+                if let Some(preflight) = silent_current {
+                    if opcode != preflight.opcode {
                         let message = format!(
                             "error fetching opcode at PC=0x{pc:05X}: architectural fetch \
-                             0x{opcode:02X} disagrees with silent preflight 0x{silent_opcode:02X}"
+                             0x{opcode:02X} disagrees with silent preflight 0x{:02X}",
+                            preflight.opcode
                         );
                         eprintln!("{message}");
                         run_fault = Some(message);
@@ -5389,14 +5436,25 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                 }
             }
             let run_timer_cycles = !state.is_off();
-            let prepared_transfer = match preflight_and_tick_instruction(
-                &executor,
-                opcode,
-                &state,
-                &mut bus,
-                run_timer_cycles,
-                pre_tick_done,
-            ) {
+            let prepared_result = match silent_current.filter(|proof| proof.source_pc == pc) {
+                Some(preflight) => prepare_preflighted_transfer_and_tick(
+                    opcode,
+                    &state,
+                    &mut bus,
+                    preflight,
+                    run_timer_cycles,
+                    pre_tick_done,
+                ),
+                None => preflight_and_tick_instruction(
+                    &executor,
+                    opcode,
+                    &state,
+                    &mut bus,
+                    run_timer_cycles,
+                    pre_tick_done,
+                ),
+            };
+            let prepared_transfer = match prepared_result {
                 Ok(transfer) => transfer,
                 Err(err) => {
                     let message =
@@ -5916,6 +5974,24 @@ mod tests {
         assert_eq!(bus.trace_resume_read_index, 0);
         assert!(!bus.trace_resume_read_enabled);
         assert_eq!(bus.memory.memory_read_count(), reads_before);
+    }
+
+    #[test]
+    fn silent_instruction_preflight_is_bound_to_the_memory_mapping() {
+        let mut bus = test_standalone_bus();
+        let state = LlamaState::new();
+        bus.memory.write_external_byte(0, 0x00);
+        let executor = AsyncLlamaExecutor::new();
+        let proof = preflight_current_instruction_silently(&executor, &state, &mut bus)
+            .expect("preflight NOP");
+
+        bus.memory.add_ram_overlay(0x200, 1, "mapping-change");
+        let error =
+            prepare_preflighted_transfer_and_tick(0x00, &state, &mut bus, proof, false, false)
+                .expect_err("a mapping change must invalidate the earlier proof");
+
+        assert_eq!(error, "silent instruction preflight memory mapping changed");
+        assert_eq!(bus.cycle_count, 0);
     }
 
     #[test]
