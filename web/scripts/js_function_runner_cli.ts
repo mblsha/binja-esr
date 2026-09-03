@@ -47,7 +47,7 @@ Options:
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
   --require-bnida            Fail if BNIDA symbols cannot be loaded
-  --iq7000-rtc <seed>        IQ-7000 RTC seed: host, off, or YYYYMMDDHHMM (default: host)
+  --iq7000-rtc <seed>        IQ-7000 RTC seed: host UTC, off, or UTC YYYYMMDDHHMM (default: host)
   --proof-yaml <path>        Write run/proof metadata as YAML
   --eval <js>                Inline script (async JS)
   --stdin                    Read script from stdin
@@ -76,8 +76,8 @@ function safeJson(value: unknown): string {
 function hostRtcSeed(): string {
 	const now = new Date();
 	const pad = (value: number, width = 2) => String(value).padStart(width, '0');
-	return `${pad(now.getFullYear(), 4)}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(
-		now.getMinutes(),
+	return `${pad(now.getUTCFullYear(), 4)}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(
+		now.getUTCMinutes(),
 	)}`;
 }
 

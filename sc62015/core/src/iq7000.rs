@@ -17,6 +17,11 @@ const EOL_OUT_DATA: u8 = 0x02;
 const EIL_IN_DATA: u8 = 0x08;
 const EIL_READY: u8 = 0x10;
 const RTC_COMMAND_CURRENT_DATETIME: u8 = 0xF4;
+// WORLD stores unsigned standard-time offsets westward from this reference:
+// Auckland is 01:00 (UTC+12), London is 13:00 (UTC), New York is 18:00
+// (UTC-5), and Honolulu is 23:00 (UTC-10). Summer time is a separate ROM
+// setting which reduces the selected city's offset by one hour.
+const RTC_REFERENCE_UTC_OFFSET_HOURS: u32 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Iq7000ContractStatus {
@@ -1325,8 +1330,8 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
     Iq7000RtcCommandSpec {
         command: 0xF2,
         payload_len: 2,
-        response_len: 1,
-        role: "short write/status",
+        response_len: 0,
+        role: "short command with write-only payload",
     },
     Iq7000RtcCommandSpec {
         command: 0xF4,
@@ -1401,14 +1406,14 @@ pub const IQ7000_RTC_PAYLOAD_FIELDS: &[Iq7000MediaFormatField] = &[
         offset: 0x00,
         width: 1,
         name: "century_status_bcd",
-        role: "first packed byte used by F0/F1 writes and F4/F5/F7 ASCII formatter; low nibble selects 19xx/20xx prefix",
+        role: "first packed byte used by F0/F1 writes and F4/F5/F7 ASCII formatter; low nibble selects 19xx/20xx prefix, while the high nibble is the reserved thirteenth input digit rather than a weekday",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000MediaFormatField {
         offset: 0x01,
         width: 5,
         name: "packed_datetime_pairs",
-        role: "remaining YY/MM/DD/HH/MM-style BCD pairs consumed by the common parser/formatter",
+        role: "remaining YY/MM/DD/HH/MM BCD pairs after the ROM reverses the RTC's minute/hour/day/month/year/century wire order",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000MediaFormatField {
@@ -1840,7 +1845,7 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         address: 0x00F3454,
         name: "rtc_read_current_datetime_ascii",
         inputs: "low-level RTC command F4",
-        outputs: "YYYYMMDDHHMM-style buffer via BCD nibble formatter",
+        outputs: "13 bytes YYYYMMDDHHMM0 via the BCD nibble formatter; callers consume the first 12 date/time digits",
         side_effects:
             "used by World/Home live-clock renderer and backed by the Rust E-port RTC peripheral",
         status: Iq7000ContractStatus::RuntimeCovered,
@@ -1869,7 +1874,7 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         name: "rtc_write_f2_short_value",
         inputs: "two-byte/nibble value parsed through sub_f33ca",
         outputs: "short payload sent with RTC opcode F2",
-        side_effects: "waits for one-byte status response from the RTC device",
+        side_effects: "write-only ROM path; unlike F0/F1 it performs no response read",
         status: Iq7000ContractStatus::Confirmed,
     },
     Iq7000SemanticContract {
@@ -2371,6 +2376,9 @@ impl Iq7000ClockSeed {
                 "IQ-7000 RTC seed must be YYYYMMDDHHMM, got '{raw}'"
             ));
         }
+        let year: u32 = raw[..4]
+            .parse()
+            .map_err(|_| format!("invalid IQ-7000 RTC year in '{raw}'"))?;
         let month: u32 = raw[4..6]
             .parse()
             .map_err(|_| format!("invalid IQ-7000 RTC month in '{raw}'"))?;
@@ -2383,10 +2391,15 @@ impl Iq7000ClockSeed {
         let minute: u32 = raw[10..12]
             .parse()
             .map_err(|_| format!("invalid IQ-7000 RTC minute in '{raw}'"))?;
+        if !(1900..=2099).contains(&year) {
+            return Err(format!(
+                "IQ-7000 RTC year must be in 1900..=2099, got '{raw}'"
+            ));
+        }
         if !(1..=12).contains(&month) {
             return Err(format!("invalid IQ-7000 RTC month in '{raw}'"));
         }
-        if !(1..=31).contains(&day) {
+        if day == 0 || day > days_in_month(year, month) {
             return Err(format!("invalid IQ-7000 RTC day in '{raw}'"));
         }
         if hour > 23 {
@@ -2394,6 +2407,13 @@ impl Iq7000ClockSeed {
         }
         if minute > 59 {
             return Err(format!("invalid IQ-7000 RTC minute in '{raw}'"));
+        }
+        let (rtc_year, ..) =
+            add_hours_to_gregorian_datetime(year, month, day, hour, RTC_REFERENCE_UTC_OFFSET_HOURS);
+        if rtc_year > 2099 {
+            return Err(format!(
+                "IQ-7000 UTC seed exceeds the RTC's 20xx range after UTC+13 conversion: '{raw}'"
+            ));
         }
 
         let mut bytes = [0u8; CLOCK_WORKSPACE_LEN];
@@ -2428,21 +2448,83 @@ impl Iq7000ClockSeed {
         std::str::from_utf8(&self.bytes[..12]).unwrap_or("")
     }
 
-    pub fn rtc_datetime_bcd(&self) -> [u8; 6] {
+    pub fn rtc_datetime_wire_bytes(&self) -> [u8; 6] {
         let digits = &self.bytes[..12];
+        let utc_year = ascii_decimal(&digits[..4]);
+        let utc_month = ascii_decimal(&digits[4..6]);
+        let utc_day = ascii_decimal(&digits[6..8]);
+        let utc_hour = ascii_decimal(&digits[8..10]);
+        let minute = ascii_decimal(&digits[10..12]);
+        let (year, month, day, hour) = add_hours_to_gregorian_datetime(
+            utc_year,
+            utc_month,
+            utc_day,
+            utc_hour,
+            RTC_REFERENCE_UTC_OFFSET_HOURS,
+        );
+        let century_flag = u8::from(year >= 2000);
+        // The RTC shifts the least-significant field first. The ROM's F333D
+        // reader stores each arriving byte from BP+5 down to BP+0, restoring
+        // the formatter order: status/century, YY, MM, DD, HH, MM. Its city
+        // table represents standard-time offsets westward from UTC+13, so the
+        // hardware clock basis is UTC+13 rather than the host's local
+        // wall-clock timezone. The ROM applies its independent summer-time
+        // flags while looking up a city.
         [
-            packed_bcd(digits[0], digits[1]),
-            packed_bcd(digits[2], digits[3]),
-            packed_bcd(digits[4], digits[5]),
-            packed_bcd(digits[6], digits[7]),
-            packed_bcd(digits[8], digits[9]),
-            packed_bcd(digits[10], digits[11]),
+            packed_bcd_value(minute),
+            packed_bcd_value(hour),
+            packed_bcd_value(day),
+            packed_bcd_value(month),
+            packed_bcd_value(year % 100),
+            century_flag,
         ]
     }
 }
 
-fn packed_bcd(tens: u8, ones: u8) -> u8 {
-    ((tens - b'0') << 4) | (ones - b'0')
+fn ascii_decimal(digits: &[u8]) -> u32 {
+    digits
+        .iter()
+        .fold(0, |value, digit| value * 10 + u32::from(digit - b'0'))
+}
+
+fn is_gregorian_leap_year(year: u32) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        2 if is_gregorian_leap_year(year) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn add_hours_to_gregorian_datetime(
+    mut year: u32,
+    mut month: u32,
+    mut day: u32,
+    hour: u32,
+    hours: u32,
+) -> (u32, u32, u32, u32) {
+    let hour_sum = hour + hours;
+    let result_hour = hour_sum % 24;
+    for _ in 0..(hour_sum / 24) {
+        day += 1;
+        if day > days_in_month(year, month) {
+            day = 1;
+            month += 1;
+            if month > 12 {
+                month = 1;
+                year += 1;
+            }
+        }
+    }
+    (year, month, day, result_hour)
+}
+
+fn packed_bcd_value(value: u32) -> u8 {
+    (((value / 10) << 4) | (value % 10)) as u8
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2451,7 +2533,6 @@ enum RtcWritePhase {
     ReadyHigh,
     AwaitData,
     ReadyLow,
-    Complete,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2511,6 +2592,8 @@ impl Iq7000RtcPeripheral {
 
         if (value & EOL_STROBE) == 0 {
             self.write_phase = RtcWritePhase::Idle;
+            self.write_acc = 0;
+            self.write_bits = 0;
             self.read_phase = RtcReadPhase::Idle;
             return;
         }
@@ -2522,12 +2605,7 @@ impl Iq7000RtcPeripheral {
             return;
         }
 
-        if strobe_was_low
-            || matches!(
-                self.write_phase,
-                RtcWritePhase::Idle | RtcWritePhase::Complete
-            )
-        {
+        if strobe_was_low || matches!(self.write_phase, RtcWritePhase::Idle) {
             self.write_phase = RtcWritePhase::ReadyHigh;
         } else if self.write_phase == RtcWritePhase::AwaitData {
             self.latch_host_bit((value & EOL_OUT_DATA) != 0);
@@ -2537,7 +2615,10 @@ impl Iq7000RtcPeripheral {
 
     pub fn handle_eil_read(&mut self) -> u8 {
         if self.write_phase == RtcWritePhase::ReadyLow {
-            self.write_phase = RtcWritePhase::Complete;
+            // The ROM keeps EOL.strobe asserted across all eight output bits.
+            // This low sample completes one bit; the next EIL poll must raise
+            // READY for the next bit without another EOL transition.
+            self.write_phase = RtcWritePhase::ReadyHigh;
             return 0;
         }
 
@@ -2605,14 +2686,14 @@ impl Iq7000RtcPeripheral {
             }
             0xF2 => {
                 self.payload_remaining = 2;
-                self.response_after_payload.push(0);
             }
             RTC_COMMAND_CURRENT_DATETIME | 0xF5 => {
-                self.queue_response_bytes(&self.seed.rtc_datetime_bcd());
+                self.queue_response_bytes(&self.seed.rtc_datetime_wire_bytes());
             }
             0xF6 => self.queue_response_bytes(&[0, 0]),
             0xF7 => self.queue_response_bytes(&[0, 0, 0, 0]),
             0xF8 | 0xFD => self.queue_response_bytes(&[0]),
+            0xFC => self.queue_response_bytes(&[0, 0]),
             _ => {}
         }
     }
@@ -2682,8 +2763,8 @@ mod tests {
     use super::*;
 
     fn host_write_byte(peripheral: &mut Iq7000RtcPeripheral, byte: u8) {
+        peripheral.handle_eol_write(EOL_STROBE);
         for bit in 0..8 {
-            peripheral.handle_eol_write(EOL_STROBE);
             assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
             let data = if ((byte >> bit) & 1) != 0 {
                 EOL_STROBE | EOL_OUT_DATA
@@ -3117,12 +3198,41 @@ mod tests {
     }
 
     #[test]
-    fn clock_seed_converts_to_rtc_bcd() {
+    fn clock_seed_converts_utc_to_rtc_wire_basis() {
         let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
         assert_eq!(
-            seed.rtc_datetime_bcd(),
-            [0x20, 0x26, 0x04, 0x25, 0x21, 0x19]
+            seed.rtc_datetime_wire_bytes(),
+            [0x19, 0x10, 0x26, 0x04, 0x26, 0x01]
         );
+
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("199912310005").expect("seed parses");
+        assert_eq!(
+            seed.rtc_datetime_wire_bytes(),
+            [0x05, 0x13, 0x31, 0x12, 0x99, 0x00]
+        );
+
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202612311500").expect("seed parses");
+        assert_eq!(
+            seed.rtc_datetime_wire_bytes(),
+            [0x00, 0x04, 0x01, 0x01, 0x27, 0x01]
+        );
+    }
+
+    #[test]
+    fn clock_seed_rejects_unrepresentable_or_invalid_dates() {
+        for raw in [
+            "189912312359",
+            "210001010000",
+            "202602290000",
+            "202604310000",
+            "209912311100",
+        ] {
+            assert!(
+                Iq7000ClockSeed::from_yyyymmddhhmm(raw).is_err(),
+                "accepted invalid RTC seed {raw}"
+            );
+        }
+        assert!(Iq7000ClockSeed::from_yyyymmddhhmm("200002290000").is_ok());
     }
 
     #[test]
@@ -3151,8 +3261,39 @@ mod tests {
             host_read_byte_like_rom(&mut peripheral),
         ];
 
-        assert_eq!(actual, [0x20, 0x26, 0x04, 0x25, 0x21, 0x19]);
+        assert_eq!(actual, [0x19, 0x10, 0x26, 0x04, 0x26, 0x01]);
         assert!(!peripheral.has_pending_response());
+    }
+
+    #[test]
+    fn rtc_peripheral_streams_two_byte_fc_status() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, 0xFC);
+
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+        assert!(!peripheral.has_pending_response());
+    }
+
+    #[test]
+    fn rtc_peripheral_discards_partial_command_when_strobe_drops() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        peripheral.handle_eol_write(EOL_STROBE);
+        for bit in 0..4 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            let data = EOL_STROBE | (((0xFC >> bit) & 1) * EOL_OUT_DATA);
+            peripheral.handle_eol_write(data);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+        }
+        peripheral.handle_eol_write(0);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_CURRENT_DATETIME);
+        assert_eq!(peripheral.last_command, Some(RTC_COMMAND_CURRENT_DATETIME));
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x19);
     }
 
     #[test]
@@ -3164,7 +3305,7 @@ mod tests {
         assert_eq!(peripheral.last_command, Some(0xF1));
         assert!(!peripheral.has_pending_response());
 
-        for byte in [0x20, 0x26, 0x04, 0x25, 0x21] {
+        for byte in [0x19, 0x21, 0x25, 0x04, 0x26] {
             host_write_byte(&mut peripheral, byte);
             assert!(!peripheral.has_pending_response());
         }
@@ -3172,5 +3313,18 @@ mod tests {
 
         assert!(peripheral.has_pending_response());
         assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+    }
+
+    #[test]
+    fn rtc_peripheral_f2_payload_does_not_queue_a_bogus_response() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, 0xF2);
+        host_write_byte(&mut peripheral, 0x12);
+        host_write_byte(&mut peripheral, 0x34);
+
+        assert_eq!(peripheral.last_command, Some(0xF2));
+        assert!(!peripheral.has_pending_response());
     }
 }
