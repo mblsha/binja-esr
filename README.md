@@ -83,6 +83,11 @@ snapshot, and structured debug-probe switches require an explicit
 `--runtime legacy`; unsupported combinations fail instead of silently changing
 schedulers.
 
+Runtime `cycle_count` and timer periods currently use provisional scheduler
+timing units. They are not calibrated oscillator cycles: PC-E500 absolute timer
+cadence and IQ-7000 timing still require machine-level qualification. CLI timing
+diagnostics label this basis explicitly.
+
 The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
 CPU differential/parity tools. Their machine scheduler and peripheral callbacks
 are Python-owned, so they are not another Rust machine runtime and should not be

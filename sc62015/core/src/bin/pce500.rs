@@ -4761,9 +4761,9 @@ fn run_core_runtime_path(
     let card_profile = args.card.resolve(args.model);
     eprintln!("[runtime] shared-core");
     eprintln!(
-        "[timing] model={} cpu_hz={} mti={} sti={} source={}",
+        "[timing] model={} timebase_hz={} unit=scheduler-tick mti={} sti={} source={}",
         args.model.label(),
-        timer_profile.cpu_hz,
+        timer_profile.timebase_hz,
         timer_profile.mti_period,
         timer_profile.sti_period,
         timer_profile.provenance_label()
@@ -5071,9 +5071,9 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
     let timer_profile = args.model.timer_profile();
     eprintln!(
-        "[timing] model={} cpu_hz={} mti={} sti={} source={}",
+        "[timing] model={} timebase_hz={} unit=scheduler-tick mti={} sti={} source={}",
         args.model.label(),
-        timer_profile.cpu_hz,
+        timer_profile.timebase_hz,
         timer_profile.mti_period,
         timer_profile.sti_period,
         timer_profile.provenance_label()

@@ -19,11 +19,18 @@ pub const NO_RAM_WINDOW_END: usize = 0x3FFFF;
 pub const BOOTSTRAP_IMR_VALUE: u8 = 0x43;
 pub const BOOTSTRAP_ISR_VALUE: u8 = 0x00;
 
-// Best-guess clock for real hardware: 3.072 MHz / 3 = 1.024 MHz.
-// INT_FAST (MTI) fires every ~2 ms and INT_SLOW (STI) every ~0.5 s at that rate.
-pub const DEFAULT_CPU_HZ: u64 = 1_024_000;
-pub const DEFAULT_MTI_PERIOD: u64 = DEFAULT_CPU_HZ / 1000 * 2;
-pub const DEFAULT_STI_PERIOD: u64 = DEFAULT_CPU_HZ / 2;
+// Compatibility timebase retained from the historical emulator.  The runtime
+// currently advances this counter in scheduler/instruction timing units, not
+// calibrated oscillator cycles.  Do not derive physical elapsed time from it.
+//
+// PC-E500 hardware establishes relative instruction timing for a useful
+// subset, but absolute MTI/STI cadence and oscillator calibration remain open.
+// The IQ-7000 profile uses these values only as an explicitly provisional
+// fallback.
+pub const COMPATIBILITY_TIMEBASE_HZ: u64 = 1_024_000;
+pub const DEFAULT_CPU_HZ: u64 = COMPATIBILITY_TIMEBASE_HZ;
+pub const DEFAULT_MTI_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 1000 * 2;
+pub const DEFAULT_STI_PERIOD: u64 = COMPATIBILITY_TIMEBASE_HZ / 2;
 
 pub const PF1_CODE: u8 = 0x56; // col=10, row=6
 pub const PF2_CODE: u8 = 0x55; // col=10, row=5
