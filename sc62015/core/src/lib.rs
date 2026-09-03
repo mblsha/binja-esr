@@ -422,9 +422,14 @@ impl Default for CoreRuntime {
 
 impl CoreRuntime {
     pub fn new() -> Self {
+        let mut memory = MemoryImage::new();
+        // CoreRuntime owns its memory and invokes any host write callback
+        // synchronously, so a second unconsumed dirty queue only grows without
+        // bound. The PyO3 mirror keeps tracking enabled on its own MemoryImage.
+        memory.set_dirty_tracking(false);
         let mut rt = Self {
             metadata: SnapshotMetadata::default(),
-            memory: MemoryImage::new(),
+            memory,
             state: LlamaState::new(),
             loop_detector: None,
             executor: crate::llama::eval::LlamaExecutor::new(),
@@ -3148,6 +3153,23 @@ mod tests {
             .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x56);
         rt.memory
             .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0xF4);
+    }
+
+    #[test]
+    fn core_runtime_does_not_accumulate_host_mirror_dirty_queues() {
+        let mut runtime = CoreRuntime::new();
+        assert!(!runtime.memory.dirty_tracking_enabled());
+
+        runtime.memory.write_external_byte(0x1234, 0x56);
+        runtime.memory.write_internal_byte(IMEM_SCR_OFFSET, 0x78);
+
+        assert!(runtime.memory.drain_dirty().is_empty());
+        assert!(runtime.memory.drain_dirty_internal().is_empty());
+        assert_eq!(runtime.memory.load(0x1234, 8), Some(0x56));
+        assert_eq!(
+            runtime.memory.read_internal_byte_silent(IMEM_SCR_OFFSET),
+            Some(0x78)
+        );
     }
 
     #[test]

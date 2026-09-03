@@ -240,6 +240,7 @@ impl MemoryOverlay {
 
 pub struct MemoryImage {
     external: Vec<u8>,
+    dirty_tracking: bool,
     dirty: Vec<(u32, u8)>,
     dirty_internal: Vec<(u32, u8)>,
     python_ranges: Vec<(u32, u32)>,
@@ -287,6 +288,9 @@ impl MemoryImage {
         internal[0xFB] = 0x00;
         Self {
             external: vec![0; EXTERNAL_SPACE],
+            // The PyO3 mirror consumes byte-ordered dirty queues. Standalone
+            // CoreRuntime disables them because no host mirror drains them.
+            dirty_tracking: true,
             dirty: Vec::new(),
             dirty_internal: Vec::new(),
             python_ranges: Vec::new(),
@@ -373,6 +377,34 @@ impl MemoryImage {
     fn record_write_capture(&mut self, address: u32, value: u8) {
         if let Some(map) = self.write_capture.as_mut() {
             map.insert(canonical_address(address), value);
+        }
+    }
+
+    /// Enable byte-ordered dirty queues for a host mirror.
+    ///
+    /// Disabling tracking clears any queued writes. Architectural memory,
+    /// exact write capture, rollback capture, counters, and tracing are
+    /// unaffected.
+    pub fn set_dirty_tracking(&mut self, enabled: bool) {
+        self.dirty_tracking = enabled;
+        if !enabled {
+            self.clear_dirty();
+        }
+    }
+
+    pub fn dirty_tracking_enabled(&self) -> bool {
+        self.dirty_tracking
+    }
+
+    fn mark_external_dirty(&mut self, address: u32, value: u8) {
+        if self.dirty_tracking {
+            self.dirty.push((address, value));
+        }
+    }
+
+    fn mark_internal_dirty(&mut self, address: u32, value: u8) {
+        if self.dirty_tracking {
+            self.dirty_internal.push((address, value));
         }
     }
 
@@ -1214,7 +1246,7 @@ impl MemoryImage {
             if self.external[index] != byte {
                 self.capture_external_previous(index);
                 self.external[index] = byte;
-                self.dirty.push((logical_addr, byte));
+                self.mark_external_dirty(logical_addr, byte);
             }
         }
         Some(())
@@ -1225,6 +1257,9 @@ impl MemoryImage {
     }
 
     pub fn prepend_dirty(&mut self, mut entries: Vec<(u32, u8)>) {
+        if !self.dirty_tracking {
+            return;
+        }
         entries.append(&mut self.dirty);
         self.dirty = entries;
     }
@@ -1275,7 +1310,7 @@ impl MemoryImage {
             let prev = self.internal[index];
             self.capture_internal_previous(index);
             self.internal[index] = value;
-            self.dirty_internal.push((address, value));
+            self.mark_internal_dirty(address, value);
             self.invoke_imr_isr_hook(offset, prev, value);
             record_perfetto("internal");
             return;
@@ -1288,7 +1323,7 @@ impl MemoryImage {
         if self.external[addr] != value {
             self.capture_external_previous(addr);
             self.external[addr] = value;
-            self.dirty.push((address, value));
+            self.mark_external_dirty(address, value);
         }
         record_perfetto("external");
     }
@@ -1441,7 +1476,7 @@ impl MemoryImage {
         if self.external[idx] != value {
             self.capture_external_previous(idx);
             self.external[idx] = value;
-            self.dirty.push((address, value));
+            self.mark_external_dirty(address, value);
         }
     }
 
@@ -1527,8 +1562,7 @@ impl MemoryImage {
             self.capture_internal_previous(index);
             self.internal[index] = value;
             self.record_write_capture(INTERNAL_MEMORY_START + offset, value);
-            self.dirty_internal
-                .push((INTERNAL_MEMORY_START + offset, value));
+            self.mark_internal_dirty(INTERNAL_MEMORY_START + offset, value);
             self.invoke_imr_isr_hook(offset, prev, value);
             let mut guard = perfetto_guard();
             guard.with_some(|tracer| {
@@ -1657,8 +1691,7 @@ impl MemoryImage {
             if self.internal[internal_index] != byte {
                 self.capture_internal_previous(internal_index);
                 self.internal[internal_index] = byte;
-                self.dirty_internal
-                    .push((address + byte_offset as u32, byte));
+                self.mark_internal_dirty(address + byte_offset as u32, byte);
             }
             self.invoke_imr_isr_hook(imem_offset + byte_offset as u32, prev, byte);
         }
@@ -1670,6 +1703,9 @@ impl MemoryImage {
     }
 
     pub fn prepend_dirty_internal(&mut self, mut entries: Vec<(u32, u8)>) {
+        if !self.dirty_tracking {
+            return;
+        }
         entries.append(&mut self.dirty_internal);
         self.dirty_internal = entries;
     }
@@ -1846,6 +1882,25 @@ mod tests {
         let mut dirty = mem.drain_dirty_internal();
         dirty.sort_by_key(|(addr, _)| *addr);
         assert_eq!(dirty, vec![(base, 0xEF), (base + 1, 0xBE),]);
+    }
+
+    #[test]
+    fn disabled_dirty_tracking_preserves_memory_and_exact_capture() {
+        let mut mem = MemoryImage::new();
+        mem.set_dirty_tracking(false);
+        mem.begin_write_capture();
+
+        let _ = mem.store(0x1234, 8, 0x56);
+        let _ = mem.store(INTERNAL_MEMORY_START + 0x10, 8, 0x78);
+
+        assert_eq!(mem.load(0x1234, 8), Some(0x56));
+        assert_eq!(mem.load(INTERNAL_MEMORY_START + 0x10, 8), Some(0x78));
+        assert!(mem.drain_dirty().is_empty());
+        assert!(mem.drain_dirty_internal().is_empty());
+        assert_eq!(
+            mem.take_write_capture(),
+            vec![(0x1234, 0x56), (INTERNAL_MEMORY_START + 0x10, 0x78)]
+        );
     }
 
     #[test]
