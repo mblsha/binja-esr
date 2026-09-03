@@ -7569,7 +7569,7 @@ mod tests {
     }
 
     #[test]
-    fn tcl_fails_closed_until_timer_clear_is_modeled() {
+    fn tcl_fails_closed_without_timer_clear_bus() {
         let mut bus = MemBus::with_size(0x200);
         bus.mem[IMEM_IMR_OFFSET as usize] = 0xAA;
         bus.mem[0] = 0xCE;
