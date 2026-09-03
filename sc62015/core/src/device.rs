@@ -74,13 +74,15 @@ impl DeviceMemoryCardProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerProfileProvenance {
-    PcE500BoardEstimate,
-    PcE500CompatibilityFallback,
+    PcE500UncalibratedCompatibility,
+    Iq7000PcCompatibilityFallback,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceTimerProfile {
-    pub cpu_hz: u64,
+    /// Nominal frequency attached to the compatibility scheduler timebase.
+    /// This is not yet a hardware-calibrated oscillator frequency.
+    pub timebase_hz: u64,
     pub mti_period: u64,
     pub sti_period: u64,
     pub provenance: TimerProfileProvenance,
@@ -98,15 +100,18 @@ impl DeviceTimerProfile {
     pub fn is_provisional(self) -> bool {
         matches!(
             self.provenance,
-            TimerProfileProvenance::PcE500CompatibilityFallback
+            TimerProfileProvenance::PcE500UncalibratedCompatibility
+                | TimerProfileProvenance::Iq7000PcCompatibilityFallback
         )
     }
 
     pub fn provenance_label(self) -> &'static str {
         match self.provenance {
-            TimerProfileProvenance::PcE500BoardEstimate => "PC-E500 board-clock estimate",
-            TimerProfileProvenance::PcE500CompatibilityFallback => {
-                "provisional PC-E500-compatible fallback; IQ-7000 timing is uncalibrated"
+            TimerProfileProvenance::PcE500UncalibratedCompatibility => {
+                "provisional PC-E500 scheduler-tick compatibility; absolute cadence is uncalibrated"
+            }
+            TimerProfileProvenance::Iq7000PcCompatibilityFallback => {
+                "provisional PC-E500 scheduler-tick fallback; IQ-7000 timing is uncalibrated"
             }
         }
     }
@@ -191,10 +196,10 @@ impl DeviceModel {
                 font_base_addr: Some(0x00F_1B45),
                 text_decoder: Some(DeviceTextDecoderKind::Iq7000),
                 timer: DeviceTimerProfile {
-                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
-                    provenance: TimerProfileProvenance::PcE500CompatibilityFallback,
+                    provenance: TimerProfileProvenance::Iq7000PcCompatibilityFallback,
                 },
                 internal_ram_mirror: false,
                 keyboard: DeviceKeyboardProfile {
@@ -216,10 +221,10 @@ impl DeviceModel {
                 font_base_addr: Some(pce500::ROM_ENGLISH_FONT_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
                 timer: DeviceTimerProfile {
-                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
-                    provenance: TimerProfileProvenance::PcE500BoardEstimate,
+                    provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
                 keyboard: DeviceKeyboardProfile {
@@ -241,10 +246,10 @@ impl DeviceModel {
                 font_base_addr: Some(pce500::ROM_JP_FONT_ATLAS_BASE_ADDR),
                 text_decoder: Some(DeviceTextDecoderKind::Pce500),
                 timer: DeviceTimerProfile {
-                    cpu_hz: pce500::DEFAULT_CPU_HZ,
+                    timebase_hz: pce500::COMPATIBILITY_TIMEBASE_HZ,
                     mti_period: pce500::DEFAULT_MTI_PERIOD,
                     sti_period: pce500::DEFAULT_STI_PERIOD,
-                    provenance: TimerProfileProvenance::PcE500BoardEstimate,
+                    provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
                 keyboard: DeviceKeyboardProfile {
@@ -380,11 +385,14 @@ mod tests {
         let pc = DeviceModel::PcE500.timer_profile();
         let iq = DeviceModel::Iq7000.timer_profile();
 
-        assert_eq!(pc.provenance, TimerProfileProvenance::PcE500BoardEstimate);
-        assert!(!pc.is_provisional());
+        assert_eq!(
+            pc.provenance,
+            TimerProfileProvenance::PcE500UncalibratedCompatibility
+        );
+        assert!(pc.is_provisional());
         assert_eq!(
             iq.provenance,
-            TimerProfileProvenance::PcE500CompatibilityFallback
+            TimerProfileProvenance::Iq7000PcCompatibilityFallback
         );
         assert!(iq.is_provisional());
         assert_eq!(iq.mti_period, pc.mti_period);
