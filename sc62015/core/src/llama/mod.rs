@@ -13,6 +13,7 @@ pub mod eval;
 pub mod opcodes;
 pub mod parity;
 pub mod state;
+pub mod timing;
 
 /// Placeholder entry point for future LLAMA runtime glue.
 pub struct LlamaRuntime;
