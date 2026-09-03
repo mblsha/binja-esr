@@ -1701,6 +1701,10 @@ impl CoreRuntime {
             }
         }
 
+        // A trace cannot be installed or removed concurrently during this
+        // synchronous call. Sample once so the untraced hot path does not
+        // enter the process-global tracer handle for every boundary.
+        let perfetto_active = PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some();
         for _ in 0..boundaries {
             let halted_at_step_entry = self.state.is_halted();
             let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
@@ -1985,47 +1989,44 @@ impl CoreRuntime {
                     continue;
                 }
             }
-            let step_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
-                let imr = self
-                    .memory
-                    .read_internal_byte_silent(IMEM_IMR_OFFSET)
-                    .unwrap_or(0);
-                let isr = self
-                    .memory
-                    .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                    .unwrap_or(0);
-                let kil = self
-                    .memory
-                    .read_internal_byte_silent(IMEM_KIL_OFFSET)
-                    .unwrap_or(0);
-                let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                let pending_src = self
-                    .timer
-                    .irq_source
-                    .as_deref()
-                    .map(str::to_string)
-                    .or_else(|| {
+            // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
+            if perfetto_active {
+                let mut guard = PERFETTO_TRACER.enter();
+                guard.with_some(|tracer| {
+                    let imr = self
+                        .memory
+                        .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                        .unwrap_or(0);
+                    let isr = self
+                        .memory
+                        .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                        .unwrap_or(0);
+                    let kil = self
+                        .memory
+                        .read_internal_byte_silent(IMEM_KIL_OFFSET)
+                        .unwrap_or(0);
+                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                    let pending_src = if let Some(source) = self.timer.irq_source.as_deref() {
+                        Some(source)
+                    } else {
                         if (isr & ISR_RXI) != 0 {
-                            Some("RX".to_string())
+                            Some("RX")
                         } else if (isr & ISR_EXI) != 0 {
-                            Some("EX".to_string())
+                            Some("EX")
                         } else if (isr & ISR_TXI) != 0 {
-                            Some("TX".to_string())
+                            Some("TX")
                         } else if (isr & ISR_ONKI) != 0 {
-                            Some("ONK".to_string())
+                            Some("ONK")
                         } else if (isr & ISR_KEYI) != 0 {
-                            Some("KEY".to_string())
+                            Some("KEY")
                         } else if (isr & ISR_STI) != 0 {
-                            Some("STI".to_string())
+                            Some("STI")
                         } else if (isr & ISR_MTI) != 0 {
-                            Some("MTI".to_string())
+                            Some("MTI")
                         } else {
                             None
                         }
-                    });
-                let mut guard = PERFETTO_TRACER.enter();
-                guard.with_some(|tracer| {
+                    };
                     tracer.record_irq_check(
                         "IRQ_Check",
                         self.state.pc() & ADDRESS_MASK,
@@ -2033,79 +2034,81 @@ impl CoreRuntime {
                         isr,
                         self.timer.irq_pending,
                         self.timer.in_interrupt,
-                        pending_src.as_deref(),
+                        pending_src,
                         Some(kil),
                         Some(imr_reg),
                     );
                 });
-                // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
-                self.refresh_sio_interrupts();
-                // Sample the selected, undebounced matrix level. Host FIFO and
-                // debounce bookkeeping are not silicon KEYI sources.
-                self.refresh_raw_key_irq_level();
-                // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
-                self.arm_pending_irq_from_isr();
+            }
+            // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
+            self.refresh_sio_interrupts();
+            // Sample the selected, undebounced matrix level. Host FIFO and
+            // debounce bookkeeping are not silicon KEYI sources.
+            self.refresh_raw_key_irq_level();
+            // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
+            self.arm_pending_irq_from_isr();
 
-                // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
-                if self.state.is_halted() {
-                    if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                        // kb_irq_enabled controls host generation, not the
-                        // meaning of an already asserted silicon status bit.
-                        if isr != 0 {
-                            self.state.set_halted(false);
-                            self.timer.irq_pending = true;
-                            self.timer.irq_isr = isr;
-                            self.timer.irq_imr = self
-                                .memory
-                                .read_internal_byte(IMEM_IMR_OFFSET)
-                                .unwrap_or(self.timer.irq_imr);
-                            if self.timer.irq_source.is_none() {
-                                let src = if (isr & ISR_RXI) != 0 {
-                                    "RX"
-                                } else if (isr & ISR_EXI) != 0 {
-                                    "EX"
-                                } else if (isr & ISR_TXI) != 0 {
-                                    "TX"
-                                } else if (isr & ISR_ONKI) != 0 {
-                                    "ONK"
-                                } else if (isr & ISR_KEYI) != 0 {
-                                    "KEY"
-                                } else if (isr & ISR_STI) != 0 {
-                                    "STI"
-                                } else if (isr & ISR_MTI) != 0 {
-                                    "MTI"
-                                } else {
-                                    "IRQ"
-                                };
-                                self.timer.irq_source = Some(src.to_string());
-                            }
-                            self.timer.last_fired = self.timer.irq_source.clone();
+            // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
+            if self.state.is_halted() {
+                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                    // kb_irq_enabled controls host generation, not the
+                    // meaning of an already asserted silicon status bit.
+                    if isr != 0 {
+                        self.state.set_halted(false);
+                        self.timer.irq_pending = true;
+                        self.timer.irq_isr = isr;
+                        self.timer.irq_imr = self
+                            .memory
+                            .read_internal_byte(IMEM_IMR_OFFSET)
+                            .unwrap_or(self.timer.irq_imr);
+                        if self.timer.irq_source.is_none() {
+                            let src = if (isr & ISR_RXI) != 0 {
+                                "RX"
+                            } else if (isr & ISR_EXI) != 0 {
+                                "EX"
+                            } else if (isr & ISR_TXI) != 0 {
+                                "TX"
+                            } else if (isr & ISR_ONKI) != 0 {
+                                "ONK"
+                            } else if (isr & ISR_KEYI) != 0 {
+                                "KEY"
+                            } else if (isr & ISR_STI) != 0 {
+                                "STI"
+                            } else if (isr & ISR_MTI) != 0 {
+                                "MTI"
+                            } else {
+                                "IRQ"
+                            };
+                            self.timer.irq_source = Some(src.to_string());
                         }
+                        self.timer.last_fired = self.timer.irq_source.clone();
                     }
                 }
+            }
 
-                // A HALT boundary remains an idle boundary even when a status
-                // level wakes the core. Execute the first foreground opcode
-                // on the next scheduler step, after it receives its own
-                // silent validation and architectural fetch.
-                if halted_at_step_entry {
-                    let prev_cycle = self.metadata.cycle_count;
-                    let new_cycle = prev_cycle.wrapping_add(1);
-                    // HALT stops the SC62015 system clock, so the main timer
-                    // and its keyboard scan retain phase.  The 32 kHz subclock
-                    // continues and may wake the core through STI.
-                    self.timer.defer_mti(1);
-                    self.metadata.cycle_count = new_cycle;
-                    self.tick_timers_and_keyboard_selected(new_cycle, false, true);
-                    if self
-                        .memory
-                        .read_internal_byte(IMEM_ISR_OFFSET)
-                        .is_some_and(|isr| isr != 0)
-                    {
-                        self.state.set_halted(false);
-                        self.arm_pending_irq_from_isr();
-                    }
-                    self.refresh_raw_key_irq_level();
+            // A HALT boundary remains an idle boundary even when a status
+            // level wakes the core. Execute the first foreground opcode
+            // on the next scheduler step, after it receives its own
+            // silent validation and architectural fetch.
+            if halted_at_step_entry {
+                let prev_cycle = self.metadata.cycle_count;
+                let new_cycle = prev_cycle.wrapping_add(1);
+                // HALT stops the SC62015 system clock, so the main timer
+                // and its keyboard scan retain phase.  The 32 kHz subclock
+                // continues and may wake the core through STI.
+                self.timer.defer_mti(1);
+                self.metadata.cycle_count = new_cycle;
+                self.tick_timers_and_keyboard_selected(new_cycle, false, true);
+                if self
+                    .memory
+                    .read_internal_byte(IMEM_ISR_OFFSET)
+                    .is_some_and(|isr| isr != 0)
+                {
+                    self.state.set_halted(false);
+                    self.arm_pending_irq_from_isr();
+                }
+                self.refresh_raw_key_irq_level();
+                if perfetto_active {
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
                         tracer.update_counters(
@@ -2115,167 +2118,169 @@ impl CoreRuntime {
                             self.memory.memory_write_count(),
                         );
                     });
-                    return Ok::<(), CoreError>(());
                 }
+                continue;
+            }
 
-                let in_interrupt_before = self.timer.in_interrupt;
-                let irq_source_before = self
-                    .timer
-                    .irq_source
-                    .as_deref()
-                    .map(LoopIrqSource::from_name);
+            let in_interrupt_before = self.timer.in_interrupt;
+            let irq_source_before = self
+                .timer
+                .irq_source
+                .as_deref()
+                .map(LoopIrqSource::from_name);
 
-                let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                let (prepared_opcode, prepared_transfer, prepared_timing) = prepared_instruction
-                    .ok_or_else(|| {
-                        CoreError::Other(
-                            "running CPU reached execution without a prepared opcode".to_string(),
-                        )
-                    })?;
-                let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
-                let (opcode, instr_len, pc_after) = {
-                    let keyboard_ptr = self
-                        .keyboard
-                        .as_mut()
-                        .map(|kb| kb as *mut KeyboardMatrix)
-                        .unwrap_or(std::ptr::null_mut());
-                    let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
-                    let host_read = self
-                        .host_read
-                        .as_mut()
-                        .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                    let host_peek = self
-                        .host_peek
-                        .as_mut()
-                        .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                    let host_write = self
-                        .host_write
-                        .as_mut()
-                        .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
-                    let sio_ptr = self
-                        .sio
-                        .as_mut()
-                        .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
-                    let iq7000_rtc = self
-                        .iq7000_rtc
-                        .as_mut()
-                        .map_or(std::ptr::null_mut(), |rtc| {
-                            rtc as *mut iq7000::Iq7000RtcPeripheral
-                        });
-                    let mut bus = RuntimeBus {
-                        mem: &mut self.memory,
-                        keyboard_ptr,
-                        lcd_ptr,
-                        sio_ptr,
-                        host_read,
-                        host_peek,
-                        host_write,
-                        iq7000_clock_seed: self
-                            .iq7000_clock_seed
-                            .as_ref()
-                            .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
-                        iq7000_rtc,
-                        timer_ptr: self.timer.as_mut() as *mut TimerContext,
-                        onk_level: self.onk_level,
-                        cycle: self.metadata.cycle_count,
-                        pc: pc_before,
-                        meta_ptr: &self.metadata as *const SnapshotMetadata,
-                        state_ptr: &self.state as *const LlamaState,
-                    };
-                    let opcode = prepared_opcode;
-                    let instr_len = match self.executor.execute_with_vector_transfer(
-                        opcode,
-                        &mut self.state,
-                        &mut bus,
-                        prepared_transfer,
-                    ) {
-                        Ok(len) => len,
-                        Err(e) => {
-                            return Err(CoreError::Other(format!(
-                                "execute opcode 0x{opcode:02X}: {e}"
-                            )))
-                        }
-                    };
-                    let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                    (opcode, instr_len, pc_after)
+            let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+            let (prepared_opcode, prepared_transfer, prepared_timing) = prepared_instruction
+                .ok_or_else(|| {
+                    CoreError::Other(
+                        "running CPU reached execution without a prepared opcode".to_string(),
+                    )
+                })?;
+            let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
+            let (opcode, instr_len, pc_after) = {
+                let keyboard_ptr = self
+                    .keyboard
+                    .as_mut()
+                    .map(|kb| kb as *mut KeyboardMatrix)
+                    .unwrap_or(std::ptr::null_mut());
+                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
+                let host_read = self
+                    .host_read
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                let host_peek = self
+                    .host_peek
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
+                let host_write = self
+                    .host_write
+                    .as_mut()
+                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
+                let sio_ptr = self
+                    .sio
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
+                let iq7000_rtc = self
+                    .iq7000_rtc
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |rtc| {
+                        rtc as *mut iq7000::Iq7000RtcPeripheral
+                    });
+                let mut bus = RuntimeBus {
+                    mem: &mut self.memory,
+                    keyboard_ptr,
+                    lcd_ptr,
+                    sio_ptr,
+                    host_read,
+                    host_peek,
+                    host_write,
+                    iq7000_clock_seed: self
+                        .iq7000_clock_seed
+                        .as_ref()
+                        .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
+                    iq7000_rtc,
+                    timer_ptr: self.timer.as_mut() as *mut TimerContext,
+                    onk_level: self.onk_level,
+                    cycle: self.metadata.cycle_count,
+                    pc: pc_before,
+                    meta_ptr: &self.metadata as *const SnapshotMetadata,
+                    state_ptr: &self.state as *const LlamaState,
                 };
-                if opcode == 0xFF {
-                    // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
-                    // refresh mirrors from IMEM without clearing counters/bit-watch.
-                    self.timer.irq_imr = self
-                        .memory
-                        .read_internal_byte(IMEM_IMR_OFFSET)
-                        .unwrap_or(self.timer.irq_imr);
-                    self.timer.irq_isr = self
-                        .memory
-                        .read_internal_byte(IMEM_ISR_OFFSET)
-                        .unwrap_or(self.timer.irq_isr);
-                    // Align IRQ bookkeeping with the cleared IMEM registers so pending/latched state
-                    // does not survive a soft RESET.
-                    self.timer.clear_pending_for_reset();
-                    self.state.reset_call_metrics();
-                }
-                // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
-                if opcode == 0xFE {
-                    self.timer.in_interrupt = true;
-                    self.timer.irq_pending = false;
-                    self.timer.irq_source = Some("IR".to_string());
-                    self.timer.last_fired = self.timer.irq_source.clone();
-                    self.timer.irq_isr = self
-                        .memory
-                        .read_internal_byte(IMEM_ISR_OFFSET)
-                        .unwrap_or(self.timer.irq_isr);
-                    self.timer.irq_imr = self
-                        .memory
-                        .read_internal_byte(IMEM_IMR_OFFSET)
-                        .unwrap_or(self.timer.irq_imr);
-                    self.timer.last_irq_src = Some("IR".to_string());
-                    self.timer.last_irq_pc = Some(pc_before & ADDRESS_MASK);
-                    // The executor consumed the one prepared architectural
-                    // vector fetch and set PC from that exact proof. Re-reading
-                    // a volatile vector here could make metadata disagree with
-                    // the actual destination after the frame already committed.
-                    self.timer.last_irq_vector = Some(pc_after & ADDRESS_MASK);
-                }
-                self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
+                let opcode = prepared_opcode;
+                let instr_len = match self.executor.execute_with_vector_transfer(
+                    opcode,
+                    &mut self.state,
+                    &mut bus,
+                    prepared_transfer,
+                ) {
+                    Ok(len) => len,
+                    Err(e) => {
+                        return Err(CoreError::Other(format!(
+                            "execute opcode 0x{opcode:02X}: {e}"
+                        )))
+                    }
+                };
+                let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
+                (opcode, instr_len, pc_after)
+            };
+            if opcode == 0xFF {
+                // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
+                // refresh mirrors from IMEM without clearing counters/bit-watch.
+                self.timer.irq_imr = self
+                    .memory
+                    .read_internal_byte(IMEM_IMR_OFFSET)
+                    .unwrap_or(self.timer.irq_imr);
+                self.timer.irq_isr = self
+                    .memory
+                    .read_internal_byte(IMEM_ISR_OFFSET)
+                    .unwrap_or(self.timer.irq_isr);
+                // Align IRQ bookkeeping with the cleared IMEM registers so pending/latched state
+                // does not survive a soft RESET.
+                self.timer.clear_pending_for_reset();
+                self.state.reset_call_metrics();
+            }
+            // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
+            if opcode == 0xFE {
+                self.timer.in_interrupt = true;
+                self.timer.irq_pending = false;
+                self.timer.irq_source = Some("IR".to_string());
+                self.timer.last_fired = self.timer.irq_source.clone();
+                self.timer.irq_isr = self
+                    .memory
+                    .read_internal_byte(IMEM_ISR_OFFSET)
+                    .unwrap_or(self.timer.irq_isr);
+                self.timer.irq_imr = self
+                    .memory
+                    .read_internal_byte(IMEM_IMR_OFFSET)
+                    .unwrap_or(self.timer.irq_imr);
+                self.timer.last_irq_src = Some("IR".to_string());
+                self.timer.last_irq_pc = Some(pc_before & ADDRESS_MASK);
+                // The executor consumed the one prepared architectural
+                // vector fetch and set PC from that exact proof. Re-reading
+                // a volatile vector here could make metadata disagree with
+                // the actual destination after the frame already committed.
+                self.timer.last_irq_vector = Some(pc_after & ADDRESS_MASK);
+            }
+            self.metadata.instruction_count = self.metadata.instruction_count.wrapping_add(1);
 
-                // Advance in documented SC62015 relative timing units.  The
-                // evaluator has already performed every fail-closed check, so
-                // devices only observe time for an instruction that retired.
-                let run_timer_cycles = true;
-                let sequential_pc = pc_before.wrapping_add(u32::from(instr_len)) & ADDRESS_MASK;
-                let branch_taken = matches!(prepared_timing.resolved_opcode(), 0x14..=0x1f)
-                    && pc_after != sequential_pc;
-                let cycle_increment = prepared_timing.timing_units(initial_i, branch_taken);
-                let prev_cycle = self.metadata.cycle_count;
-                let new_cycle = prev_cycle.wrapping_add(cycle_increment);
-                if run_timer_cycles {
-                    let mut timer_cycle = prev_cycle;
-                    while let Some(fire_cycle) =
-                        self.timer.next_fire_cycle_in_span(timer_cycle, new_cycle)
-                    {
-                        self.tick_timers_and_keyboard(fire_cycle);
-                        timer_cycle = fire_cycle;
-                    }
+            // Advance in documented SC62015 relative timing units.  The
+            // evaluator has already performed every fail-closed check, so
+            // devices only observe time for an instruction that retired.
+            let run_timer_cycles = true;
+            let sequential_pc = pc_before.wrapping_add(u32::from(instr_len)) & ADDRESS_MASK;
+            let branch_taken = matches!(prepared_timing.resolved_opcode(), 0x14..=0x1f)
+                && pc_after != sequential_pc;
+            let cycle_increment = prepared_timing.timing_units(initial_i, branch_taken);
+            let prev_cycle = self.metadata.cycle_count;
+            let new_cycle = prev_cycle.wrapping_add(cycle_increment);
+            if run_timer_cycles {
+                let mut timer_cycle = prev_cycle;
+                while let Some(fire_cycle) =
+                    self.timer.next_fire_cycle_in_span(timer_cycle, new_cycle)
+                {
+                    self.tick_timers_and_keyboard(fire_cycle);
+                    timer_cycle = fire_cycle;
                 }
-                self.advance_sio(cycle_increment);
-                self.metadata.cycle_count = new_cycle;
-                if opcode == 0x01 {
-                    let irq_src = self.timer.irq_source.clone();
-                    // ROM-consistent model: RETI restores the interrupt frame without an
-                    // implicit ISR acknowledgement. Both stock dispatchers explicitly clear
-                    // the selected ISR bit first, so direct unacknowledged silicon behavior
-                    // remains a hardware-trace question.
-                    let delivered_mask = self.timer.delivered_masks.pop();
-                    self.timer.in_interrupt = false;
-                    if irq_src.as_deref().is_some_and(|source| source == "KEY") {
-                        // Retire the synthetic host-key delivery latch. This is emulator bridge
-                        // bookkeeping, not an architectural ISR acknowledgement.
-                        self.timer.key_irq_latched = false;
-                    }
-                    self.timer.irq_source = None;
-                    // Drop any stale interrupt-stack frames (used only for bookkeeping).
-                    let _ = self.timer.interrupt_stack.pop();
+            }
+            self.advance_sio(cycle_increment);
+            self.metadata.cycle_count = new_cycle;
+            if opcode == 0x01 {
+                let irq_src = self.timer.irq_source.clone();
+                // ROM-consistent model: RETI restores the interrupt frame without an
+                // implicit ISR acknowledgement. Both stock dispatchers explicitly clear
+                // the selected ISR bit first, so direct unacknowledged silicon behavior
+                // remains a hardware-trace question.
+                let delivered_mask = self.timer.delivered_masks.pop();
+                self.timer.in_interrupt = false;
+                if irq_src.as_deref().is_some_and(|source| source == "KEY") {
+                    // Retire the synthetic host-key delivery latch. This is emulator bridge
+                    // bookkeeping, not an architectural ISR acknowledgement.
+                    self.timer.key_irq_latched = false;
+                }
+                self.timer.irq_source = None;
+                // Drop any stale interrupt-stack frames (used only for bookkeeping).
+                let _ = self.timer.interrupt_stack.pop();
+                if perfetto_active {
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
                         let mut payload = std::collections::HashMap::new();
@@ -2298,22 +2303,26 @@ impl CoreRuntime {
                             );
                         }
                         payload.insert(
-                            "imr".to_string(),
-                            perfetto::AnnotationValue::UInt(self.state.get_reg(RegName::IMR) as u64),
-                        );
+                                "imr".to_string(),
+                                perfetto::AnnotationValue::UInt(
+                                    self.state.get_reg(RegName::IMR) as u64,
+                                ),
+                            );
                         tracer.record_irq_event("IRQ_Return", payload);
                     });
                 }
-                if let Some(detector) = self.loop_detector.as_mut() {
-                    detector.record_step(LoopStep {
-                        pc_before,
-                        pc_after,
-                        opcode,
-                        instr_len,
-                        in_interrupt: in_interrupt_before,
-                        irq_source: irq_source_before,
-                    });
-                }
+            }
+            if let Some(detector) = self.loop_detector.as_mut() {
+                detector.record_step(LoopStep {
+                    pc_before,
+                    pc_after,
+                    opcode,
+                    instr_len,
+                    in_interrupt: in_interrupt_before,
+                    irq_source: irq_source_before,
+                });
+            }
+            if perfetto_active {
                 let mut guard = PERFETTO_TRACER.enter();
                 guard.with_some(|tracer| {
                     tracer.update_counters(
@@ -2323,12 +2332,6 @@ impl CoreRuntime {
                         self.memory.memory_write_count(),
                     );
                 });
-                Ok(())
-            }));
-
-            match step_result {
-                Ok(inner) => inner?,
-                Err(payload) => std::panic::resume_unwind(payload),
             }
         }
         Ok(())
