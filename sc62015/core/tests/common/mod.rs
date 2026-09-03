@@ -1,9 +1,7 @@
 use sc62015_core::lcd_text::Pce500FontMap;
 use sc62015_core::llama::opcodes::RegName;
-use sc62015_core::pce500::{
-    load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
-};
-use sc62015_core::CoreRuntime;
+use sc62015_core::pce500::pce500_font_map_from_rom;
+use sc62015_core::{CoreRuntime, DeviceModel};
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,12 +28,7 @@ pub fn boot_pce500() -> Option<CoreRuntime> {
     }
 
     let rom = fs::read(&rom_path).expect("read ROM");
-    let mut rt = CoreRuntime::new();
-    rt.timer.enabled = true;
-    rt.timer.mti_period = DEFAULT_MTI_PERIOD;
-    rt.timer.sti_period = DEFAULT_STI_PERIOD;
-    rt.timer.reset(rt.cycle_count());
-    load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
+    let mut rt = CoreRuntime::for_model(DeviceModel::PcE500, &rom).expect("configure PC-E500");
     rt.power_on_reset().expect("valid ROM reset vector");
     rt.step(20_000).expect("boot");
     Some(rt)
@@ -67,6 +60,7 @@ pub struct IocsResult {
 pub fn call_with_sentinel(rt: &mut CoreRuntime, addr: u32, max_instructions: u32) -> IocsResult {
     let before_pc = rt.state.pc();
     let before_sp = rt.state.get_reg(RegName::S);
+    let before_power = rt.state.power_state();
     let sentinel_low16: u32 = 0xD00D;
     let sentinel_pc = ((addr & 0x0f_0000) | sentinel_low16) & 0x000f_ffff;
 
@@ -77,6 +71,9 @@ pub fn call_with_sentinel(rt: &mut CoreRuntime, addr: u32, max_instructions: u32
     }
     rt.state.set_reg(RegName::S, new_sp);
     rt.state.set_pc(addr & 0x000f_ffff);
+    // This is a synthetic subroutine harness, not a scheduler wake test.
+    // Enter the requested routine in the running clock domain explicitly.
+    rt.state.set_halted(false);
 
     let mut steps = 0;
     while steps < max_instructions {
@@ -102,6 +99,7 @@ pub fn call_with_sentinel(rt: &mut CoreRuntime, addr: u32, max_instructions: u32
 
     rt.state.set_pc(before_pc);
     rt.state.set_reg(RegName::S, before_sp);
+    rt.state.set_power_state(before_power);
     result
 }
 

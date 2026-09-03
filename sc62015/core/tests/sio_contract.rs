@@ -130,10 +130,52 @@ fn transmit_queue_tracks_writes_until_completed() {
     assert_eq!(usr & USR_TX_READY, 0);
     assert_eq!(usr & USR_TX_EMPTY, 0);
 
+    assert_eq!(stub.complete_transmit(&mut memory), None);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::TxComplete(0x55)]
+    );
     assert_eq!(stub.complete_transmit(&mut memory), Some(0x55));
     let usr_after = memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
     assert!(usr_after & USR_TX_READY != 0);
     assert!(usr_after & USR_TX_EMPTY != 0);
+}
+
+#[test]
+fn large_cycle_advances_jump_between_serial_events() {
+    let mut memory = MemoryImage::new();
+    let mut stub = SioStub::new();
+    stub.set_timing_config(SioTimingConfig {
+        tx_complete_cycles: 100_000,
+        ..SioTimingConfig::default()
+    });
+    for byte in [0x11, 0x22, 0x33] {
+        stub.queue_transmit(byte, &mut memory);
+    }
+
+    assert_eq!(
+        stub.tick_cycles(300_000, &mut memory),
+        vec![
+            SioTimedEvent::TxComplete(0x11),
+            SioTimedEvent::TxComplete(0x22),
+            SioTimedEvent::TxComplete(0x33),
+        ]
+    );
+    assert!(stub.pending_transmit().is_empty());
+    assert_eq!(stub.completed_transmit_len(), 3);
+}
+
+#[test]
+fn idle_serial_time_does_not_manufacture_bus_transactions() {
+    let mut memory = MemoryImage::new();
+    let mut stub = SioStub::new();
+    stub.init(&mut memory);
+    let reads = memory.memory_read_count();
+    let writes = memory.memory_write_count();
+
+    assert!(stub.tick_cycles(1_000_000, &mut memory).is_empty());
+    assert_eq!(memory.memory_read_count(), reads);
+    assert_eq!(memory.memory_write_count(), writes);
 }
 
 #[test]
@@ -148,8 +190,13 @@ fn input_lines_and_snapshot_restore_roundtrip() {
     memory.store(0x00BFE40, 8, 0x12).unwrap();
     memory.store(0x00BFE47, 8, 0x99).unwrap();
     let snap = stub.snapshot(&memory);
+    let expected = snap.clone();
 
     assert_eq!(stub.consume_received(&mut memory).unwrap().value, 0x41);
+    assert_eq!(
+        stub.tick_cycles(1, &mut memory),
+        vec![SioTimedEvent::TxComplete(0x55)]
+    );
     assert_eq!(stub.complete_transmit(&mut memory), Some(0x55));
     stub.set_input_lines(&mut memory, Some(false), Some(false));
     stub.set_handshake(&mut memory, 0x00);
@@ -157,6 +204,7 @@ fn input_lines_and_snapshot_restore_roundtrip() {
     memory.store(0x00BFE47, 8, 0x00).unwrap();
 
     stub.restore(snap, &mut memory);
+    assert_eq!(stub.snapshot(&memory), expected);
 
     assert_eq!(
         stub.pending_receive()

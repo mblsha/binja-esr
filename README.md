@@ -97,6 +97,14 @@ timing diagnostics label this basis explicitly.
 selector currently starts a fresh period; exact divider phase at an `SCR`
 write remains a hardware-timing question.
 
+The Rust SIO bridge also advances from these retired-instruction timing units.
+RX-ready and TX-complete status therefore no longer depend on when a TCP/WASM
+host polls the bridge. Its delay constants remain a functional compatibility
+model, not a measured baud-rate model. Historical replacements for three
+PC-E500 serial ROM entries are disabled by default and available only through
+an explicit diagnostic opt-in; normal model runs execute the ROM and never
+manufacture a serial peer response.
+
 The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
 CPU differential/parity tools. Their machine scheduler and peripheral callbacks
 are Python-owned, so they are not another Rust machine runtime and should not be

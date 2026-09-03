@@ -67,7 +67,13 @@ pub struct SioSnapshot {
     pub handshake: u8,
     pub workspace: Vec<(u32, u8)>,
     pub rx_queue: Vec<SioQueuedByte>,
+    pub pending_rx_queue: Vec<SioQueuedByte>,
     pub tx_queue: Vec<u8>,
+    pub completed_tx_queue: Vec<u8>,
+    pub auto_response: Option<u8>,
+    pub direct_input_timeout: bool,
+    pub pending_lines: Option<SioInputLines>,
+    pub rom_shortcuts_enabled: bool,
     pub timing: SioTimingSnapshot,
 }
 
@@ -121,13 +127,15 @@ pub enum SioTimedEvent {
     Xon,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SioStub {
     rx_queue: VecDeque<SioQueuedByte>,
     pending_rx_queue: VecDeque<SioQueuedByte>,
     tx_queue: VecDeque<u8>,
+    completed_tx_queue: VecDeque<u8>,
     auto_response: Option<u8>,
     direct_input_timeout: bool,
+    rom_shortcuts_enabled: bool,
     timing_config: SioTimingConfig,
     rx_ready_countdown: Option<u32>,
     tx_complete_countdown: Option<u32>,
@@ -144,8 +152,10 @@ impl SioStub {
             rx_queue: VecDeque::new(),
             pending_rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
-            auto_response: Some(0x41),
+            completed_tx_queue: VecDeque::new(),
+            auto_response: None,
             direct_input_timeout: false,
+            rom_shortcuts_enabled: false,
             timing_config: SioTimingConfig::default(),
             rx_ready_countdown: None,
             tx_complete_countdown: None,
@@ -182,6 +192,13 @@ impl SioStub {
         self.timing_config = config;
     }
 
+    /// Enable historical PC-E500 IOCS entry-point replacements. These are
+    /// diagnostic shortcuts, not SIO hardware, and are disabled by default so
+    /// normal machine runs execute the ROM.
+    pub fn enable_rom_shortcuts_for_diagnostics(&mut self) {
+        self.rom_shortcuts_enabled = true;
+    }
+
     pub fn timing_snapshot(&self) -> SioTimingSnapshot {
         SioTimingSnapshot {
             config: self.timing_config,
@@ -194,10 +211,32 @@ impl SioStub {
         }
     }
 
-    pub fn tick_cycles(&mut self, cycles: u32, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
+    pub fn tick_cycles(&mut self, cycles: u64, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
         let mut events = Vec::new();
-        for _ in 0..cycles {
-            if countdown_elapsed(&mut self.rx_ready_countdown) {
+        let mut remaining = cycles;
+        while remaining > 0 {
+            let advance = [
+                self.rx_ready_countdown,
+                self.tx_complete_countdown,
+                self.handshake_countdown,
+                self.direct_input_timeout_countdown,
+            ]
+            .into_iter()
+            .flatten()
+            .map(u64::from)
+            .min()
+            .map_or(remaining, |deadline| deadline.min(remaining));
+
+            let consumed_all = advance == remaining;
+            advance_countdown(&mut self.rx_ready_countdown, advance);
+            advance_countdown(&mut self.tx_complete_countdown, advance);
+            advance_countdown(&mut self.handshake_countdown, advance);
+            advance_countdown(&mut self.direct_input_timeout_countdown, advance);
+            remaining -= advance;
+
+            let mut elapsed = false;
+            if take_elapsed(&mut self.rx_ready_countdown) {
+                elapsed = true;
                 if let Some(entry) = self.pending_rx_queue.pop_front() {
                     self.rx_queue.push_back(entry);
                     self.latch_next_received(memory);
@@ -208,27 +247,34 @@ impl SioStub {
                     }
                 }
             }
-            if countdown_elapsed(&mut self.tx_complete_countdown) {
+            if take_elapsed(&mut self.tx_complete_countdown) {
+                elapsed = true;
                 if let Some(value) = self.tx_queue.pop_front() {
+                    self.completed_tx_queue.push_back(value);
                     events.push(SioTimedEvent::TxComplete(value));
                 }
                 if !self.tx_queue.is_empty() {
                     self.tx_complete_countdown = Some(self.timing_config.tx_complete_cycles.max(1));
                 }
             }
-            if countdown_elapsed(&mut self.handshake_countdown) {
+            if take_elapsed(&mut self.handshake_countdown) {
+                elapsed = true;
                 if let Some(lines) = self.pending_lines.take() {
                     self.set_input_lines(memory, Some(lines.cs), Some(lines.cd));
                     events.push(SioTimedEvent::HandshakeSettled(lines));
                 }
             }
-            if countdown_elapsed(&mut self.direct_input_timeout_countdown)
-                && self.direct_input_timeout
-                && self.rx_queue.is_empty()
-            {
-                events.push(SioTimedEvent::DirectInputTimeout);
+            let timeout_elapsed = take_elapsed(&mut self.direct_input_timeout_countdown);
+            if timeout_elapsed {
+                elapsed = true;
+                if self.direct_input_timeout && self.rx_queue.is_empty() {
+                    events.push(SioTimedEvent::DirectInputTimeout);
+                }
             }
             events.extend(self.update_flow_control());
+            if !elapsed && consumed_all {
+                break;
+            }
         }
         self.apply_status(memory);
         events
@@ -242,7 +288,13 @@ impl SioStub {
             handshake: self.get_handshake(memory),
             workspace: serial_workspace(memory),
             rx_queue: self.rx_queue.iter().copied().collect(),
+            pending_rx_queue: self.pending_rx_queue.iter().copied().collect(),
             tx_queue: self.tx_queue.iter().copied().collect(),
+            completed_tx_queue: self.completed_tx_queue.iter().copied().collect(),
+            auto_response: self.auto_response,
+            direct_input_timeout: self.direct_input_timeout,
+            pending_lines: self.pending_lines,
+            rom_shortcuts_enabled: self.rom_shortcuts_enabled,
             timing: self.timing_snapshot(),
         }
     }
@@ -256,8 +308,13 @@ impl SioStub {
             let _ = memory.store(addr, 8, u32::from(value));
         }
         self.rx_queue = VecDeque::from(snapshot.rx_queue);
+        self.pending_rx_queue = VecDeque::from(snapshot.pending_rx_queue);
         self.tx_queue = VecDeque::from(snapshot.tx_queue);
-        self.pending_rx_queue.clear();
+        self.completed_tx_queue = VecDeque::from(snapshot.completed_tx_queue);
+        self.auto_response = snapshot.auto_response;
+        self.direct_input_timeout = snapshot.direct_input_timeout;
+        self.pending_lines = snapshot.pending_lines;
+        self.rom_shortcuts_enabled = snapshot.rom_shortcuts_enabled;
         self.timing_config = snapshot.timing.config;
         self.rx_ready_countdown = snapshot.timing.rx_ready_countdown;
         self.tx_complete_countdown = snapshot.timing.tx_complete_countdown;
@@ -321,6 +378,10 @@ impl SioStub {
         self.tx_queue.iter().copied().collect()
     }
 
+    pub fn completed_transmit_len(&self) -> usize {
+        self.completed_tx_queue.len()
+    }
+
     pub fn queue_transmit(&mut self, value: u8, memory: &mut MemoryImage) {
         self.tx_queue.push_back(value);
         if self.tx_complete_countdown.is_none() {
@@ -330,7 +391,7 @@ impl SioStub {
     }
 
     pub fn complete_transmit(&mut self, memory: &mut MemoryImage) -> Option<u8> {
-        let value = self.tx_queue.pop_front();
+        let value = self.completed_tx_queue.pop_front();
         self.apply_status(memory);
         value
     }
@@ -376,6 +437,9 @@ impl SioStub {
         state: &mut crate::llama::state::LlamaState,
         memory: &mut MemoryImage,
     ) -> bool {
+        if !self.rom_shortcuts_enabled {
+            return false;
+        }
         let pc = pc & 0x000f_ffff;
         if !matches!(
             pc,
@@ -434,7 +498,10 @@ impl SioStub {
     }
 
     fn apply_status(&self, memory: &mut MemoryImage) {
-        let mut usr = memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
+        let old_usr = memory
+            .read_internal_byte_silent(IMEM_USR_OFFSET)
+            .unwrap_or(0);
+        let mut usr = old_usr;
         if self.tx_queue.is_empty() {
             usr |= USR_TX_READY | USR_TX_EMPTY;
         } else {
@@ -449,7 +516,9 @@ impl SioStub {
         if let Some(entry) = self.rx_queue.front().copied() {
             usr |= entry.error_bits();
         }
-        memory.write_internal_byte(IMEM_USR_OFFSET, usr);
+        if usr != old_usr {
+            memory.write_internal_byte(IMEM_USR_OFFSET, usr);
+        }
     }
 
     fn queue_auto_response(&mut self, memory: &mut MemoryImage) {
@@ -524,16 +593,23 @@ impl SioStub {
     }
 }
 
-fn countdown_elapsed(countdown: &mut Option<u32>) -> bool {
-    let Some(value) = countdown.as_mut() else {
+fn advance_countdown(countdown: &mut Option<u32>, cycles: u64) {
+    if let Some(value) = countdown.as_mut() {
+        *value = value.saturating_sub(cycles.min(u64::from(u32::MAX)) as u32);
+    }
+}
+
+fn take_elapsed(countdown: &mut Option<u32>) -> bool {
+    if *countdown != Some(0) {
         return false;
-    };
-    *value = value.saturating_sub(1);
-    if *value == 0 {
-        *countdown = None;
-        true
-    } else {
-        false
+    }
+    *countdown = None;
+    true
+}
+
+impl Default for SioStub {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -579,6 +655,7 @@ mod tests {
     fn tx_write_enqueues_rx_and_sets_status() {
         let mut memory = MemoryImage::new();
         let mut stub = SioStub::new();
+        stub.set_auto_response(0x41);
         stub.init(&mut memory);
 
         assert_eq!(
@@ -652,6 +729,10 @@ mod tests {
         let snap = stub.snapshot(&memory);
 
         assert_eq!(stub.consume_received(&mut memory).unwrap().value, 0x41);
+        assert_eq!(
+            stub.tick_cycles(1, &mut memory),
+            vec![SioTimedEvent::TxComplete(0x55)]
+        );
         assert_eq!(stub.complete_transmit(&mut memory), Some(0x55));
         stub.set_input_lines(&mut memory, Some(false), Some(false));
         stub.set_handshake(&mut memory, 0x00);
@@ -671,5 +752,14 @@ mod tests {
             SioInputLines { cs: true, cd: true }
         );
         assert_eq!(stub.get_handshake(&memory), 0xA5);
+    }
+
+    #[test]
+    fn rom_entry_shortcuts_are_diagnostic_opt_in() {
+        let mut memory = MemoryImage::new();
+        let mut state = crate::llama::state::LlamaState::new();
+        let mut stub = SioStub::new();
+
+        assert!(!stub.maybe_short_circuit(SIO_CMD42_DIRECT_INPUT_ADDR, &mut state, &mut memory));
     }
 }

@@ -1,11 +1,8 @@
 // PY_SOURCE: pce500/display/test_text_decoder.py
 
 use sc62015_core::lcd_text::{decode_display_text, Pce500FontMap};
-use sc62015_core::pce500::{
-    load_pce500_rom_window, pce500_font_map_from_rom, DEFAULT_MTI_PERIOD, DEFAULT_STI_PERIOD,
-    PF1_CODE,
-};
-use sc62015_core::CoreRuntime;
+use sc62015_core::pce500::{pce500_font_map_from_rom, PF1_CODE};
+use sc62015_core::{CoreRuntime, DeviceModel};
 use std::fs;
 use std::path::PathBuf;
 
@@ -29,12 +26,7 @@ fn pce500_boots_and_decodes_lcd_text_via_core_runtime() {
     let rom = fs::read(&rom_path).expect("read ROM");
     let font = pce500_font_map_from_rom(&rom).expect("load font map");
 
-    let mut rt = CoreRuntime::new();
-    rt.timer.enabled = true;
-    rt.timer.mti_period = DEFAULT_MTI_PERIOD;
-    rt.timer.sti_period = DEFAULT_STI_PERIOD;
-    rt.timer.reset(rt.cycle_count());
-    load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
+    let mut rt = CoreRuntime::for_model(DeviceModel::PcE500, &rom).expect("configure PC-E500");
     rt.power_on_reset().expect("valid ROM reset vector");
 
     rt.step(20_000).expect("execute boot instructions");
@@ -72,12 +64,7 @@ fn pce500_pf1_changes_menu_header_via_core_runtime() {
     let rom = fs::read(&rom_path).expect("read ROM");
     let font = pce500_font_map_from_rom(&rom).expect("load font map");
 
-    let mut rt = CoreRuntime::new();
-    rt.timer.enabled = true;
-    rt.timer.mti_period = DEFAULT_MTI_PERIOD;
-    rt.timer.sti_period = DEFAULT_STI_PERIOD;
-    rt.timer.reset(rt.cycle_count());
-    load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
+    let mut rt = CoreRuntime::for_model(DeviceModel::PcE500, &rom).expect("configure PC-E500");
     rt.power_on_reset().expect("valid ROM reset vector");
 
     rt.step(15_000).expect("boot before key press");
@@ -112,12 +99,7 @@ fn pce500_pf1_reaches_next_screen_via_core_runtime() {
     let rom = fs::read(&rom_path).expect("read ROM");
     let font = pce500_font_map_from_rom(&rom).expect("load font map");
 
-    let mut rt = CoreRuntime::new();
-    rt.timer.enabled = true;
-    rt.timer.mti_period = DEFAULT_MTI_PERIOD;
-    rt.timer.sti_period = DEFAULT_STI_PERIOD;
-    rt.timer.reset(rt.cycle_count());
-    load_pce500_rom_window(&mut rt, &rom).expect("load ROM window");
+    let mut rt = CoreRuntime::for_model(DeviceModel::PcE500, &rom).expect("configure PC-E500");
     rt.power_on_reset().expect("valid ROM reset vector");
 
     const BOOT_STEPS: usize = 20_000;

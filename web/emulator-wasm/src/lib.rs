@@ -590,7 +590,7 @@ impl Sc62015Emulator {
         self.runtime
             .sio
             .as_ref()
-            .map_or(0, |sio| sio.pending_transmit().len() as u32)
+            .map_or(0, |sio| sio.completed_transmit_len() as u32)
     }
 
     pub fn sio_drain_tx_bytes(&mut self) -> Uint8Array {
@@ -605,7 +605,6 @@ impl Sc62015Emulator {
                 break;
             };
             out.push(byte);
-            self.runtime.assert_sio_transmit_ready();
         }
         Uint8Array::from(out.as_slice())
     }
@@ -668,7 +667,6 @@ impl Sc62015Emulator {
                     flow_paused = false;
                 }
                 tx_bytes.push(byte);
-                self.runtime.assert_sio_transmit_ready();
             }
 
             if tx_bytes.len() >= 256 {
