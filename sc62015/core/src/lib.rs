@@ -393,6 +393,28 @@ pub fn apply_registers(state: &mut LlamaState, regs: &HashMap<String, u32>) -> R
 }
 
 /// Extremely small placeholder runtime for LLAMA-only execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LcdBusWrite {
+    pub instruction_index: u64,
+    pub timing_units: u64,
+    pub pc: u32,
+    pub address: u32,
+    pub value: u8,
+}
+
+struct LcdBusCapture {
+    limit: usize,
+    writes: Vec<LcdBusWrite>,
+}
+
+impl LcdBusCapture {
+    fn record(&mut self, write: LcdBusWrite) {
+        if self.writes.len() < self.limit {
+            self.writes.push(write);
+        }
+    }
+}
+
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
     pub memory: MemoryImage,
@@ -411,6 +433,7 @@ pub struct CoreRuntime {
     iq7000_rtc: Option<iq7000::Iq7000RtcPeripheral>,
     onk_level: bool,
     external_interrupt_level: bool,
+    lcd_bus_capture: Option<LcdBusCapture>,
     poisoned: Option<String>,
 }
 
@@ -448,6 +471,7 @@ impl CoreRuntime {
             iq7000_rtc: None,
             onk_level: false,
             external_interrupt_level: false,
+            lcd_bus_capture: None,
             poisoned: None,
         };
         rt.set_device_model(DeviceModel::PcE500)
@@ -480,6 +504,21 @@ impl CoreRuntime {
 
     pub fn cycle_count(&self) -> u64 {
         self.metadata.cycle_count
+    }
+
+    /// Start an exact, bounded LCD bus-write capture for diagnostics.
+    pub fn begin_lcd_bus_write_capture(&mut self, limit: usize) {
+        self.lcd_bus_capture = Some(LcdBusCapture {
+            limit,
+            writes: Vec::with_capacity(limit.min(1024)),
+        });
+    }
+
+    /// Finish and return the current LCD bus-write capture.
+    pub fn take_lcd_bus_write_capture(&mut self) -> Vec<LcdBusWrite> {
+        self.lcd_bus_capture
+            .take()
+            .map_or_else(Vec::new, |capture| capture.writes)
     }
 
     pub fn power_on_reset(&mut self) -> Result<()> {
@@ -1364,6 +1403,7 @@ impl CoreRuntime {
             meta_ptr: *const SnapshotMetadata,
             #[allow(dead_code)]
             state_ptr: *const LlamaState,
+            lcd_bus_capture: *mut LcdBusCapture,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -1562,6 +1602,15 @@ impl CoreRuntime {
                         let lcd = &mut *lcd_ptr;
                         if lcd.handles(addr) {
                             lcd.write(addr, value as u8);
+                            if let Some(capture) = self.lcd_bus_capture.as_mut() {
+                                capture.record(LcdBusWrite {
+                                    instruction_index: (*self.meta_ptr).instruction_count,
+                                    timing_units: self.cycle,
+                                    pc: self.pc & ADDRESS_MASK,
+                                    address: addr & ADDRESS_MASK,
+                                    value: value as u8,
+                                });
+                            }
                             let _ = (*self.mem).store(addr, bits, value);
                             return;
                         }
@@ -1790,6 +1839,7 @@ impl CoreRuntime {
                     pc,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
                     state_ptr: &self.state as *const LlamaState,
+                    lcd_bus_capture: std::ptr::null_mut(),
                 };
                 // Fully validate the current instruction through the silent
                 // bus first. A malformed current encoding takes precedence
@@ -2211,6 +2261,12 @@ impl CoreRuntime {
                     .map_or(std::ptr::null_mut(), |rtc| {
                         rtc as *mut iq7000::Iq7000RtcPeripheral
                     });
+                let lcd_bus_capture = self
+                    .lcd_bus_capture
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |capture| {
+                        capture as *mut LcdBusCapture
+                    });
                 let mut bus = RuntimeBus {
                     mem: &mut self.memory,
                     keyboard_ptr,
@@ -2230,6 +2286,7 @@ impl CoreRuntime {
                     pc: pc_before,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
                     state_ptr: &self.state as *const LlamaState,
+                    lcd_bus_capture,
                 };
                 let opcode = prepared_opcode;
                 let instr_len = match self.executor.execute_with_vector_transfer(
@@ -4020,12 +4077,23 @@ mod tests {
         rt.memory
             .write_external_slice(0, &[0x08, 0xC0, 0xA8, 0x00, 0x20, 0x00]);
         rt.state.set_pc(0);
+        rt.begin_lcd_bus_write_capture(1);
 
         assert_eq!(rt.memory.memory_write_count(), 0);
         rt.step(2).expect("execute LCD write");
         assert!(
             rt.memory.memory_write_count() >= 1,
             "overlay write should increment memory_write_count"
+        );
+        assert_eq!(
+            rt.take_lcd_bus_write_capture(),
+            vec![LcdBusWrite {
+                instruction_index: 1,
+                timing_units: 2,
+                pc: 2,
+                address: 0x2000,
+                value: 0xC0,
+            }]
         );
     }
 

@@ -36,8 +36,9 @@ unobserved peripheral timing or reserved encodings into ISA facts.
   are disabled unless a diagnostic caller opts in explicitly.
 - Trace-derived reset/turn-on overlays remain behind `--runtime legacy`; they
   are replay tools, not an alternative production scheduler.
-- Raw bus/LCD transaction logs and snapshots remain on the legacy runner until
-  every state or observation they require has an exact `CoreRuntime` contract.
+- Raw external-bus transaction logs and snapshots remain on the legacy runner
+  until every state or observation they require has an exact `CoreRuntime`
+  contract. Exact bounded LCD-write capture is available on `CoreRuntime`.
 - The shared runtime may expose neutral test hooks for ONK, EXI, and SIO, but a
   test that calls one proves the model contract only.
 
