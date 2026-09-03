@@ -92,6 +92,11 @@ These units are not calibrated oscillator cycles: PC-E500 absolute timer
 cadence and IQ-7000 timing still require machine-level qualification. CLI
 timing diagnostics label this basis explicitly.
 
+`SCR.MTS` selects the 4 ms or 16 ms main-timer compatibility period and
+`SCR.STS` selects the approximately 0.5 s or 2 s sub-timer period. Changing a
+selector currently starts a fresh period; exact divider phase at an `SCR`
+write remains a hardware-timing question.
+
 The Python `CPU(..., backend="llama")` facade and `pce500/run_pce500.py` remain
 CPU differential/parity tools. Their machine scheduler and peripheral callbacks
 are Python-owned, so they are not another Rust machine runtime and should not be

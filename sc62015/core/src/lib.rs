@@ -124,8 +124,8 @@ use crate::llama::eval::{perfetto_last_pc, LlamaBus};
 use crate::llama::state::{mask_for, CallMetricsSnapshot};
 use crate::memory::{
     IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
-    IMEM_LCC_OFFSET, IMEM_RXD_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET, IMEM_UCR_OFFSET,
-    IMEM_USR_OFFSET,
+    IMEM_LCC_OFFSET, IMEM_RXD_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET,
+    IMEM_UCR_OFFSET, IMEM_USR_OFFSET,
 };
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -578,6 +578,12 @@ impl CoreRuntime {
             .map_err(|error| CoreError::Other(format!("power-on reset: {error}")));
         if result.is_ok() {
             self.poisoned = None;
+            let scr = self
+                .memory
+                .read_internal_byte_silent(IMEM_SCR_OFFSET)
+                .unwrap_or(0);
+            self.timer
+                .sync_scr_selection(scr, self.metadata.cycle_count);
         }
         result
     }
@@ -1053,12 +1059,16 @@ impl CoreRuntime {
     }
 
     pub(crate) fn tick_timers_and_keyboard(&mut self, cycle: u64) {
+        self.tick_timers_and_keyboard_selected(cycle, true, true);
+    }
+
+    fn tick_timers_and_keyboard_selected(&mut self, cycle: u64, run_mti: bool, run_sti: bool) {
         let kb_irq_enabled = self.timer.kb_irq_enabled;
         let mirror_pce500_fifo = matches!(
             self.device_model(),
             DeviceModel::PcE500 | DeviceModel::PcE500Jp
         );
-        let _ = self.timer.tick_timers_with_keyboard(
+        let _ = self.timer.tick_timers_with_keyboard_selected(
             &mut self.memory,
             cycle,
             |mem| {
@@ -1087,6 +1097,8 @@ impl CoreRuntime {
             },
             Some(self.state.get_reg(RegName::Y)),
             Some(self.state.get_reg(RegName::PC)),
+            run_mti,
+            run_sti,
         );
         if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
             self.timer.irq_isr = isr;
@@ -1503,6 +1515,19 @@ impl CoreRuntime {
                         }
                     }
                     let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
+                    let bytes = bits.div_ceil(8).max(1) as u32;
+                    let wrote_scr = (0..bytes).any(|byte_offset| {
+                        MemoryImage::internal_offset(addr.wrapping_add(byte_offset))
+                            == Some(IMEM_SCR_OFFSET)
+                    });
+                    if wrote_scr {
+                        if let Some(timer) = self.timer_ptr.as_mut() {
+                            let scr = (*self.mem)
+                                .read_internal_byte_silent(IMEM_SCR_OFFSET)
+                                .unwrap_or(0);
+                            timer.sync_scr_selection(scr, self.cycle);
+                        }
+                    }
                 }
             }
             fn resolve_emem(&mut self, base: u32) -> u32 {
@@ -1800,6 +1825,14 @@ impl CoreRuntime {
                     None
                 }
             };
+            if !self.state.is_off() {
+                let scr = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_SCR_OFFSET)
+                    .unwrap_or(0);
+                self.timer
+                    .sync_scr_selection(scr, self.metadata.cycle_count);
+            }
             if irq_transfer_selected {
                 // Materialize level-sensitive sources only after the silent
                 // vector proof and discarded-opcode fetch above. Delivery
@@ -1971,8 +2004,20 @@ impl CoreRuntime {
                 if halted_at_step_entry {
                     let prev_cycle = self.metadata.cycle_count;
                     let new_cycle = prev_cycle.wrapping_add(1);
+                    // HALT stops the SC62015 system clock, so the main timer
+                    // and its keyboard scan retain phase.  The 32 kHz subclock
+                    // continues and may wake the core through STI.
+                    self.timer.defer_mti(1);
                     self.metadata.cycle_count = new_cycle;
-                    self.tick_timers_and_keyboard(new_cycle);
+                    self.tick_timers_and_keyboard_selected(new_cycle, false, true);
+                    if self
+                        .memory
+                        .read_internal_byte(IMEM_ISR_OFFSET)
+                        .is_some_and(|isr| isr != 0)
+                    {
+                        self.state.set_halted(false);
+                        self.arm_pending_irq_from_isr();
+                    }
                     self.refresh_raw_key_irq_level();
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
@@ -2394,6 +2439,7 @@ impl CoreRuntime {
             &metadata.interrupts,
             metadata.cycle_count,
         );
+        timer_candidate.restore_scr_selector(loaded.imem[IMEM_SCR_OFFSET as usize]);
 
         let keyboard_candidate = match metadata.keyboard.as_ref() {
             Some(value) => {
@@ -4723,6 +4769,34 @@ mod tests {
     }
 
     #[test]
+    fn halt_freezes_main_timer_phase_while_sub_timer_keeps_running() {
+        let mut rt = CoreRuntime::new();
+        rt.timer.enabled = true;
+        rt.timer.configure_scr_periods(1, 1, 1, 1, 0, 0);
+        rt.timer.next_sti = 100;
+        rt.state.set_halted(true);
+
+        rt.step(3).expect("halt idle boundaries");
+
+        assert_eq!(rt.cycle_count(), 3);
+        assert_eq!(rt.timer.next_mti, 4, "HALT must retain MTI phase");
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_MTI,
+            0,
+            "the stopped system clock must not assert MTI"
+        );
+
+        rt.timer.next_sti = 4;
+        rt.step(1).expect("subclock wake boundary");
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_STI,
+            0,
+            "the subclock must continue during HALT"
+        );
+        assert!(!rt.state.is_halted(), "STI must wake HALT");
+    }
+
+    #[test]
     fn halt_wakes_on_key_inject() {
         let mut rt = CoreRuntime::new();
         rt.memory.write_external_slice(0, &[0x00]); // NOP after HALT.
@@ -4791,14 +4865,16 @@ mod tests {
 
         let _lock = perfetto_test_guard();
         let mut rt = CoreRuntime::new();
-        // Enable timer so HALT idle loop produces memory traffic (ISR write).
+        // Enable the sub timer so the HALT idle loop produces an ISR write.
         rt.timer.enabled = true;
-        rt.timer.mti_period = 1;
-        rt.timer.next_mti = 1;
+        rt.timer.mti_period = 0;
+        rt.timer.next_mti = 0;
+        rt.timer.sti_period = 1;
+        rt.timer.next_sti = 1;
         rt.state.set_halted(true);
         rt.state.set_reg(RegName::S, 0x0200);
         rt.memory
-            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_MTI);
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_STI);
         rt.memory.write_external_byte(0x0000, 0x00); // NOP placeholder
         rt.state.set_pc(0);
 

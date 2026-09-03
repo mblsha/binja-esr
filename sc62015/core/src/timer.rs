@@ -11,6 +11,8 @@ use serde_json::json;
 use std::collections::HashMap;
 
 const ISR_OFFSET: u32 = 0xFC;
+const SCR_MTS: u8 = 0x02;
+const SCR_STS: u8 = 0x04;
 
 #[derive(Clone, Debug)]
 pub struct TimerContext {
@@ -45,6 +47,11 @@ pub struct TimerContext {
     fired_sti_since_boundary: bool,
     timer_scale: f64,
     preserve_phase: bool,
+    mti_short_period: u64,
+    mti_long_period: u64,
+    sti_short_period: u64,
+    sti_long_period: u64,
+    scr_selector: u8,
 }
 
 fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
@@ -134,6 +141,11 @@ impl TimerContext {
             fired_sti_since_boundary: false,
             timer_scale: 1.0,
             preserve_phase: true,
+            mti_short_period: mti_period.max(0) as u64,
+            mti_long_period: mti_period.max(0) as u64,
+            sti_short_period: sti_period.max(0) as u64,
+            sti_long_period: sti_period.max(0) as u64,
+            scr_selector: 0,
         };
         ctx.reset(0);
         ctx
@@ -153,6 +165,84 @@ impl TimerContext {
 
     pub fn set_instruction_start_cycle(&mut self, cycle: u64) {
         self.instruction_start_cycle = cycle;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn configure_scr_periods(
+        &mut self,
+        mti_short_period: u64,
+        mti_long_period: u64,
+        sti_short_period: u64,
+        sti_long_period: u64,
+        scr: u8,
+        current_cycle: u64,
+    ) {
+        self.mti_short_period = mti_short_period;
+        self.mti_long_period = mti_long_period;
+        self.sti_short_period = sti_short_period;
+        self.sti_long_period = sti_long_period;
+        self.scr_selector = scr & (SCR_MTS | SCR_STS);
+        self.mti_period = if scr & SCR_MTS != 0 {
+            mti_long_period
+        } else {
+            mti_short_period
+        };
+        self.sti_period = if scr & SCR_STS != 0 {
+            sti_long_period
+        } else {
+            sti_short_period
+        };
+        self.next_mti = if self.enabled && self.mti_period > 0 {
+            current_cycle.wrapping_add(self.mti_period)
+        } else {
+            0
+        };
+        self.next_sti = if self.enabled && self.sti_period > 0 {
+            current_cycle.wrapping_add(self.sti_period)
+        } else {
+            0
+        };
+    }
+
+    /// Apply `SCR.MTS`/`SCR.STS` to the active periods.  The exact silicon
+    /// divider phase when a selector changes is not captured, so a changed
+    /// selection starts a fresh compatibility period at this boundary.
+    pub fn sync_scr_selection(&mut self, scr: u8, current_cycle: u64) {
+        let old_selector = self.scr_selector;
+        let new_selector = scr & (SCR_MTS | SCR_STS);
+        let mti_period = if scr & SCR_MTS != 0 {
+            self.mti_long_period
+        } else {
+            self.mti_short_period
+        };
+        let sti_period = if scr & SCR_STS != 0 {
+            self.sti_long_period
+        } else {
+            self.sti_short_period
+        };
+        if old_selector & SCR_MTS != new_selector & SCR_MTS {
+            self.mti_period = mti_period;
+            self.next_mti = if self.enabled && mti_period > 0 {
+                current_cycle.wrapping_add(mti_period)
+            } else {
+                0
+            };
+        }
+        if old_selector & SCR_STS != new_selector & SCR_STS {
+            self.sti_period = sti_period;
+            self.next_sti = if self.enabled && sti_period > 0 {
+                current_cycle.wrapping_add(sti_period)
+            } else {
+                0
+            };
+        }
+        self.scr_selector = new_selector;
+    }
+
+    /// Restore the selector latch without restarting either divider. Snapshot
+    /// metadata already carries the exact active periods and deadlines.
+    pub(crate) fn restore_scr_selector(&mut self, scr: u8) {
+        self.scr_selector = scr & (SCR_MTS | SCR_STS);
     }
 
     pub fn tick_counts(&self, cycle_count: u64) -> (u64, u64) {
@@ -185,6 +275,16 @@ impl TimerContext {
     /// one enabled timer can fire. Non-deadline cycles have no architectural
     /// timer or keyboard-scan effect and can therefore be skipped safely.
     pub fn next_fire_cycle_in_span(&self, after_cycle: u64, end_cycle: u64) -> Option<u64> {
+        self.next_fire_cycle_in_span_selected(after_cycle, end_cycle, true, true)
+    }
+
+    pub fn next_fire_cycle_in_span_selected(
+        &self,
+        after_cycle: u64,
+        end_cycle: u64,
+        run_mti: bool,
+        run_sti: bool,
+    ) -> Option<u64> {
         if !self.enabled {
             return None;
         }
@@ -205,13 +305,23 @@ impl TimerContext {
             let distance = cycle.wrapping_sub(after_cycle);
             (distance <= span).then_some((distance, cycle))
         };
-        match (
-            candidate(self.mti_period, self.next_mti),
-            candidate(self.sti_period, self.next_sti),
-        ) {
+        let mti = run_mti
+            .then(|| candidate(self.mti_period, self.next_mti))
+            .flatten();
+        let sti = run_sti
+            .then(|| candidate(self.sti_period, self.next_sti))
+            .flatten();
+        match (mti, sti) {
             (Some(mti), Some(sti)) => Some(if mti.0 <= sti.0 { mti.1 } else { sti.1 }),
             (Some((_, cycle)), None) | (None, Some((_, cycle))) => Some(cycle),
             (None, None) => None,
+        }
+    }
+
+    /// Keep the main-timer phase stationary while the system clock is stopped.
+    pub fn defer_mti(&mut self, timing_units: u64) {
+        if self.enabled && self.mti_period > 0 {
+            self.next_mti = self.next_mti.wrapping_add(timing_units);
         }
     }
 
@@ -502,6 +612,17 @@ impl TimerContext {
         cycle_count: u64,
         pc_hint: Option<u32>,
     ) -> (bool, bool) {
+        self.tick_timers_selected(memory, cycle_count, pc_hint, true, true)
+    }
+
+    pub fn tick_timers_selected(
+        &mut self,
+        memory: &mut MemoryImage,
+        cycle_count: u64,
+        pc_hint: Option<u32>,
+        run_mti: bool,
+        run_sti: bool,
+    ) -> (bool, bool) {
         if !self.enabled {
             return (false, false);
         }
@@ -509,7 +630,7 @@ impl TimerContext {
         let mut fired_mti = false;
         let mut fired_sti = false;
 
-        if self.mti_period > 0 && Self::deadline_reached(cycle_count, self.next_mti) {
+        if run_mti && self.mti_period > 0 && Self::deadline_reached(cycle_count, self.next_mti) {
             fired_mti = true;
             if self.preserve_phase {
                 self.next_mti = Self::advance_deadline(self.next_mti, cycle_count, self.mti_period);
@@ -518,7 +639,7 @@ impl TimerContext {
             }
             self.last_mti_fire_cycle = Some(cycle_count);
         }
-        if self.sti_period > 0 && Self::deadline_reached(cycle_count, self.next_sti) {
+        if run_sti && self.sti_period > 0 && Self::deadline_reached(cycle_count, self.next_sti) {
             fired_sti = true;
             if self.preserve_phase {
                 self.next_sti = Self::advance_deadline(self.next_sti, cycle_count, self.sti_period);
@@ -610,14 +731,39 @@ impl TimerContext {
         &mut self,
         memory: &mut MemoryImage,
         cycle_count: u64,
-        mut keyboard_scan: F,
+        keyboard_scan: F,
         _y_reg: Option<u32>,
         pc_hint: Option<u32>,
     ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
     where
         F: FnMut(&mut MemoryImage) -> (usize, bool, Option<KeyboardTelemetry>),
     {
-        let (mti, sti) = self.tick_timers(memory, cycle_count, pc_hint);
+        self.tick_timers_with_keyboard_selected(
+            memory,
+            cycle_count,
+            keyboard_scan,
+            _y_reg,
+            pc_hint,
+            true,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick_timers_with_keyboard_selected<F>(
+        &mut self,
+        memory: &mut MemoryImage,
+        cycle_count: u64,
+        mut keyboard_scan: F,
+        _y_reg: Option<u32>,
+        pc_hint: Option<u32>,
+        run_mti: bool,
+        run_sti: bool,
+    ) -> (bool, bool, usize, Option<KeyboardTelemetry>)
+    where
+        F: FnMut(&mut MemoryImage) -> (usize, bool, Option<KeyboardTelemetry>),
+    {
+        let (mti, sti) = self.tick_timers_selected(memory, cycle_count, pc_hint, run_mti, run_sti);
         let mut key_events = 0usize;
         // Preserve any existing latch even if keyboard IRQs are disabled; Python keeps KEYI latched
         // across IRQ gating so firmware can re-enable later without losing events.
@@ -753,6 +899,43 @@ impl TimerContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scr_selects_documented_main_and_sub_timer_periods() {
+        let mut timer = TimerContext::new(true, 4, 500);
+        timer.configure_scr_periods(4, 16, 500, 2_000, 0, 100);
+        assert_eq!((timer.mti_period, timer.sti_period), (4, 500));
+        assert_eq!((timer.next_mti, timer.next_sti), (104, 600));
+
+        timer.sync_scr_selection(SCR_MTS | SCR_STS, 103);
+        assert_eq!((timer.mti_period, timer.sti_period), (16, 2_000));
+        assert_eq!((timer.next_mti, timer.next_sti), (119, 2_103));
+
+        timer.sync_scr_selection(SCR_MTS | SCR_STS, 110);
+        assert_eq!(
+            (timer.next_mti, timer.next_sti),
+            (119, 2_103),
+            "an unchanged selector must not restart either divider"
+        );
+    }
+
+    #[test]
+    fn snapshot_selector_restore_preserves_exact_deadlines() {
+        let mut timer = TimerContext::new(true, 4, 500);
+        timer.configure_scr_periods(4, 16, 500, 2_000, SCR_MTS | SCR_STS, 100);
+        timer.next_mti = 777;
+        timer.next_sti = 888;
+        let (timer_info, interrupt_info) = timer.snapshot_info();
+
+        let mut restored = TimerContext::new(true, 4, 500);
+        restored.configure_scr_periods(4, 16, 500, 2_000, 0, 0);
+        restored.apply_snapshot_info(&timer_info, &interrupt_info, 100);
+        restored.restore_scr_selector(SCR_MTS | SCR_STS);
+        restored.sync_scr_selection(SCR_MTS | SCR_STS, 200);
+
+        assert_eq!((restored.mti_period, restored.sti_period), (16, 2_000));
+        assert_eq!((restored.next_mti, restored.next_sti), (777, 888));
+    }
 
     #[test]
     fn timers_use_absolute_targets() {
