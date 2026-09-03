@@ -109,6 +109,12 @@ enum CardMode {
     Absent,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeEngine {
+    Core,
+    Legacy,
+}
+
 impl CardMode {
     fn resolve(self, model: DeviceModel) -> DeviceMemoryCardProfile {
         match self {
@@ -191,6 +197,11 @@ struct Args {
     /// ROM model/profile to run (sets defaults for --rom and --bnida).
     #[arg(long, value_enum, default_value_t = DeviceModel::DEFAULT)]
     model: DeviceModel,
+
+    /// Machine scheduler to use. The shared core is the correctness path;
+    /// legacy is retained only for specialized trace-replay diagnostics.
+    #[arg(long, value_enum, default_value_t = RuntimeEngine::Core)]
+    runtime: RuntimeEngine,
 
     /// ROM image to load (defaults to the repo-symlinked ROM for --model).
     #[arg(long, value_name = "PATH")]
@@ -4355,11 +4366,11 @@ fn run_runtime_key_seq(
     model: DeviceModel,
     text_decoder: Option<&DeviceTextDecoder>,
     log_enabled: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error>> {
     let actions = parse_key_seq(raw_key_seq, KEY_SEQ_DEFAULT_HOLD, model)
         .map_err(|err| format!("--key-seq: {err}"))?;
     if actions.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let mut needs_screen_state = false;
     let mut needs_screen_text = false;
@@ -4375,19 +4386,16 @@ fn run_runtime_key_seq(
     let mut runner = KeySeqRunner::new(actions);
     runner.set_log_enabled(log_enabled);
     let start = runtime.instruction_count();
-    let deadline = start.saturating_add(max_instructions);
-    while runtime.instruction_count() < deadline {
+    let mut elapsed = 0_u64;
+    while elapsed < max_instructions {
+        let schedule_index = start.saturating_add(elapsed);
         let screen_state = if needs_screen_state || needs_screen_text {
             let lcd = runtime.lcd.as_deref().ok_or("missing LCD runtime")?;
             capture_screen_state(lcd, text_decoder, needs_screen_text)
         } else {
             ScreenState::default()
         };
-        let events = runner.step(
-            runtime.instruction_count(),
-            !runtime.state.is_off(),
-            &screen_state,
-        );
+        let events = runner.step(schedule_index, !runtime.state.is_off(), &screen_state);
         for event in events {
             match event.kind {
                 KeySeqEventKind::Press => {
@@ -4404,10 +4412,10 @@ fn run_runtime_key_seq(
             }
         }
         if runner.is_complete() {
-            println!("key-seq: completed at {}", runtime.instruction_count());
-            return Ok(());
+            println!("key-seq: completed at {schedule_index}");
+            return Ok(elapsed);
         }
-        let now = runtime.instruction_count();
+        let now = schedule_index;
         let mut step_count = 1_u64;
         if let Some(release_at) = runner.active_key.map(|_| runner.active_release_at) {
             if release_at > now {
@@ -4428,9 +4436,10 @@ fn run_runtime_key_seq(
                 _ => {}
             }
         }
-        let remaining = deadline.saturating_sub(now);
+        let remaining = max_instructions.saturating_sub(elapsed);
         let bounded = step_count.min(remaining).max(1);
         runtime.step(usize::try_from(bounded).unwrap_or(usize::MAX))?;
+        elapsed = elapsed.saturating_add(bounded);
     }
     Err(format!("--key-seq did not complete within {max_instructions} instruction(s)").into())
 }
@@ -4609,6 +4618,209 @@ fn run_iq7000_pclink_ui_path(
     Ok(())
 }
 
+fn core_runtime_unsupported_options(args: &Args) -> Vec<&'static str> {
+    let mut unsupported = Vec::new();
+    if args.lcd_log || args.lcd_log_limit.is_some() {
+        unsupported.push("--lcd-log/--lcd-log-limit");
+    }
+    if args.stop_pc.is_some() {
+        unsupported.push("--stop-pc");
+    }
+    if !args.trace_pc.is_empty() || args.trace_pc_window.is_some() || args.trace_regs {
+        unsupported.push("--trace-pc/--trace-pc-window/--trace-regs");
+    }
+    if args.dump_lcd_trace.is_some() {
+        unsupported.push("--dump-lcd-trace");
+    }
+    if args.dump_bus_trace.is_some() {
+        unsupported.push("--dump-bus-trace");
+    }
+    if args.snapshot_in.is_some() || args.snapshot_out.is_some() {
+        unsupported.push("--snapshot-in/--snapshot-out");
+    }
+    if args.debug_probe_json.is_some() || !args.debug_probe_range.is_empty() {
+        unsupported.push("--debug-probe-json/--debug-probe-range");
+    }
+    if args.turnon2_resume || args.turnon_profile.is_some() {
+        unsupported.push("--turnon2-resume/--turnon-profile");
+    }
+    if args.reset_trace_card {
+        unsupported.push("--reset-trace-card");
+    }
+    if args.reset_trace2_main_display || args.reset_trace2_profile.is_some() {
+        unsupported.push("--reset-trace2-main-display/--reset-trace2-profile");
+    }
+    if !args.iq7000_seed_memo.is_empty() {
+        unsupported.push("--iq7000-seed-memo (requires --iq7p-enter-pclink)");
+    }
+    unsupported
+}
+
+fn step_runtime_boundaries(
+    runtime: &mut CoreRuntime,
+    mut boundaries: u64,
+) -> Result<(), Box<dyn Error>> {
+    while boundaries != 0 {
+        let chunk = usize::try_from(boundaries).unwrap_or(usize::MAX);
+        runtime.step(chunk)?;
+        boundaries -= chunk as u64;
+    }
+    Ok(())
+}
+
+fn validate_lcd_expectations(args: &Args, lcd_lines: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut failures = Vec::new();
+    for raw in &args.expect_row {
+        match parse_expected_row(raw) {
+            Ok((idx, expected)) => {
+                let actual = lcd_lines.get(idx).cloned().unwrap_or_default();
+                if !actual.contains(&expected) {
+                    failures.push(format!(
+                        "expect-row failed: row {idx} missing substring '{expected}' (got '{actual}')"
+                    ));
+                }
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+    for needle in &args.expect_text {
+        if !lcd_lines.iter().any(|line| line.contains(needle)) {
+            failures.push(format!(
+                "expect-text failed: substring '{needle}' not found in LCD text"
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join(" | ").into())
+    }
+}
+
+fn run_core_runtime_path(
+    args: &Args,
+    rom_bytes: &[u8],
+    text_decoder: Option<&DeviceTextDecoder>,
+    iq7000_clock_seed: Option<&Iq7000RtcSeed>,
+) -> Result<(), Box<dyn Error>> {
+    let unsupported = core_runtime_unsupported_options(args);
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "the shared core runtime does not yet expose specialized diagnostic option(s) {}; rerun explicitly with --runtime legacy",
+            unsupported.join(", ")
+        )
+        .into());
+    }
+
+    let timer_profile = args.model.timer_profile();
+    let card_profile = args.card.resolve(args.model);
+    eprintln!("[runtime] shared-core");
+    eprintln!(
+        "[timing] model={} cpu_hz={} mti={} sti={} source={}",
+        args.model.label(),
+        timer_profile.cpu_hz,
+        timer_profile.mti_period,
+        timer_profile.sti_period,
+        timer_profile.provenance_label()
+    );
+    eprintln!(
+        "[card] model={} mode={}",
+        args.model.label(),
+        if card_profile.is_present() {
+            "blank-writable-64k"
+        } else {
+            "absent"
+        }
+    );
+
+    let mut runtime = CoreRuntime::for_model(args.model, rom_bytes)?;
+    card_profile.apply(&mut runtime.memory)?;
+    runtime.timer.enabled = !args.disable_timers;
+    if let Some(seed) = iq7000_clock_seed {
+        runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
+    }
+    runtime.power_on_reset()?;
+    if let Some(seed) = iq7000_clock_seed {
+        runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
+    }
+
+    if args.perfetto {
+        if let Ok(symbols) = load_bnida_names(args.model, args.bnida.clone()) {
+            if !symbols.is_empty() {
+                set_call_ui_function_names(symbols);
+            }
+        }
+        let mut guard = PERFETTO_TRACER.enter();
+        if let Some(existing) = guard.take() {
+            guard.replace(Some(existing));
+            return Err("a Perfetto trace is already active".into());
+        }
+        guard.replace(Some(PerfettoTracer::new(args.perfetto_path.clone())));
+    }
+
+    let started = Instant::now();
+    let execution_result = (|| -> Result<(), Box<dyn Error>> {
+        let consumed = if let Some(raw_key_seq) = args
+            .key_seq
+            .as_ref()
+            .map(|raw| raw.trim())
+            .filter(|raw| !raw.is_empty())
+        {
+            run_runtime_key_seq(
+                &mut runtime,
+                raw_key_seq,
+                args.steps,
+                args.model,
+                text_decoder,
+                args.key_seq_log,
+            )?
+        } else {
+            0
+        };
+        step_runtime_boundaries(&mut runtime, args.steps.saturating_sub(consumed))
+    })();
+
+    let trace_result = if args.perfetto {
+        let tracer = PERFETTO_TRACER.enter().take();
+        tracer
+            .map(|tracer| tracer.finish())
+            .transpose()
+            .map_err(|error| -> Box<dyn Error> { Box::new(error) })
+    } else {
+        Ok(None)
+    };
+    execution_result?;
+    trace_result?;
+
+    let lcd_lines = write_runtime_lcd_capture(
+        args.model,
+        &runtime,
+        text_decoder,
+        args.capture_png.as_ref(),
+        args.capture_json.as_ref(),
+    )?;
+    println!("LCD (decoded text):");
+    for line in &lcd_lines {
+        println!("  {line}");
+    }
+    println!(
+        "Executed {} instruction(s) across {} scheduler boundaries; PC=0x{:05X}",
+        runtime.instruction_count(),
+        args.steps,
+        runtime.state.pc() & ADDRESS_MASK
+    );
+    if args.perf {
+        let rate = runtime.instruction_count() as f64 / started.elapsed().as_secs_f64();
+        println!(
+            "Perf: {:.2} MIPS ({} instr / {:.3?})",
+            rate / 1_000_000.0,
+            runtime.instruction_count(),
+            started.elapsed()
+        );
+    }
+    validate_lcd_expectations(args, &lcd_lines)
+}
+
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
 
@@ -4659,6 +4871,9 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     let rom_bytes = load_rom(&rom_path)?;
     let text_decoder = args.model.text_decoder(&rom_bytes);
     if args.iq7p_enter_pclink {
+        if args.runtime == RuntimeEngine::Legacy {
+            return Err("--iq7p-enter-pclink requires --runtime core".into());
+        }
         return run_iq7000_pclink_ui_path(
             &args,
             &rom_bytes,
@@ -4666,6 +4881,20 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             iq7000_clock_seed.as_ref(),
         );
     }
+    if args.runtime == RuntimeEngine::Core {
+        eprintln!(
+            "[rom] model={} path={}",
+            args.model.label(),
+            rom_path.display()
+        );
+        return run_core_runtime_path(
+            &args,
+            &rom_bytes,
+            text_decoder.as_ref(),
+            iq7000_clock_seed.as_ref(),
+        );
+    }
+    eprintln!("[runtime] legacy-diagnostic");
     let turnon_profile = if args.turnon2_resume || args.turnon_profile.is_some() {
         load_turnon_resume_profile(args.model, args.turnon_profile.clone())?
     } else {
@@ -7597,5 +7826,42 @@ mod tests {
             bus.keyboard_fifo_addresses(),
             Some((0x00BFB70, 0x00BFA04, 0x00BFA05))
         );
+    }
+
+    #[test]
+    fn cli_defaults_to_the_shared_core_runtime_and_model_card_policy() {
+        let args = Args::try_parse_from(["pce500-llama"]).expect("parse defaults");
+        assert_eq!(args.runtime, RuntimeEngine::Core);
+        assert_eq!(args.card, CardMode::Auto);
+        assert!(core_runtime_unsupported_options(&args).is_empty());
+    }
+
+    #[test]
+    fn specialized_diagnostics_require_an_explicit_legacy_runtime() {
+        let args = Args::try_parse_from(["pce500-llama", "--snapshot-out", "state.pcsnap"])
+            .expect("parse snapshot option");
+        assert_eq!(
+            core_runtime_unsupported_options(&args),
+            vec!["--snapshot-in/--snapshot-out"]
+        );
+    }
+
+    #[test]
+    fn runtime_key_sequence_budget_advances_while_cpu_is_off() {
+        let mut runtime = CoreRuntime::new();
+        runtime.state.set_power_state(PowerState::Off);
+
+        let consumed = run_runtime_key_seq(
+            &mut runtime,
+            "wait-op:2,on:1",
+            10,
+            DeviceModel::PcE500,
+            None,
+            false,
+        )
+        .expect("OFF-state key sequence must remain bounded");
+
+        assert!(consumed <= 10);
+        assert!(!runtime.state.is_off());
     }
 }

@@ -65,6 +65,7 @@
 - **CI coverage (Perfetto included):** All guardrails must run in CI—lint, type checks, pytest suites, parity harnesses, and Perfetto comparison jobs. Ensure Perfetto trace comparison (`scripts/compare_perfetto_traces.py` or the smoke workflow) is wired into CI and kept green.
 - **Rust CLI runner (primary):** To boot the ROM and view decoded LCD text:
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
+  - The shared `CoreRuntime` is the default. Use `--runtime legacy` only for specialized historical replay/raw-bus diagnostics that report it is required.
   - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
   - Default ROM model: `pc-e500` (uses `data/pc-e500-en.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
 - **LCD terminal UI:** A live terminal renderer that redraws decoded LCD lines on change:

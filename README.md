@@ -60,7 +60,8 @@ Notes:
 - Use `--pf-numbers` to map digits 1–5 to PF1–PF5 (disables typing those digits).
 - Use `--bnida PATH` to show function names in the status line (defaults to `rom-analysis/.../bnida.json` if present).
 - Use `--force-key-irq` if the ROM stays halted at the boot menu (forces KEY interrupts on key press).
-- Use `--card present|absent` to control memory card slot state (PC-E500).
+- Use `--card auto|present|absent` to control memory card slot state. `auto`
+  selects a blank writable PC-E500 card and an absent IQ-7000 card.
 - Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.
 
 The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captures:
@@ -68,12 +69,19 @@ The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captur
 ```bash
 cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- \
   --model iq-7000 \
+  --runtime legacy \
   --key-seq "memo,text:PASSPORT NO.\\nM6711888\\nEXPIRES 12/25/90,memo-enter,memo,search-down" \
   --capture-png /tmp/iq7000-a0.png \
   --capture-json /tmp/iq7000-a0.json \
   --debug-probe-json /tmp/iq7000-a0.debug.json \
   --debug-probe-range storage@0x1fd00:0x40
 ```
+
+Ordinary headless execution uses the shared `CoreRuntime`, matching the WASM,
+terminal, and IQ-7000 PC-Link frontends. Historical trace-replay, raw bus dump,
+snapshot, and structured debug-probe switches require an explicit
+`--runtime legacy`; unsupported combinations fail instead of silently changing
+schedulers.
 
 `digitizer:0xNN` and `event:0xNN` still inject exact translated input bytes. For
 IQ-7000 app/editor work, the runner also accepts named event keys such as
