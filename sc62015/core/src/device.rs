@@ -318,6 +318,13 @@ impl DeviceModel {
     }
 
     pub fn configure_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
+        let mut candidate = CoreRuntime::new();
+        self.configure_fresh_runtime(&mut candidate, rom)?;
+        *rt = candidate;
+        Ok(())
+    }
+
+    pub(crate) fn configure_fresh_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         rt.set_device_model(*self)?;
         *rt.timer = self.timer_profile().new_context(true);
         rt.lcd = Some(create_lcd(self.lcd_kind()));
@@ -365,6 +372,7 @@ impl DeviceTextDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llama::opcodes::RegName;
     use crate::memory::MemoryCardMode;
 
     #[test]
@@ -405,6 +413,10 @@ mod tests {
     fn complete_profiles_do_not_leak_pc_devices_into_iq7000() {
         let mut runtime =
             CoreRuntime::for_model(DeviceModel::Iq7000, &[]).expect("construct IQ-7000 runtime");
+        runtime.state.set_reg(RegName::A, 0x5A);
+        runtime.memory.write_external_byte(0x1234, 0xA5);
+        runtime.enable_pce500_peripheral_bridge(65_536);
+        runtime.set_external_interrupt_level(true);
         let iq_keyboard = runtime
             .keyboard
             .as_ref()
@@ -427,6 +439,10 @@ mod tests {
         DeviceModel::PcE500
             .configure_runtime(&mut runtime, &[])
             .expect("switch to PC-E500");
+        assert_eq!(runtime.state.get_reg(RegName::A), 0);
+        assert_eq!(runtime.memory.read_byte(0x1234), Some(0));
+        assert!(runtime.pce500_peripherals.is_none());
+        assert!(!runtime.external_interrupt_level());
         let pc_keyboard = runtime
             .keyboard
             .as_ref()
