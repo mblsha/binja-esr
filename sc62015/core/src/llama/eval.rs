@@ -225,7 +225,7 @@ impl ValidatedVectorTransfer {
         let opcode = bus
             .peek_byte_silent_at(fetched_vector, fetched_vector)
             .ok_or(SILENT_PEEK_UNAVAILABLE_ERROR)?;
-        let mut target_state = state.clone();
+        let mut target_state = state.clone_for_decode_preflight();
         target_state.set_pc(fetched_vector);
         LlamaExecutor.validate_before_scheduling_with_options(
             opcode,
@@ -781,7 +781,7 @@ pub fn fetch_validated_vector<B: LlamaBus>(
     let opcode = bus
         .peek_byte_silent_at(fetched_vector, fetched_vector)
         .ok_or(SILENT_PEEK_UNAVAILABLE_ERROR)?;
-    let mut target_state = state.clone();
+    let mut target_state = state.clone_for_decode_preflight();
     target_state.set_pc(fetched_vector);
     LlamaExecutor.validate_before_scheduling_with_options(
         opcode,
@@ -906,7 +906,7 @@ impl LlamaExecutor {
         // Decode the complete operand shape against a cloned register image.
         // This catches malformed JP/E3/EB selectors, ignored selector bytes,
         // and noncanonical encoded 20-bit operands before scheduler mutation.
-        let mut state_candidate = state.clone();
+        let mut state_candidate = state.clone_for_decode_preflight();
         let decoded_result = self.decode_operands(
             resolved,
             &mut state_candidate,
@@ -987,7 +987,7 @@ impl LlamaExecutor {
             if bus.unavailable {
                 return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
             }
-            let mut target_state = state.clone();
+            let mut target_state = state.clone_for_decode_preflight();
             target_state.set_pc(target);
             self.validate_before_scheduling_silent(opcode, &target_state, bus, false, false)
         })();

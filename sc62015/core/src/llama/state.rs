@@ -109,6 +109,34 @@ impl LlamaState {
         }
     }
 
+    /// Copy the architectural register image for silent operand/vector
+    /// validation without cloning trace-only call stacks or OFF diagnostics.
+    /// Preflight may mutate pointer registers on this candidate while proving
+    /// addressing modes, but it never observes call bookkeeping.
+    pub(crate) fn clone_for_decode_preflight(&self) -> Self {
+        Self {
+            ba: self.ba,
+            i: self.i,
+            x: self.x,
+            y: self.y,
+            u: self.u,
+            s: self.s,
+            f: self.f,
+            pc: self.pc,
+            imr: self.imr,
+            temps: self.temps,
+            extra_regs: self.extra_regs.clone(),
+            power_state: self.power_state,
+            last_off_pc: None,
+            last_off_call_stack: Vec::new(),
+            call_depth: 0,
+            call_sub_level: 0,
+            call_page_stack: Vec::new(),
+            call_return_widths: Vec::new(),
+            call_stack: Vec::new(),
+        }
+    }
+
     pub fn set_reg(&mut self, name: RegName, value: u32) {
         let masked = value & mask_for(name);
         match name {
