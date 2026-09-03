@@ -33,6 +33,14 @@ pub enum AnnotationValue {
 #[cfg(feature = "perfetto")]
 static CALL_UI_FUNCTION_NAMES: OnceLock<RwLock<HashMap<u32, String>>> = OnceLock::new();
 
+#[cfg(all(test, feature = "perfetto"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TestInstructionState {
+    pub mem_imr: u8,
+    pub mem_isr: u8,
+    pub cycle_count: Option<u64>,
+}
+
 #[cfg(test)]
 static PERFETTO_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -103,6 +111,8 @@ pub struct PerfettoTracer {
     #[cfg(test)]
     test_exec_events: RefCell<Vec<(u32, u8, u64)>>, // pc, opcode, op_index
     #[cfg(test)]
+    test_instruction_state: RefCell<Vec<TestInstructionState>>,
+    #[cfg(test)]
     test_timestamps: RefCell<Vec<i64>>,
     #[cfg(test)]
     test_function_slices: RefCell<Vec<String>>,
@@ -120,7 +130,8 @@ impl PerfettoTracer {
         let mut builder = PerfettoTraceBuilder::new("SC62015");
         // Single Perfetto format (shared by Rust + Python):
         // - `Functions`: slices for CALL/RET spanning full function duration
-        // - `Instructions`: per-instruction slices with pre-state regs/IMR/ISR, dur=1 tick
+        // - `Instructions`: per-instruction slices with pre-instruction registers and
+        //   post-boundary IMR/ISR/device time, dur=1 tick
         // - `EWrites`/`IWrites`: instants for external/internal memory writes
         //
         // Timestamps are deterministic instruction-index ticks. retrobus-perfetto stores
@@ -182,6 +193,8 @@ impl PerfettoTracer {
             call_ui_functions_depth: 0,
             #[cfg(test)]
             test_exec_events: RefCell::new(Vec::new()),
+            #[cfg(test)]
+            test_instruction_state: RefCell::new(Vec::new()),
             #[cfg(test)]
             test_timestamps: RefCell::new(Vec::new()),
             #[cfg(test)]
@@ -286,6 +299,13 @@ impl PerfettoTracer {
                 self.test_exec_events
                     .borrow_mut()
                     .push((reg_pc, opcode, instr_index));
+                self.test_instruction_state
+                    .borrow_mut()
+                    .push(TestInstructionState {
+                        mem_imr,
+                        mem_isr,
+                        cycle_count,
+                    });
                 self.test_timestamps.borrow_mut().push(ts_start);
             }
         }
@@ -815,6 +835,11 @@ impl PerfettoTracer {
     #[cfg(test)]
     pub fn test_exec_events(&self) -> Vec<(u32, u8, u64)> {
         self.test_exec_events.borrow().clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_instruction_state(&self) -> Vec<TestInstructionState> {
+        self.test_instruction_state.borrow().clone()
     }
 }
 
