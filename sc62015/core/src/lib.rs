@@ -120,7 +120,7 @@ pub use timer::TimerContext;
 
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::keyboard::KeyboardSnapshot;
-use crate::llama::eval::{perfetto_last_pc, LlamaBus};
+use crate::llama::eval::{perfetto_last_pc, LlamaBus, TimerTrace};
 use crate::llama::state::{mask_for, CallMetricsSnapshot};
 use crate::memory::{
     IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
@@ -2232,7 +2232,7 @@ impl CoreRuntime {
                     )
                 })?;
             let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
-            let (opcode, instr_len, pc_after) = {
+            let (opcode, instr_len, pc_after, deferred_instruction_trace) = {
                 let keyboard_ptr = self
                     .keyboard
                     .as_mut()
@@ -2289,21 +2289,22 @@ impl CoreRuntime {
                     lcd_bus_capture,
                 };
                 let opcode = prepared_opcode;
-                let instr_len = match self.executor.execute_with_vector_transfer(
-                    opcode,
-                    &mut self.state,
-                    &mut bus,
-                    prepared_transfer,
-                ) {
-                    Ok(len) => len,
-                    Err(e) => {
-                        return Err(CoreError::Other(format!(
-                            "execute opcode 0x{opcode:02X}: {e}"
-                        )))
-                    }
-                };
+                let (instr_len, deferred_instruction_trace) =
+                    match self.executor.execute_with_vector_transfer_deferred_trace(
+                        opcode,
+                        &mut self.state,
+                        &mut bus,
+                        prepared_transfer,
+                    ) {
+                        Ok(executed) => executed,
+                        Err(e) => {
+                            return Err(CoreError::Other(format!(
+                                "execute opcode 0x{opcode:02X}: {e}"
+                            )))
+                        }
+                    };
                 let pc_after = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-                (opcode, instr_len, pc_after)
+                (opcode, instr_len, pc_after, deferred_instruction_trace)
             };
             if opcode == 0xFF {
                 // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
@@ -2366,6 +2367,27 @@ impl CoreRuntime {
             }
             self.advance_sio(cycle_increment);
             self.metadata.cycle_count = new_cycle;
+            if let Some(trace) = deferred_instruction_trace {
+                let mem_imr = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                    .unwrap_or(0);
+                let mem_isr = self
+                    .memory
+                    .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                    .unwrap_or(0);
+                let (mti_ticks, sti_ticks) = self.timer.tick_counts(new_cycle);
+                self.executor.emit_deferred_instruction_trace(
+                    trace,
+                    mem_imr,
+                    mem_isr,
+                    Some(TimerTrace {
+                        mti_ticks,
+                        sti_ticks,
+                    }),
+                    Some(new_cycle),
+                );
+            }
             if opcode == 0x01 {
                 let irq_src = self.timer.irq_source.clone();
                 // ROM-consistent model: RETI restores the interrupt frame without an
@@ -6140,6 +6162,46 @@ mod tests {
         );
         // Cycle counter should advance for opcode + I loops.
         assert_eq!(rt.metadata.cycle_count, 6);
+    }
+
+    #[test]
+    fn core_runtime_instruction_trace_observes_post_wait_timer_state() {
+        let _lock = perfetto_test_guard();
+        let tmp = std::env::temp_dir().join("core_wait_post_timer.perfetto-trace");
+        let mut tracer = PerfettoTracer::new(tmp.clone());
+        crate::llama::eval::reset_perf_counters();
+
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_byte(0, 0xef);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.state.set_pc(0);
+        rt.state.set_reg(RegName::I, 3);
+        *rt.timer = TimerContext::new(true, 4, 100);
+        rt.timer.next_mti = 4;
+        rt.timer.next_sti = 100;
+
+        PERFETTO_TRACER.enter().replace(Some(tracer));
+        rt.step(1)
+            .expect("WAIT should retire and advance the timer");
+        tracer = PERFETTO_TRACER
+            .enter()
+            .take()
+            .expect("test tracer should remain installed");
+
+        assert_eq!(rt.cycle_count(), 4);
+        let instruction_state = tracer.test_instruction_state();
+        assert_eq!(instruction_state.len(), 1);
+        assert_eq!(
+            (
+                instruction_state[0].mem_imr,
+                instruction_state[0].mem_isr,
+                instruction_state[0].cycle_count
+            ),
+            (0, ISR_MTI, Some(4)),
+            "the instruction packet is a post-boundary status sample"
+        );
+        let _ = tracer.finish();
+        let _ = std::fs::remove_file(tmp);
     }
 
     #[test]

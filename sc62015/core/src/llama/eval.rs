@@ -315,6 +315,13 @@ pub struct TimerTrace {
     pub sti_ticks: u64,
 }
 
+pub(crate) struct DeferredInstructionTrace {
+    opcode: u8,
+    regs: HashMap<String, u32>,
+    instr_index: u64,
+    pc: u32,
+}
+
 pub trait LlamaBus {
     fn load(&mut self, addr: u32, bits: u8) -> u32;
     fn store(&mut self, addr: u32, bits: u8, value: u32);
@@ -1104,16 +1111,40 @@ impl LlamaExecutor {
         instr_index: u64,
         pc_trace: u32,
     ) {
+        let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
+            (
+                bus.peek_imem_silent(IMEM_IMR_OFFSET),
+                bus.peek_imem_silent(IMEM_ISR_OFFSET),
+            )
+        });
+        let timer = bus.timer_trace();
+        let cycle = bus.cycle_count();
+        self.trace_instr_values(
+            opcode,
+            regs,
+            instr_index,
+            pc_trace,
+            mem_imr,
+            mem_isr,
+            timer,
+            cycle,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn trace_instr_values(
+        &self,
+        opcode: u8,
+        regs: &HashMap<String, u32>,
+        instr_index: u64,
+        pc_trace: u32,
+        mem_imr: u8,
+        mem_isr: u8,
+        timer: Option<TimerTrace>,
+        cycle: Option<u64>,
+    ) {
         let mut guard = PERFETTO_TRACER.enter();
         guard.with_some(|tracer| {
-            let (mem_imr, mem_isr) = with_imr_read_suppressed(|| {
-                (
-                    bus.peek_imem_silent(IMEM_IMR_OFFSET),
-                    bus.peek_imem_silent(IMEM_ISR_OFFSET),
-                )
-            });
-            let timer = bus.timer_trace();
-            let cycle = bus.cycle_count();
             let mnemonic = dispatch::lookup(opcode).map(|entry| entry.name);
             tracer.record_regs(
                 instr_index,
@@ -1130,6 +1161,26 @@ impl LlamaExecutor {
             );
         });
         PERF_LAST_PC.with(|value| value.set(pc_trace));
+    }
+
+    pub(crate) fn emit_deferred_instruction_trace(
+        &self,
+        trace: DeferredInstructionTrace,
+        mem_imr: u8,
+        mem_isr: u8,
+        timer: Option<TimerTrace>,
+        cycle: Option<u64>,
+    ) {
+        self.trace_instr_values(
+            trace.opcode,
+            &trace.regs,
+            trace.instr_index,
+            trace.pc,
+            mem_imr,
+            mem_isr,
+            timer,
+            cycle,
+        );
     }
 
     fn estimated_length(entry: &OpcodeEntry) -> u8 {
@@ -2752,6 +2803,33 @@ impl LlamaExecutor {
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
     ) -> Result<u8, &'static str> {
+        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, false)
+            .map(|(length, deferred_trace)| {
+                debug_assert!(deferred_trace.is_none());
+                length
+            })
+    }
+
+    /// Execute one instruction while deferring its final instruction-trace
+    /// packet until the machine wrapper has advanced all elapsed-time devices.
+    pub(crate) fn execute_with_vector_transfer_deferred_trace<B: LlamaBus>(
+        &mut self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        prepared_transfer: Option<ValidatedVectorTransfer>,
+    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
+        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true)
+    }
+
+    fn execute_with_vector_transfer_inner<B: LlamaBus>(
+        &mut self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        prepared_transfer: Option<ValidatedVectorTransfer>,
+        defer_instruction_trace: bool,
+    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
         if let Some(transfer) = prepared_transfer.as_ref() {
             let expected_vector = match self.lookup(opcode).map(|entry| entry.kind) {
                 Some(InstrKind::Ir) => INTERRUPT_VECTOR_ADDR,
@@ -2816,7 +2894,7 @@ impl LlamaExecutor {
         // pointer, flag, or timing callback may change on these error paths.
         let resolved_entry = entry.ok_or("invalid or reserved opcode")?;
         if resolved_entry.kind == InstrKind::Unknown {
-            return reject_unknown();
+            return Err("invalid or reserved opcode");
         }
         if resolved_entry.kind == InstrKind::Tcl && !bus.supports_timer_phase_clear() {
             return Err(TCL_UNIMPLEMENTED_ERROR);
@@ -2928,16 +3006,27 @@ impl LlamaExecutor {
             ),
             None => reject_unknown(),
         };
-        // Parity: record InstructionTrace after executing, but using the pre-execution
-        // register snapshot (Python captures regs before execution, IMR/ISR after).
-        if let Some(regs) = trace_regs.as_ref() {
-            self.trace_instr(
-                trace_opcode_snapshot,
-                regs,
-                bus,
-                instr_index,
-                trace_pc_snapshot,
-            );
+        // Keep the pre-execution register snapshot while sampling IMR/ISR after
+        // execution. Machine wrappers may defer the final packet until elapsed-time
+        // devices have advanced at the same scheduler boundary.
+        let mut deferred_trace = None;
+        if let Some(regs) = trace_regs {
+            if defer_instruction_trace && result.is_ok() {
+                deferred_trace = Some(DeferredInstructionTrace {
+                    opcode: trace_opcode_snapshot,
+                    regs,
+                    instr_index,
+                    pc: trace_pc_snapshot,
+                });
+            } else {
+                self.trace_instr(
+                    trace_opcode_snapshot,
+                    &regs,
+                    bus,
+                    instr_index,
+                    trace_pc_snapshot,
+                );
+            }
         }
 
         if let Some(kind) = entry_kind {
@@ -3005,7 +3094,7 @@ impl LlamaExecutor {
                 }
             }
         }
-        result
+        result.map(|length| (length, deferred_trace))
     }
 
     #[allow(clippy::too_many_arguments)]
