@@ -3944,7 +3944,6 @@ fn serve_iq7000_pclink_serial_clients(
             }
             pending_write.push_back(byte);
             rom_tx_bytes = rom_tx_bytes.saturating_add(1);
-            runtime.assert_sio_transmit_ready();
         }
 
         if let Some(client) = stream.as_mut() {

@@ -5,6 +5,7 @@ use sc62015_core::keyboard::KeyboardMatrix;
 use sc62015_core::lcd_text::decode_display_text;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::memory::{IMEM_EIL_OFFSET, IMEM_RXD_OFFSET};
+use sc62015_core::SioStub;
 
 #[test]
 fn stdo_stream_output_0d_brackets_immediate_and_maintenance_lcd_writes() {
@@ -235,11 +236,16 @@ fn stdi_physical_key_timer_scan_reaches_booted_rom_fifo() {
 }
 
 #[test]
-fn com_device_commands_41h_to_4bh_use_rom_dispatch_and_sio_contract() {
+fn diagnostic_com_shortcuts_cover_commands_41h_to_4bh() {
     let Some(mut rt) = boot_pce500() else {
         return;
     };
-    rt.enable_sio_stub();
+    rt.sio = Some(SioStub::new());
+    rt.sio.as_mut().unwrap().init(&mut rt.memory);
+    rt.sio
+        .as_mut()
+        .expect("sio enabled")
+        .enable_rom_shortcuts_for_diagnostics();
 
     rt.state.set_reg(RegName::A, 0x5A);
     let direct_output = call_iocs(&mut rt, 0x02, 0x0041, 80_000);

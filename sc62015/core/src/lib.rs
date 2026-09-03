@@ -658,20 +658,46 @@ impl CoreRuntime {
         if let Some(sio) = self.sio.as_mut() {
             sio.queue_receive_byte(value, &mut self.memory);
         }
-        self.assert_irq_source(ISR_RXI, "RX");
+        self.refresh_sio_interrupts();
+    }
+
+    fn advance_sio(&mut self, timing_units: u64) {
+        let events = self
+            .sio
+            .as_mut()
+            .map(|sio| sio.tick_cycles(timing_units, &mut self.memory));
+        let Some(events) = events else {
+            return;
+        };
+        let tx_completed = events
+            .iter()
+            .any(|event| matches!(event, SioTimedEvent::TxComplete(_)));
+        self.refresh_sio_interrupts();
+        if tx_completed {
+            self.assert_sio_transmit_ready();
+        }
     }
 
     fn refresh_sio_interrupts(&mut self) {
         if self.sio.is_none() {
             return;
         }
-        let usr = self.memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0);
-        let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
-        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        let usr = self
+            .memory
+            .read_internal_byte_silent(IMEM_USR_OFFSET)
+            .unwrap_or(0);
+        let imr = self
+            .memory
+            .read_internal_byte_silent(IMEM_IMR_OFFSET)
+            .unwrap_or(0);
+        let isr = self
+            .memory
+            .read_internal_byte_silent(IMEM_ISR_OFFSET)
+            .unwrap_or(0);
         let mut new_isr = isr;
         let mut source = None;
 
-        if (usr & USR_RX_READY) != 0 && (imr & IMR_RX) != 0 {
+        if (usr & USR_RX_READY) != 0 {
             new_isr |= ISR_RXI;
             source = Some("RX");
         }
@@ -682,7 +708,7 @@ impl CoreRuntime {
         self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
         self.timer.irq_isr = new_isr;
         self.timer.irq_imr = imr;
-        if !self.timer.in_interrupt && (new_isr & imr & ISR_KNOWN_MASK) != 0 {
+        if !self.timer.in_interrupt {
             self.timer.irq_pending = true;
             if let Some(src) = source {
                 match self.timer.irq_source.as_deref() {
@@ -693,8 +719,8 @@ impl CoreRuntime {
                     _ => {}
                 }
             }
-            self.timer.last_fired = self.timer.irq_source.clone();
         }
+        self.timer.last_fired = self.timer.irq_source.clone();
     }
 
     pub fn assert_sio_transmit_ready(&mut self) {
@@ -2171,6 +2197,7 @@ impl CoreRuntime {
                         timer_cycle = fire_cycle;
                     }
                 }
+                self.advance_sio(cycle_increment);
                 self.metadata.cycle_count = new_cycle;
                 if opcode == 0x01 {
                     let irq_src = self.timer.irq_source.clone();
@@ -4242,6 +4269,45 @@ mod tests {
         );
         assert!(rt.timer.irq_pending);
         assert_eq!(rt.timer.irq_source.as_deref(), Some("TX"));
+    }
+
+    #[test]
+    fn retired_instruction_timing_drives_sio_completion() {
+        let mut rt = CoreRuntime::new();
+        rt.enable_sio_stub();
+        let sio = rt.sio.as_mut().expect("SIO stub");
+        sio.disable_auto_response();
+        sio.set_timing_config(SioTimingConfig {
+            tx_complete_cycles: 4,
+            ..SioTimingConfig::default()
+        });
+        rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0x00);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x00);
+        // MV (TXD),55h takes three documented timing units, followed by NOP.
+        rt.memory
+            .write_external_slice(0, &[0xCC, IMEM_TXD_OFFSET as u8, 0x55, 0x00]);
+        rt.state.set_pc(0);
+
+        rt.step(1).expect("write TXD");
+        assert_eq!(rt.sio.as_ref().unwrap().pending_transmit(), vec![0x55]);
+        assert_eq!(rt.sio.as_ref().unwrap().completed_transmit_len(), 0);
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_TXI,
+            0
+        );
+
+        rt.step(1).expect("advance SIO by NOP timing");
+        assert!(rt.sio.as_ref().unwrap().pending_transmit().is_empty());
+        assert_eq!(rt.sio.as_ref().unwrap().completed_transmit_len(), 1);
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_TXI,
+            0,
+            "TX completion must latch independently of IMR"
+        );
+        assert_eq!(
+            rt.sio.as_mut().unwrap().complete_transmit(&mut rt.memory),
+            Some(0x55)
+        );
     }
 
     #[test]
