@@ -790,10 +790,11 @@ impl CoreRuntime {
         self.assert_irq_source(ISR_TXI, "TX");
     }
 
-    /// Set a neutral external interrupt input level.
+    /// Set the emulator's neutral external-interrupt input level.
     ///
-    /// While asserted, hardware re-latches `ISR.EXI` after firmware clears
-    /// it. No device, connector, or physical meaning is coupled to this input.
+    /// The level-sensitive re-latch policy is a conservative emulator contract,
+    /// not a real-device-derived SC62015 fact. No device connector or physical
+    /// meaning is coupled to this input, and frontends must not infer one.
     pub fn set_external_interrupt_level(&mut self, asserted: bool) {
         self.external_interrupt_level = asserted;
         if asserted {
@@ -961,7 +962,10 @@ impl CoreRuntime {
         }));
     }
 
-    /// Set the ON key level high and assert ISR.ONKI/IRQ pending to mirror Python KEY_ON handling.
+    /// Set the ON-key level high and apply the provisional machine-level ONKI
+    /// latch contract. Stock ROM use supports the bit assignment and explicit
+    /// acknowledgement path; exact assertion/re-latch latency is not yet a
+    /// real-device-derived scheduler fact.
     pub fn press_on_key(&mut self) {
         self.onk_level = true;
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
