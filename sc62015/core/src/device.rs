@@ -25,6 +25,8 @@ pub struct DeviceSpec {
     pub text_decoder: Option<DeviceTextDecoderKind>,
     pub timer: DeviceTimerProfile,
     pub internal_ram_mirror: bool,
+    /// SSR input bit sampled by firmware for the physical ON key.
+    pub on_key_ssr_mask: u8,
     pub keyboard: DeviceKeyboardProfile,
     pub sio_stub: bool,
     pub default_memory_card: DeviceMemoryCardProfile,
@@ -215,6 +217,8 @@ impl DeviceModel {
                     provenance: TimerProfileProvenance::Iq7000PcCompatibilityFallback,
                 },
                 internal_ram_mirror: false,
+                // IQ-7000 key-scan helper F54EF explicitly tests SSR.1.
+                on_key_ssr_mask: 0x02,
                 keyboard: DeviceKeyboardProfile {
                     columns_active_high: true,
                     fifo_mirroring: false,
@@ -242,6 +246,8 @@ impl DeviceModel {
                     provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
+                // PC-E500 hardware traces read SSR=0x0C held and 0x04 released.
+                on_key_ssr_mask: 0x08,
                 keyboard: DeviceKeyboardProfile {
                     columns_active_high: true,
                     fifo_mirroring: true,
@@ -269,6 +275,7 @@ impl DeviceModel {
                     provenance: TimerProfileProvenance::PcE500UncalibratedCompatibility,
                 },
                 internal_ram_mirror: true,
+                on_key_ssr_mask: 0x08,
                 keyboard: DeviceKeyboardProfile {
                     columns_active_high: true,
                     fifo_mirroring: true,
@@ -329,6 +336,10 @@ impl DeviceModel {
 
     pub fn timer_profile(self) -> DeviceTimerProfile {
         self.spec().timer
+    }
+
+    pub fn on_key_ssr_mask(self) -> u8 {
+        self.spec().on_key_ssr_mask
     }
 
     pub fn default_memory_card_profile(self) -> DeviceMemoryCardProfile {
@@ -416,6 +427,13 @@ mod tests {
         assert_eq!(iq.mti_long_period, pc.mti_long_period);
         assert_eq!(iq.sti_period, pc.sti_period);
         assert_eq!(iq.sti_long_period, pc.sti_long_period);
+    }
+
+    #[test]
+    fn on_key_ssr_input_bit_is_model_specific() {
+        assert_eq!(DeviceModel::Iq7000.on_key_ssr_mask(), 0x02);
+        assert_eq!(DeviceModel::PcE500.on_key_ssr_mask(), 0x08);
+        assert_eq!(DeviceModel::PcE500Jp.on_key_ssr_mask(), 0x08);
     }
 
     #[test]

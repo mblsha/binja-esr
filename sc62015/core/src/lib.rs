@@ -1382,6 +1382,7 @@ impl CoreRuntime {
                  power-on reset required: {reason}"
             )));
         }
+        let on_key_ssr_mask = self.device_model().on_key_ssr_mask();
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
@@ -1395,6 +1396,7 @@ impl CoreRuntime {
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
             timer_ptr: *mut TimerContext,
             onk_level: bool,
+            on_key_ssr_mask: u8,
             #[allow(dead_code)]
             cycle: u64,
             #[allow(dead_code)]
@@ -1519,7 +1521,7 @@ impl CoreRuntime {
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= SSR_ONK;
+                                val |= self.on_key_ssr_mask;
                             }
                             return val as u32;
                         }
@@ -1712,7 +1714,7 @@ impl CoreRuntime {
                         if offset == IMEM_SSR_OFFSET {
                             let mut value = (*self.mem).read_internal_byte_silent(offset)?;
                             if self.onk_level {
-                                value |= SSR_ONK;
+                                value |= self.on_key_ssr_mask;
                             }
                             return Some(value);
                         }
@@ -1835,6 +1837,7 @@ impl CoreRuntime {
                     iq7000_rtc,
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level: self.onk_level,
+                    on_key_ssr_mask,
                     cycle: self.metadata.cycle_count,
                     pc,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
@@ -2282,6 +2285,7 @@ impl CoreRuntime {
                     iq7000_rtc,
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level: self.onk_level,
+                    on_key_ssr_mask,
                     cycle: self.metadata.cycle_count,
                     pc: pc_before,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
@@ -3241,7 +3245,8 @@ const ISR_EXI: u8 = 0x40;
 const ISR_KNOWN_MASK: u8 = ISR_MTI | ISR_STI | ISR_KEYI | ISR_ONKI | ISR_TXI | ISR_RXI | ISR_EXI;
 const USR_RX_READY: u8 = 0x20;
 #[cfg(test)]
-const SSR_CI: u8 = 0x02;
+const SSR_CI: u8 = 0x04;
+#[cfg(test)]
 const SSR_ONK: u8 = 0x08;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 
@@ -3888,6 +3893,43 @@ mod tests {
             0,
             "ONKI must remain latched until firmware acknowledges it"
         );
+    }
+
+    #[test]
+    fn onk_level_is_visible_on_each_models_rom_observed_ssr_bit() {
+        for (model, visible_mask, hidden_mask) in [
+            (DeviceModel::PcE500, 0x08, 0x02),
+            (DeviceModel::Iq7000, 0x02, 0x08),
+        ] {
+            let mut rt = CoreRuntime::new();
+            rt.set_device_model(model).expect("set model");
+            // TEST (SSR),visible; TEST (SSR),other. The PC-E500 hardware
+            // trace observes SSR.3, while IQ-7000 ROM F54EF samples SSR.1.
+            rt.load_rom(
+                &[
+                    0x30,
+                    0x65,
+                    0xFF,
+                    visible_mask,
+                    0x30,
+                    0x65,
+                    0xFF,
+                    hidden_mask,
+                ],
+                0,
+            );
+            rt.state.set_reg(RegName::PC, 0);
+            rt.press_on_key();
+
+            rt.step(1).expect("test model-visible ON bit");
+            assert_eq!(rt.get_flag("FZ"), 0, "{model:?} must expose its ON bit");
+            rt.step(1).expect("test other model's ON bit");
+            assert_eq!(
+                rt.get_flag("FZ"),
+                1,
+                "{model:?} must not expose the other model's ON bit"
+            );
+        }
     }
 
     #[test]
