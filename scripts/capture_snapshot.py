@@ -19,7 +19,6 @@ def _apply_preset(args: argparse.Namespace) -> None:
 
     if args.preset == "rust-fast":
         os.environ.setdefault("SC62015_CPU_BACKEND", "rust")
-        os.environ.setdefault("RUST_TIMER_IN_RUST", "1")
         if args.fast_mode is None:
             args.fast_mode = True
         if args.timeout_secs is None:
@@ -74,7 +73,7 @@ def main() -> None:
     parser.add_argument(
         "--preset",
         choices=["rust-fast"],
-        help="Convenience preset (rust-fast sets backend=rust, timers in Rust, fast_mode on, timeout 0)",
+        help="Convenience preset (rust-fast sets backend=rust, fast_mode on, timeout 0)",
     )
     parser.add_argument(
         "--quiet",

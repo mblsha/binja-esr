@@ -18,7 +18,6 @@ def _apply_llama_fast_defaults(ns: argparse.Namespace) -> None:
     backend_env = (os.getenv("SC62015_CPU_BACKEND") or "").lower()
     if ns.preset == "llama-fast" or backend_env == "llama":
         os.environ.setdefault("SC62015_CPU_BACKEND", "llama")
-        os.environ.setdefault("RUST_TIMER_IN_RUST", "1")
         if ns.fast_mode is None:
             ns.fast_mode = True
         if ns.timeout_secs is None:

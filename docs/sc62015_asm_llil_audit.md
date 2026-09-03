@@ -256,8 +256,9 @@ overlays cannot be represented by v4. The Python PCE wrapper also refuses save
 and load while serial queues, cassette tape state, custom handler-backed or
 writable overlays, overlapping/out-of-image static overlays, or a custom IMEM
 callback would be omitted. Disjoint static ROM overlays wholly represented by
-the flattened image remain allowed. Snapshot metadata is refreshed from
-the live `fast_mode`, fallback-range, and read-only-range configuration; load
+the flattened image remain allowed. Snapshot metadata is refreshed from the
+live fallback-range and read-only-range configuration; the legacy `fast_mode`
+JSON member is always false because CoreRuntime has one execution path. Load
 requires the destination machine's range contract to match exactly and never
 adds another model's defaults. The PCE bridge validates native candidates
 before host mutation. An

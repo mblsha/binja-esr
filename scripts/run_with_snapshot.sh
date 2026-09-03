@@ -5,7 +5,6 @@ set -euo pipefail
 # Environment variables:
 #   SC62015_CPU_BACKEND   Backend selection (rust/python) – defaults to python.
 #   FAST_MODE             If set, passes --fast-mode (defaults to 1 for rust).
-#   RUST_TIMER_IN_RUST    Forced to 1 for rust backend unless provided.
 #   SNAPSHOT_IN           Optional .pcsnap path to load before stepping.
 #   SNAPSHOT_OUT          Optional .pcsnap path to capture if SNAPSHOT_IN is absent.
 #   SNAPSHOT_SAVE_AFTER   Optional .pcsnap path to save after the replay step.
@@ -18,9 +17,8 @@ cd "$ROOT_DIR"
 
 BACKEND="${SC62015_CPU_BACKEND:-python}"
 
-# Defaults for Rust: timers in Rust, fast_mode on, no timeout
+# Defaults for Rust: Python-host fast mode on, no timeout
 if [[ "$BACKEND" == "rust" ]]; then
-    export RUST_TIMER_IN_RUST="${RUST_TIMER_IN_RUST:-1}"
     FAST_MODE="${FAST_MODE:-1}"
     TIMEOUT_SECS="${TIMEOUT_SECS:-0}"
 else
