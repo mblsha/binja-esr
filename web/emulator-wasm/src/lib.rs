@@ -13,7 +13,8 @@ use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
 use sc62015_core::{
-    CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
+    iq7000_annunciators::Iq7000Annunciators, CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS,
+    LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
 };
 use sc62015_core::{DeviceModel, DeviceTextDecoder};
 
@@ -397,6 +398,18 @@ impl Sc62015Emulator {
     pub fn clear_iq7000_rtc(&mut self) {
         self.iq7000_rtc_seed = None;
         self.runtime.clear_iq7000_clock_seed();
+    }
+
+    /// Advance the deterministic IQ-7000 RTC independently of CPU execution.
+    /// This is useful for UI automation and alarm tests that should not need
+    /// to execute a million idle scheduler boundaries per emulated second.
+    pub fn advance_iq7000_rtc_seconds(&mut self, seconds: u32) -> bool {
+        self.runtime.advance_iq7000_rtc_seconds(u64::from(seconds))
+    }
+
+    pub fn iq7000_rtc_state(&self) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.runtime.iq7000_rtc_state())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     pub fn reset(&mut self) -> Result<(), JsValue> {
@@ -1006,44 +1019,39 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_pixels(&self) -> Uint8Array {
-        let Some(lcd) = self.runtime.lcd.as_deref() else {
-            return Uint8Array::from(vec![0u8; LCD_DISPLAY_ROWS * LCD_DISPLAY_COLS].as_slice());
+        let matrix = self.runtime.lcd.as_deref().map_or_else(
+            || vec![vec![0; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
+            sc62015_core::lcd_capture::lcd_matrix_pixels,
+        );
+        let flat: Vec<u8> = matrix.into_iter().flatten().collect();
+        Uint8Array::from(flat.as_slice())
+    }
+
+    /// Full display capture, including IQ-7000 fixed segments and their raw
+    /// source bytes/confidence marker. Does not advance the machine or bus.
+    pub fn lcd_capture(&self, scale: Option<u32>) -> Result<JsValue, JsValue> {
+        use sc62015_core::lcd_capture::LcdCapture;
+        let capture = if let Some(scale) = scale {
+            LcdCapture::read_at_scale(
+                self.runtime.lcd.as_deref(),
+                &self.runtime.memory,
+                scale as usize,
+            )
+            .map_err(JsValue::from_str)?
+        } else {
+            LcdCapture::read(self.runtime.lcd.as_deref(), &self.runtime.memory)
         };
+        serde_wasm_bindgen::to_value(&capture).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 
-        match lcd.kind() {
-            // PC-E500: keep the existing 32x240 buffer layout (matches Python get_display_buffer).
-            LcdKind::Hd61202 | LcdKind::Unknown => {
-                let rows = LCD_DISPLAY_ROWS as usize;
-                let cols = LCD_DISPLAY_COLS as usize;
-                let mut flat = vec![0u8; rows * cols];
-                let buf = lcd.display_buffer();
-                for (row, row_buf) in buf.iter().enumerate().take(rows) {
-                    let start = row * cols;
-                    flat[start..start + cols].copy_from_slice(row_buf);
-                }
-                Uint8Array::from(flat.as_slice())
-            }
-            // IQ-7000: export the real 96x64 pixel grid (8 pages x 96 columns).
-            LcdKind::Iq7000Vram => {
-                const COLS: usize = 96;
-                const ROWS: usize = 64;
-                const PAGES: usize = 8;
-
-                let bytes = lcd.display_vram_bytes();
-                let mut flat = vec![0u8; ROWS * COLS];
-                for page in 0..PAGES {
-                    for col in 0..COLS {
-                        let byte = bytes[page][col];
-                        for dy in 0..8usize {
-                            let bit = 7usize.saturating_sub(dy);
-                            let on = (byte >> bit) & 1;
-                            flat[(page * 8 + dy) * COLS + col] = on;
-                        }
-                    }
-                }
-                Uint8Array::from(flat.as_slice())
-            }
+    /// Four off-framebuffer LCD bytes driving the IQ-7000 fixed glass symbols.
+    /// The normal framebuffer remains exactly 96x64.
+    pub fn lcd_annunciator_bytes(&self) -> Uint8Array {
+        if self.model != DeviceModel::Iq7000 {
+            return Uint8Array::from([0u8; 4].as_slice());
         }
+        let annunciators = Iq7000Annunciators::read(&self.runtime.memory);
+        Uint8Array::from(annunciators.shadow_bytes.as_slice())
     }
 
     pub fn lcd_geometry(&self) -> Result<JsValue, JsValue> {

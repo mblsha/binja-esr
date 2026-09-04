@@ -10,8 +10,11 @@ use sc62015_core::{
     apply_registers, collect_registers, create_lcd, emit_event,
     generated_key_input::{lookup_generated_key_input, GeneratedKeyInputKind},
     iq7000::{self, Iq7000ClockSeed, Iq7000RtcPeripheral},
+    iq7000_annunciators::Iq7000Annunciators,
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
-    lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdKind, LcdWriteTrace},
+    lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdWriteTrace},
+    lcd_capture::lcd_matrix_pixels as lcd_pixels,
+    lcd_render::render_lcd,
     llama::{
         eval::{
             fetch_validated_vector, perfetto_next_substep, power_on_reset,
@@ -53,6 +56,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[cfg(test)]
+use sc62015_core::iq7000_annunciators::{
+    IQ7000_ANNUNCIATOR_SHADOW_ADDRS, IQ7000_ANNUNCIATOR_STATE_ADDRS, IQ7000_CAPS, IQ7000_SHIFT,
+};
+#[cfg(test)]
 use sc62015_core::memory::IMEM_EIH_OFFSET;
 
 const PCE500_IOCS_WS_PTR_ADDR: u32 = 0x00BFD17;
@@ -88,11 +95,6 @@ const DEFAULT_RUN_STEPS: u64 = 20_000;
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 const CPU_DONE_EVENT: u32 = 1;
 const LCD_CAPTURE_SCALE: usize = 3;
-const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
-const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
-const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
-const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
-const IQ7000_NAMED_ANNUNCIATOR_MASK: u8 = IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR;
 const PCLINK_SERIAL_RX_PACE_STEPS: u32 = 1_000;
 const PCLINK_SERIAL_POST_CLIENT_SETTLE_STEPS: usize = 2_500_000;
 const PCLINK_SERIAL_XON: u8 = 0x11;
@@ -386,21 +388,9 @@ struct RunSummary {
     lcd_stats: sc62015_core::lcd::LcdStats,
     lcd_lines: Vec<String>,
     lcd_pixels: Vec<Vec<u8>>,
-    lcd_annunciators: Option<LcdAnnunciators>,
+    lcd_annunciators: Option<Iq7000Annunciators>,
     lcd_trace: Option<LcdTraceDump>,
     debug_probe: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct LcdAnnunciators {
-    state_raw: u8,
-    shadow_raw: u8,
-    raw_union: u8,
-    unmapped_state: u8,
-    unmapped_shadow: u8,
-    unmapped_union: u8,
-    shift: bool,
-    caps: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -808,6 +798,7 @@ struct StandaloneBus {
     trace_reset_ce6_readonly: bool,
     iq7000_clock_seed: Option<Iq7000RtcSeed>,
     iq7000_rtc: Option<Iq7000RtcPeripheral>,
+    iq7000_rtc_timebase_hz: u64,
     poisoned: Option<String>,
 }
 
@@ -1198,6 +1189,7 @@ impl StandaloneBus {
             trace_reset_ce6_readonly: false,
             iq7000_clock_seed: None,
             iq7000_rtc: None,
+            iq7000_rtc_timebase_hz: DeviceModel::DEFAULT.timer_profile().timebase_hz,
             poisoned: None,
         }
     }
@@ -1251,7 +1243,45 @@ impl StandaloneBus {
     }
 
     fn ssr_onk_visible(&self) -> bool {
-        self.pending_onk || self.trace_resume_ssr_onk
+        self.effective_onk_level() || self.trace_resume_ssr_onk
+    }
+
+    fn iq7000_alarm_wake_level(&self) -> bool {
+        self.iq7000_rtc
+            .as_ref()
+            .is_some_and(Iq7000RtcPeripheral::alarm_wake_level)
+    }
+
+    fn effective_onk_level(&self) -> bool {
+        self.pending_onk || self.iq7000_alarm_wake_level()
+    }
+
+    fn refresh_iq7000_rtc_wake_level(&mut self) {
+        if !self.iq7000_alarm_wake_level() {
+            return;
+        }
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & ISR_ONKI) == 0 {
+            self.memory
+                .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
+        }
+        self.irq_pending = true;
+        self.timer.irq_pending = true;
+        if !self.in_interrupt {
+            self.last_irq_src = Some("ONK".to_string());
+            self.timer.irq_source = Some("ONK".to_string());
+        }
+    }
+
+    fn advance_iq7000_rtc_timing_units(&mut self, timing_units: u64) -> bool {
+        let newly_asserted = self
+            .iq7000_rtc
+            .as_mut()
+            .is_some_and(|rtc| rtc.advance_timing_units(timing_units, self.iq7000_rtc_timebase_hz));
+        if self.iq7000_alarm_wake_level() {
+            self.refresh_iq7000_rtc_wake_level();
+        }
+        newly_asserted
     }
 
     fn enable_trace_resume_onk(&mut self, release_cycle: u64, release_instr: u64) {
@@ -1748,7 +1778,7 @@ impl StandaloneBus {
             }
         }
         // ONK is level-triggered like KEYI; if latched and cleared while masked, reassert.
-        if self.pending_onk && (isr & ISR_ONKI) == 0 {
+        if self.effective_onk_level() && (isr & ISR_ONKI) == 0 {
             self.memory
                 .write_internal_byte(IMEM_ISR_OFFSET, isr | ISR_ONKI);
             isr |= ISR_ONKI;
@@ -2042,6 +2072,7 @@ impl StandaloneBus {
             self.tick_timers_only(fire_cycle);
         }
         self.cycle_count = end_cycle;
+        self.advance_iq7000_rtc_timing_units(cycles);
     }
 
     fn finalize_instruction(&mut self) {
@@ -2963,6 +2994,7 @@ impl LlamaBus for StandaloneBus {
         // Python WAIT burns one instruction cycle without ticking timers, then loops I times.
         let cycles = cycles.max(1);
         self.cycle_count = self.cycle_count.wrapping_add(1);
+        self.advance_iq7000_rtc_timing_units(1);
         for _ in 0..cycles {
             self.advance_cycle();
         }
@@ -2988,6 +3020,7 @@ fn configure_bus_for_model(bus: &mut StandaloneBus, model: DeviceModel) {
     model.configure_keyboard(&mut bus.keyboard);
     bus.memory.set_internal_ram_mirror(model.is_pce500_family());
     bus.on_key_ssr_mask = model.on_key_ssr_mask();
+    bus.iq7000_rtc_timebase_hz = model.timer_profile().timebase_hz;
 }
 
 fn parse_matrix_code(raw: &str) -> Result<Option<AutoKeyKind>, Box<dyn Error>> {
@@ -3340,47 +3373,11 @@ fn capture_screen_state(
     }
 }
 
-fn lcd_pixels(lcd: &dyn LcdHal) -> Vec<Vec<u8>> {
-    if lcd.kind() == LcdKind::Iq7000Vram {
-        const IQ7000_COLS: usize = 96;
-        const IQ7000_ROWS: usize = 64;
-        const IQ7000_PAGES: usize = IQ7000_ROWS / 8;
-        let bytes = lcd.display_vram_bytes();
-        let mut out = vec![vec![0u8; IQ7000_COLS]; IQ7000_ROWS];
-        for page in 0..IQ7000_PAGES {
-            for col in 0..IQ7000_COLS {
-                let byte = bytes[page][col];
-                for dy in 0..8usize {
-                    let bit = 7usize.saturating_sub(dy);
-                    out[(page * 8) + dy][col] = (byte >> bit) & 1;
-                }
-            }
-        }
-        return out;
-    }
-    lcd.display_buffer()
-        .iter()
-        .map(|row| row.iter().map(|px| u8::from(*px != 0)).collect())
-        .collect()
+fn iq7000_lcd_annunciators(memory: &MemoryImage) -> Iq7000Annunciators {
+    Iq7000Annunciators::read(memory)
 }
 
-fn iq7000_lcd_annunciators(memory: &MemoryImage) -> LcdAnnunciators {
-    let shadow = memory.load(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8).unwrap_or(0) as u8;
-    let key_state = memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
-    let raw_union = shadow | key_state;
-    LcdAnnunciators {
-        state_raw: key_state,
-        shadow_raw: shadow,
-        raw_union,
-        unmapped_state: key_state & !IQ7000_NAMED_ANNUNCIATOR_MASK,
-        unmapped_shadow: shadow & !IQ7000_NAMED_ANNUNCIATOR_MASK,
-        unmapped_union: raw_union & !IQ7000_NAMED_ANNUNCIATOR_MASK,
-        shift: raw_union & IQ7000_SHIFT_ANNUNCIATOR != 0,
-        caps: raw_union & IQ7000_CAPS_ANNUNCIATOR != 0,
-    }
-}
-
-fn lcd_annunciators(model: DeviceModel, memory: &MemoryImage) -> Option<LcdAnnunciators> {
+fn lcd_annunciators(model: DeviceModel, memory: &MemoryImage) -> Option<Iq7000Annunciators> {
     (model == DeviceModel::Iq7000).then(|| iq7000_lcd_annunciators(memory))
 }
 
@@ -3606,94 +3603,25 @@ fn append_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&hasher.finalize().to_be_bytes());
 }
 
-fn iq7000_status_glyph(ch: char) -> Option<[u8; 5]> {
-    match ch {
-        'A' => Some([0b010, 0b101, 0b111, 0b101, 0b101]),
-        'C' => Some([0b111, 0b100, 0b100, 0b100, 0b111]),
-        'F' => Some([0b111, 0b100, 0b110, 0b100, 0b100]),
-        'H' => Some([0b101, 0b101, 0b111, 0b101, 0b101]),
-        'I' => Some([0b111, 0b010, 0b010, 0b010, 0b111]),
-        'P' => Some([0b110, 0b101, 0b110, 0b100, 0b100]),
-        'S' => Some([0b111, 0b100, 0b111, 0b001, 0b111]),
-        'T' => Some([0b111, 0b010, 0b010, 0b010, 0b010]),
-        _ => None,
-    }
-}
-
-fn draw_iq7000_status_label(pixels: &mut [Vec<u8>], x: usize, y: usize, label: &str, active: bool) {
-    let shade = if active { 1 } else { 2 };
-    for (char_idx, ch) in label.chars().enumerate() {
-        let Some(rows) = iq7000_status_glyph(ch) else {
-            continue;
-        };
-        let glyph_x = x + char_idx * 4;
-        for (row_idx, bits) in rows.into_iter().enumerate() {
-            let py = y + row_idx;
-            if py >= pixels.len() {
-                continue;
-            }
-            for col in 0..3 {
-                if bits & (1 << (2 - col)) == 0 {
-                    continue;
-                }
-                let px = glyph_x + col;
-                if px < pixels[py].len() {
-                    pixels[py][px] = shade;
-                }
-            }
-        }
-    }
-}
-
-fn pixels_with_iq7000_annunciators(
-    pixels: &[Vec<u8>],
-    annunciators: Option<&LcdAnnunciators>,
-) -> Vec<Vec<u8>> {
-    let Some(annunciators) = annunciators else {
-        return pixels.to_vec();
-    };
-    let width = pixels.first().map_or(0, Vec::len);
-    if width == 0 {
-        return pixels.to_vec();
-    }
-
-    let mut out = pixels.to_vec();
-    out.push(vec![0; width]);
-    let label_y = out.len();
-    out.extend((0..6).map(|_| vec![0; width]));
-    draw_iq7000_status_label(&mut out, 2, label_y, "SHIFT", annunciators.shift);
-    draw_iq7000_status_label(&mut out, 32, label_y, "CAPS", annunciators.caps);
-    out
-}
-
 fn write_lcd_png(
     path: &Path,
     pixels: &[Vec<u8>],
     scale: usize,
-    annunciators: Option<&LcdAnnunciators>,
+    annunciators: Option<&Iq7000Annunciators>,
 ) -> Result<(), Box<dyn Error>> {
-    let pixels = pixels_with_iq7000_annunciators(pixels, annunciators);
+    let pixels = render_lcd(pixels, annunciators, scale)?;
     let height = pixels.len();
     let width = pixels.first().map_or(0, Vec::len);
     if width == 0 || height == 0 || scale == 0 {
         return Err("cannot render an empty LCD capture".into());
     }
 
-    let out_width = width * scale;
-    let out_height = height * scale;
+    let out_width = width;
+    let out_height = height;
     let mut raw = Vec::with_capacity((out_width + 1) * out_height);
     for row in &pixels {
-        for _ in 0..scale {
-            raw.extend(std::iter::once(0)); // PNG filter type 0.
-            for pixel in row {
-                let shade = match *pixel {
-                    0 => 0xC8,
-                    1 => 0x18,
-                    _ => 0x78,
-                };
-                raw.extend(std::iter::repeat_n(shade, scale));
-            }
-        }
+        raw.push(0); // PNG filter type 0.
+        raw.extend_from_slice(row);
     }
 
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -4204,6 +4132,7 @@ fn apply_halt_wake_boundary(state: &mut LlamaState, bus: &mut StandaloneBus) -> 
     // Timers continue while HALTed and may provide the wake source for this
     // idle boundary. Match the Python runtime's tick-before-wake ordering.
     bus.tick_timers_only(bus.cycle_count);
+    bus.advance_iq7000_rtc_timing_units(1);
     let isr = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
     bus.cycle_count = bus.cycle_count.wrapping_add(1);
     if isr == 0 {
@@ -4261,7 +4190,7 @@ fn current_instruction_requires_silent_preflight(state: &LlamaState, bus: &Stand
     if raw_kil != 0 {
         isr |= ISR_KEYI;
     }
-    if bus.pending_onk {
+    if bus.effective_onk_level() {
         isr |= ISR_ONKI;
     }
     let irq_replaces_pc = !bus.in_interrupt && (imr & IMR_MASTER) != 0 && (imr & isr) != 0;
@@ -5541,6 +5470,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             // OFF wake filtering must run before generic IRQ delivery.  A
             // pending KEYI/MTI is retained but cannot bypass the ONKI-only
             // wake gate.
+            if state.is_off() {
+                // The external RTC remains powered while the CPU is OFF and
+                // can assert the inferred ON/power-wake level on this idle
+                // boundary.
+                bus.advance_iq7000_rtc_timing_units(1);
+            }
             match apply_off_wake_gate(&mut state, &mut bus) {
                 OffWakeGate::NotOff => {}
                 OffWakeGate::WaitingForOnKey | OffWakeGate::WokeOnKey => {
@@ -5729,6 +5664,7 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
                     bus.apply_deferred_key_irq();
                     if run_timer_cycles && opcode != 0xEF {
                         bus.cycle_count = bus.cycle_count.wrapping_add(1);
+                        bus.advance_iq7000_rtc_timing_units(1);
                     }
                     executed += 1;
                     if perfetto_chunk_size > 0
@@ -6070,6 +6006,45 @@ mod tests {
             None,
             None,
         )
+    }
+
+    fn rtc_host_write_byte(peripheral: &mut Iq7000RtcPeripheral, byte: u8) {
+        const EOL_STROBE: u8 = 0x01;
+        const EOL_OUT_DATA: u8 = 0x02;
+        const EIL_READY: u8 = 0x10;
+
+        peripheral.handle_eol_write(EOL_STROBE);
+        for bit in 0..8 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            let value = if ((byte >> bit) & 1) != 0 {
+                EOL_STROBE | EOL_OUT_DATA
+            } else {
+                EOL_STROBE
+            };
+            peripheral.handle_eol_write(value);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+        }
+        peripheral.handle_eol_write(0);
+    }
+
+    fn rtc_host_read_byte(peripheral: &mut Iq7000RtcPeripheral) -> u8 {
+        const EOL_STROBE: u8 = 0x01;
+        const EIL_IN_DATA: u8 = 0x08;
+        const EIL_READY: u8 = 0x10;
+
+        peripheral.handle_eol_write(EOL_STROBE);
+        let mut assembled = 0u8;
+        for _ in 0..8 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+            let carry = (peripheral.handle_eil_read() & EIL_IN_DATA) != 0;
+            assembled >>= 1;
+            if carry {
+                assembled |= 0x80;
+            }
+        }
+        peripheral.handle_eol_write(0);
+        assembled ^ 0xFF
     }
 
     #[test]
@@ -7421,37 +7396,29 @@ mod tests {
     fn iq7000_lcd_annunciators_reads_shadow_and_workspace_state() {
         let mut memory = MemoryImage::new();
         memory
-            .store(IQ7000_KEY_STATE_ADDR, 8, IQ7000_CAPS_ANNUNCIATOR as u32)
+            .store(IQ7000_ANNUNCIATOR_STATE_ADDRS[0], 8, IQ7000_CAPS as u32)
             .expect("store key state");
         let ann = iq7000_lcd_annunciators(&memory);
-        assert_eq!(ann.state_raw, IQ7000_CAPS_ANNUNCIATOR);
+        assert_eq!(ann.state_raw, IQ7000_CAPS);
         assert_eq!(ann.shadow_raw, 0);
-        assert_eq!(ann.raw_union, IQ7000_CAPS_ANNUNCIATOR);
-        assert_eq!(ann.unmapped_state, 0);
-        assert_eq!(ann.unmapped_shadow, 0);
-        assert_eq!(ann.unmapped_union, 0);
-        assert!(ann.caps);
+        assert_eq!(ann.raw_union, IQ7000_CAPS);
+        assert_eq!(ann.unmapped_state_bytes, [0; 4]);
+        assert_eq!(ann.unmapped_shadow_bytes, [0; 4]);
+        assert!(!ann.caps);
         assert!(!ann.shift);
+        assert!(ann.desynchronized);
 
         memory
-            .store(
-                IQ7000_ANNUNCIATOR_SHADOW_ADDR,
-                8,
-                IQ7000_SHIFT_ANNUNCIATOR as u32,
-            )
+            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDRS[0], 8, IQ7000_SHIFT as u32)
             .expect("store annunciator shadow");
         let ann = iq7000_lcd_annunciators(&memory);
-        assert_eq!(ann.state_raw, IQ7000_CAPS_ANNUNCIATOR);
-        assert_eq!(ann.shadow_raw, IQ7000_SHIFT_ANNUNCIATOR);
-        assert_eq!(
-            ann.raw_union,
-            IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR
-        );
-        assert_eq!(ann.unmapped_state, 0);
-        assert_eq!(ann.unmapped_shadow, 0);
-        assert_eq!(ann.unmapped_union, 0);
+        assert_eq!(ann.state_raw, IQ7000_CAPS);
+        assert_eq!(ann.shadow_raw, IQ7000_SHIFT);
+        assert_eq!(ann.raw_union, IQ7000_SHIFT | IQ7000_CAPS);
+        assert_eq!(ann.unmapped_state_bytes, [0; 4]);
+        assert_eq!(ann.unmapped_shadow_bytes, [0; 4]);
         assert!(ann.shift);
-        assert!(ann.caps);
+        assert!(!ann.caps);
     }
 
     #[test]
@@ -7461,56 +7428,36 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = std::env::temp_dir().join(format!("iq7000_lcd_annunciators_{stamp}.png"));
-        let pixels = vec![vec![0u8, 1u8], vec![1u8, 0u8]];
-        let ann = LcdAnnunciators {
-            state_raw: 0,
-            shadow_raw: IQ7000_CAPS_ANNUNCIATOR,
-            raw_union: IQ7000_CAPS_ANNUNCIATOR,
-            unmapped_state: 0,
-            unmapped_shadow: 0,
-            unmapped_union: 0,
-            shift: false,
-            caps: true,
-        };
-        write_lcd_png(&path, &pixels, 1, Some(&ann)).expect("write png");
-        let png = std::fs::read(&path).expect("read png");
-        let width = u32::from_be_bytes(png[16..20].try_into().expect("width"));
-        let height = u32::from_be_bytes(png[20..24].try_into().expect("height"));
-        assert_eq!(width, 2);
-        assert_eq!(height, 9);
+        let pixels = vec![vec![0u8; 96]; 64];
+        let ann = Iq7000Annunciators::from_sources([0; 4], [IQ7000_CAPS, 0, 0, 0]);
+        for scale in [1, 4] {
+            write_lcd_png(&path, &pixels, scale, Some(&ann)).expect("write png");
+            let png = std::fs::read(&path).expect("read png");
+            let width = u32::from_be_bytes(png[16..20].try_into().expect("width"));
+            let height = u32::from_be_bytes(png[20..24].try_into().expect("height"));
+            assert_eq!(width, 122 * scale as u32);
+            assert_eq!(height, 64 * scale as u32);
+        }
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn iq7000_unmapped_annunciator_bit_is_reported_but_not_drawn() {
+    fn iq7000_battery_bit_is_rendered_in_the_physical_side_panel() {
         let mut memory = MemoryImage::new();
         memory
-            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8, 0x80)
-            .expect("store raw annunciator shadow");
+            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDRS[0], 8, 0x80)
+            .expect("store battery annunciator shadow");
         let ann = iq7000_lcd_annunciators(&memory);
         assert_eq!(ann.state_raw, 0);
         assert_eq!(ann.shadow_raw, 0x80);
         assert_eq!(ann.raw_union, 0x80);
-        assert_eq!(ann.unmapped_state, 0);
-        assert_eq!(ann.unmapped_shadow, 0x80);
-        assert_eq!(ann.unmapped_union, 0x80);
-        assert!(!ann.shift);
-        assert!(!ann.caps);
+        assert!(ann.batt);
 
         let pixels = vec![vec![0u8; 96]; 64];
-        let baseline = LcdAnnunciators {
-            state_raw: 0,
-            shadow_raw: 0,
-            raw_union: 0,
-            unmapped_state: 0,
-            unmapped_shadow: 0,
-            unmapped_union: 0,
-            shift: false,
-            caps: false,
-        };
-        assert_eq!(
-            pixels_with_iq7000_annunciators(&pixels, Some(&ann)),
-            pixels_with_iq7000_annunciators(&pixels, Some(&baseline))
+        let baseline = Iq7000Annunciators::from_sources([0; 4], [0; 4]);
+        assert_ne!(
+            render_lcd(&pixels, Some(&ann), 4),
+            render_lcd(&pixels, Some(&baseline), 4)
         );
     }
 
@@ -7641,6 +7588,53 @@ mod tests {
                 .unwrap_or(0),
             1
         );
+    }
+
+    #[test]
+    fn standalone_iq7000_rtc_alarm_drives_the_onk_wake_gate() {
+        let seed = parse_iq7000_rtc_arg("202604252119")
+            .expect("parse fixed RTC")
+            .expect("seed enabled");
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Iq7000Vram),
+            TimerContext::new(false, 0, 0),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        configure_bus_for_model(&mut bus, DeviceModel::Iq7000);
+        bus.install_iq7000_clock_seed(seed);
+
+        let rtc = bus.iq7000_rtc.as_mut().expect("RTC installed");
+        rtc_host_write_byte(rtc, 0xF1);
+        for byte in [0x20, 0x10, 0x26, 0x04, 0x26, 0x01] {
+            rtc_host_write_byte(rtc, byte);
+        }
+        assert_eq!(rtc_host_read_byte(rtc), 0x00);
+
+        let mut state = LlamaState::new();
+        state.power_off();
+        bus.advance_iq7000_rtc_timing_units(bus.iq7000_rtc_timebase_hz * 60);
+        assert_eq!(
+            apply_off_wake_gate(&mut state, &mut bus),
+            OffWakeGate::WokeOnKey
+        );
+        assert!(!state.is_off());
+        assert!(bus.ssr_onk_visible());
+        assert_ne!(
+            bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0
+        );
+
+        rtc_host_write_byte(bus.iq7000_rtc.as_mut().expect("RTC installed"), 0xFF);
+        bus.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        bus.irq_pending = false;
+        assert!(!bus.irq_pending());
+        assert!(!bus.ssr_onk_visible());
     }
 
     #[test]

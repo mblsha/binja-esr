@@ -46,8 +46,10 @@ type KeyboardDebug = {
 
 type Frame = {
 	lcdPixels: ArrayBuffer;
+	lcdAnnunciatorBytes: ArrayBuffer;
 	lcdChipPixels: ArrayBuffer;
 	lcdCols: number;
+	lcdPixelScale: number;
 	lcdRows: number;
 	lcdKind: LcdKind;
 	pc: number | null;
@@ -70,6 +72,11 @@ const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
 const RUN_YIELD_MS = 0;
 
 const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
+
+function formatHostUtcRtcSeed(now = new Date()): string {
+	const pad2 = (value: number) => String(value).padStart(2, '0');
+	return `${now.getUTCFullYear()}${pad2(now.getUTCMonth() + 1)}${pad2(now.getUTCDate())}${pad2(now.getUTCHours())}${pad2(now.getUTCMinutes())}`;
+}
 
 let wasm: any = null;
 let emulator: any = null;
@@ -221,6 +228,8 @@ async function evalScript(source: string): Promise<any> {
 		write8: (addr: number, value: number) =>
 			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
 		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
+		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels()),
+		lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
 		pressMatrixCode: (code: number) =>
 			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () => emulator.press_matrix_code?.(code)),
 		releaseMatrixCode: (code: number) =>
@@ -364,19 +373,15 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 }
 
 function captureFrame(forceText: boolean): Frame {
-	const geometry = (() => {
-		try {
-			return emulator.lcd_geometry?.() ?? null;
-		} catch {
-			return null;
-		}
-	})();
+	const geometry = emulator.lcd_capture();
 	const lcdCols = typeof geometry?.cols === 'number' ? geometry.cols : 240;
 	const lcdRows = typeof geometry?.rows === 'number' ? geometry.rows : 32;
 	const lcdKind = normalizeLcdKind(geometry?.kind) ?? 'unknown';
 
-	const pixels = emulator.lcd_pixels();
+	const pixels = geometry.pixels;
 	const pixelsCopy = new Uint8Array(pixels);
+	const annunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? new Uint8Array(4);
+	const annunciatorBytesCopy = new Uint8Array(annunciatorBytes);
 	const chipPixels = emulator.lcd_chip_pixels();
 	const chipPixelsCopy = new Uint8Array(chipPixels);
 	const nowMs = performance.now();
@@ -423,8 +428,10 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		lcdAnnunciatorBytes: annunciatorBytesCopy.buffer,
 		lcdChipPixels: chipPixelsCopy.buffer,
 		lcdCols,
+		lcdPixelScale: geometry.pixel_scale,
 		lcdRows,
 		lcdKind,
 		pc,
@@ -441,7 +448,11 @@ function captureFrame(forceText: boolean): Frame {
 }
 
 function postFrame(frame: Frame) {
-	(self as any).postMessage({ type: 'frame', frame }, [frame.lcdPixels, frame.lcdChipPixels]);
+	(self as any).postMessage({ type: 'frame', frame }, [
+		frame.lcdPixels,
+		frame.lcdAnnunciatorBytes,
+		frame.lcdChipPixels,
+	]);
 }
 
 function pumpEmulator(id: number) {
@@ -493,6 +504,9 @@ async function handleRequest(msg: WorkerRequest) {
 				romModel = msg.model ?? romModel;
 				perfettoSymbolsPromise = null;
 				emu.load_rom_with_model?.(msg.bytes, romModel) ?? emu.load_rom(msg.bytes);
+				if (romModel === 'iq-7000' && typeof emu.set_iq7000_rtc_yyyymmddhhmm === 'function') {
+					emu.set_iq7000_rtc_yyyymmddhhmm(formatHostUtcRtcSeed());
+				}
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
 				pressedCodes.clear();

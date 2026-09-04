@@ -696,6 +696,7 @@ async function main() {
 			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
 		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
 		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels?.() ?? null),
+		lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
 		pressMatrixCode: (code: number) =>
 			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () => emulator.press_matrix_code?.(code)),
 		releaseMatrixCode: (code: number) =>

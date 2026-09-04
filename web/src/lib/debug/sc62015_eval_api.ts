@@ -187,6 +187,24 @@ export type EvalProofMetadataInput = {
 
 export type EvalApiOptions = {};
 
+export type LcdCapture = {
+	kind: string;
+	cols: number;
+	rows: number;
+	pixel_format: 'gray8';
+	pixel_scale: number;
+	/** Final-resolution grayscale: 0 black, 192 LCD background, intermediate antialiasing. */
+	pixels: number[];
+	annunciators: {
+		shadow_bytes: number[];
+		state_bytes: number[];
+		unmapped_shadow_bytes: number[];
+		desynchronized: boolean;
+		mapping_status: string;
+		[flag: string]: unknown;
+	} | null;
+};
+
 export interface EmulatorAdapter {
 	callFunction(
 		address: number,
@@ -207,6 +225,7 @@ export interface EmulatorAdapter {
 	write8(addr: number, value: number): void;
 	lcdText?(): string[] | null;
 	lcdPixels?(): Uint8Array | number[] | null;
+	lcdCapture?(scale?: number): LcdCapture;
 	pressMatrixCode?(code: number): void;
 	releaseMatrixCode?(code: number): void;
 	injectMatrixEvent?(code: number, release: boolean): void;
@@ -246,6 +265,8 @@ export interface EvalApi {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
 		pixels(): Promise<number[]>;
+		/** Full physical display, with geometry and annunciator provenance. */
+		capture(options?: { scale?: number }): Promise<LcdCapture>;
 		assertCalendarMonth(options: EvalCalendarMonthOptions): Promise<EvalCalendarMonthAssertion>;
 	};
 	keyboard: {
@@ -314,7 +335,9 @@ const IQ7000_LCD_HEIGHT = 64;
 
 const IQ7000_APP_EVENT_CODES = Object.freeze({
 	calc: 0x00,
-	shift: 0x01,
+	// This API injects scanner events, not the ROM's translated keycodes.
+	// Scanner 0x02 translates to logical SHIFT keycode 0x01.
+	shift: 0x02,
 	memo: 0x08,
 	home: 0x09,
 	tel: 0x10,
@@ -848,6 +871,18 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			text: async () => adapter.lcdText?.() ?? [],
 			textString: async () => (adapter.lcdText?.() ?? []).join('\n'),
 			pixels: async () => Array.from(adapter.lcdPixels?.() ?? []),
+			capture: async (options) => {
+				if (!adapter.lcdCapture) throw new Error('Full LCD capture is not available in this runtime');
+				const scale = options?.scale;
+				if (scale !== undefined && (!Number.isInteger(scale) || scale < 1 || scale > 16))
+					throw new Error('LCD capture scale must be an integer 1..16');
+				const frame = adapter.lcdCapture(scale);
+				if (frame.cols <= 0 || frame.rows <= 0 || frame.pixels.length !== frame.cols * frame.rows) {
+					throw new Error('Invalid LCD capture geometry');
+				}
+				// Capture owns its arrays: later execution must not change screenshot evidence.
+				return JSON.parse(JSON.stringify(frame));
+			},
 			assertCalendarMonth: async (options) => {
 				const { year, month } = options;
 				if (!Number.isInteger(year) || year < 1) throw new Error(`Invalid calendar year: ${year}`);
