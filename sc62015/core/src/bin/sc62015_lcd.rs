@@ -11,7 +11,8 @@ use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
 use sc62015_core::{
-    pce500::ROM_WINDOW_START, CoreRuntime, DeviceMemoryCardProfile, DeviceModel, LoopDetectorConfig,
+    iq7000_annunciators::Iq7000Annunciators, pce500::ROM_WINDOW_START, CoreRuntime,
+    DeviceMemoryCardProfile, DeviceModel, LoopDetectorConfig,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
@@ -39,11 +40,6 @@ const BACKSPACE_KEY_CODE: u8 = 0x4D;
 const IQ7000_SHIFT_EVENT_CODE: u8 = 0x01;
 const IQ7000_FUNCTION_EVENT_CODE: u8 = 0x04;
 const IQ7000_CAPS_EVENT_CODE: u8 = 0x09;
-const IQ7000_ANNUNCIATOR_SHADOW_ADDR: u32 = 0x006160;
-const IQ7000_KEY_STATE_ADDR: u32 = 0x001FDA3;
-const IQ7000_SHIFT_ANNUNCIATOR: u8 = 0x10;
-const IQ7000_CAPS_ANNUNCIATOR: u8 = 0x08;
-const IQ7000_NAMED_ANNUNCIATOR_MASK: u8 = IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -295,43 +291,52 @@ mod tests {
     #[test]
     fn iq7000_status_line_reports_shift_caps_annunciators() {
         let mut runtime = iq7000_runtime();
-        assert_eq!(
-            format_iq7000_annunciator_status(&runtime),
-            " lcd=SHIFT:off,CAPS:off"
-        );
+        assert_eq!(format_iq7000_annunciator_status(&runtime), " lcd=none");
         runtime
             .memory
             .store(
-                IQ7000_KEY_STATE_ADDR,
+                sc62015_core::iq7000_annunciators::IQ7000_ANNUNCIATOR_SHADOW_ADDRS[0],
                 8,
-                (IQ7000_SHIFT_ANNUNCIATOR | IQ7000_CAPS_ANNUNCIATOR) as u32,
+                (sc62015_core::iq7000_annunciators::IQ7000_SHIFT
+                    | sc62015_core::iq7000_annunciators::IQ7000_CAPS) as u32,
             )
-            .expect("store annunciator state");
+            .expect("store annunciator shadow");
         assert_eq!(
             format_iq7000_annunciator_status(&runtime),
-            " lcd=SHIFT:on,CAPS:on"
+            " lcd=SHIFT,CAPS,DESYNC"
         );
 
         runtime
             .memory
-            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8, 0x80)
-            .expect("store unmapped annunciator state");
+            .store(
+                sc62015_core::iq7000_annunciators::IQ7000_ANNUNCIATOR_STATE_ADDRS[0],
+                8,
+                0x98,
+            )
+            .expect("store matching annunciator state");
+        runtime
+            .memory
+            .store(
+                sc62015_core::iq7000_annunciators::IQ7000_ANNUNCIATOR_SHADOW_ADDRS[0],
+                8,
+                0x98,
+            )
+            .expect("store battery annunciator shadow");
         assert_eq!(
             format_iq7000_annunciator_status(&runtime),
-            " lcd=SHIFT:on,CAPS:on,UNMAPPED_SHADOW:0x80"
+            " lcd=BATT,SHIFT,CAPS"
         );
 
         runtime
             .memory
-            .store(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8, 0)
-            .expect("clear unmapped annunciator shadow");
-        runtime
-            .memory
-            .store(IQ7000_KEY_STATE_ADDR, 8, 0x80)
-            .expect("store unmapped annunciator state");
-        assert_eq!(
-            format_iq7000_annunciator_status(&runtime),
-            " lcd=SHIFT:off,CAPS:off,UNMAPPED_STATE:0x80"
+            .store(
+                sc62015_core::iq7000_annunciators::IQ7000_ANNUNCIATOR_SHADOW_ADDRS[1],
+                8,
+                0x80,
+            )
+            .expect("store unknown annunciator shadow");
+        assert!(
+            format_iq7000_annunciator_status(&runtime).contains("UNMAPPED_SHADOW:[00, 80, 00, 00]")
         );
     }
 
@@ -444,39 +449,46 @@ fn format_status(
     )
 }
 
-fn iq7000_annunciator_raw_sources(runtime: &CoreRuntime) -> (u8, u8) {
-    let shadow_raw = runtime
-        .memory
-        .load(IQ7000_ANNUNCIATOR_SHADOW_ADDR, 8)
-        .unwrap_or(0) as u8;
-    let state_raw = runtime.memory.load(IQ7000_KEY_STATE_ADDR, 8).unwrap_or(0) as u8;
-    (state_raw, shadow_raw)
-}
-
 fn format_iq7000_annunciator_status(runtime: &CoreRuntime) -> String {
     if runtime.device_model() != DeviceModel::Iq7000 {
         return String::new();
     }
-    let (state_raw, shadow_raw) = iq7000_annunciator_raw_sources(runtime);
-    let raw_union = state_raw | shadow_raw;
-    let shift = if raw_union & IQ7000_SHIFT_ANNUNCIATOR != 0 {
-        "on"
-    } else {
-        "off"
-    };
-    let caps = if raw_union & IQ7000_CAPS_ANNUNCIATOR != 0 {
-        "on"
-    } else {
-        "off"
-    };
-    let mut status = format!(" lcd=SHIFT:{shift},CAPS:{caps}");
-    let unmapped_state = state_raw & !IQ7000_NAMED_ANNUNCIATOR_MASK;
-    let unmapped_shadow = shadow_raw & !IQ7000_NAMED_ANNUNCIATOR_MASK;
-    if unmapped_state != 0 {
-        status.push_str(&format!(",UNMAPPED_STATE:0x{unmapped_state:02X}"));
+    let annunciators = Iq7000Annunciators::read(&runtime.memory);
+    let names = [
+        ("BATT", annunciators.batt),
+        ("CARD", annunciators.card),
+        ("EDIT", annunciators.edit),
+        ("SHIFT", annunciators.shift),
+        ("CAPS", annunciators.caps),
+        ("*", annunciators.secret_data),
+        ("S", annunciators.secret_mode),
+        ("BEEP", annunciators.key_beep),
+        ("ALARM", annunciators.alarm),
+        ("UP", annunciators.more_up),
+        ("DOWN", annunciators.more_down),
+        ("LEFT", annunciators.more_left),
+        ("RIGHT", annunciators.more_right),
+    ];
+    let active = names
+        .into_iter()
+        .filter_map(|(name, enabled)| enabled.then_some(name))
+        .collect::<Vec<_>>();
+    let mut status = format!(
+        " lcd={}",
+        if active.is_empty() {
+            "none".to_string()
+        } else {
+            active.join(",")
+        }
+    );
+    if annunciators.unmapped_shadow_bytes != [0; 4] {
+        status.push_str(&format!(
+            ",UNMAPPED_SHADOW:{:02X?}",
+            annunciators.unmapped_shadow_bytes
+        ));
     }
-    if unmapped_shadow != 0 {
-        status.push_str(&format!(",UNMAPPED_SHADOW:0x{unmapped_shadow:02X}"));
+    if annunciators.desynchronized {
+        status.push_str(",DESYNC");
     }
     status
 }

@@ -30,8 +30,10 @@
 		typeof window !== 'undefined' && typeof Worker !== 'undefined' && !Boolean((import.meta as any)?.env?.VITEST);
 
 	let lcdPixels: Uint8Array | null = null;
+	let lcdAnnunciatorBytes: Uint8Array | null = null;
 	let lcdChipPixels: Uint8Array | null = null;
 	let lcdCols = LCD_COLS;
+	let lcdPixelScale = 1;
 	let lcdRows = LCD_ROWS;
 	let lcdKind: LcdKind | null = null;
 	const CHIP_PIXELS_LEN = LCD_CHIP_COLS * LCD_CHIP_ROWS;
@@ -114,7 +116,11 @@
 			if (frame?.lcdChipPixels instanceof ArrayBuffer) {
 				lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
 			}
+			if (frame?.lcdAnnunciatorBytes instanceof ArrayBuffer) {
+				lcdAnnunciatorBytes = new Uint8Array(frame.lcdAnnunciatorBytes);
+			}
 			if (typeof frame?.lcdCols === 'number') lcdCols = frame.lcdCols;
+			if (typeof frame?.lcdPixelScale === 'number') lcdPixelScale = frame.lcdPixelScale;
 			if (typeof frame?.lcdRows === 'number') lcdRows = frame.lcdRows;
 			const nextKind = normalizeLcdKind(frame?.lcdKind);
 			if (nextKind) lcdKind = nextKind;
@@ -314,6 +320,9 @@
 				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
 				read8: (addr: number) => emu.read_u8?.(addr) ?? 0,
 				write8: (addr: number, value: number) => emu.write_u8?.(addr, value),
+				lcdText: () => emu.lcd_text(),
+				lcdPixels: () => emu.lcd_pixels(),
+				lcdCapture: (scale) => emu.lcd_capture(scale),
 				pressMatrixCode: (code: number) => emu.press_matrix_code?.(code),
 				releaseMatrixCode: (code: number) => emu.release_matrix_code?.(code),
 				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release),
@@ -586,19 +595,21 @@
 		if (worker) return;
 		if (!emulator) return;
 		try {
-			const geometry = emulator.lcd_geometry?.() ?? null;
+			const geometry = emulator.lcd_capture();
 			if (geometry && typeof geometry === 'object') {
 				const kind = normalizeLcdKind((geometry as any).kind);
 				const cols = (geometry as any).cols;
 				const rows = (geometry as any).rows;
 				if (kind) lcdKind = kind;
 				if (typeof cols === 'number') lcdCols = cols;
+				lcdPixelScale = geometry.pixel_scale;
 				if (typeof rows === 'number') lcdRows = rows;
+				lcdPixels = new Uint8Array(geometry.pixels);
 			}
 		} catch {
 			// ignore
 		}
-		lcdPixels = emulator.lcd_pixels();
+		lcdAnnunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? null;
 		lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
@@ -984,7 +995,18 @@
 		<p class="hint">LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows})</p>
 	{/if}
 
-	<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} />
+	<div class="lcd-display" aria-label="Emulated LCD including fixed segments">
+		<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} scale={4 / lcdPixelScale} pixelFormat="gray8" />
+	</div>
+	{#if lcdKind === 'iq7000-vram'}
+		<p class="hint">
+			Fixed segments: ROM-derived mapping; BATT/CARD/beep/alarm/arrows remain provisional. LCD bytes: {Array.from(
+				lcdAnnunciatorBytes ?? [],
+			)
+				.map((b) => hex(b, 2))
+				.join(' ')}
+		</p>
+	{/if}
 
 	{#if lcdKind === 'hd61202'}
 		<details>
@@ -1239,6 +1261,12 @@
 		flex-wrap: wrap;
 		gap: 16px;
 		margin-top: 8px;
+	}
+
+	.lcd-display {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
 	}
 
 	.lcd-chip {

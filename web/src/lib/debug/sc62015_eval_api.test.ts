@@ -3,6 +3,65 @@ import { describe, expect, it } from 'vitest';
 import { createEvalApi } from './sc62015_eval_api';
 
 describe('createEvalApi', () => {
+	it('SHIFT injects its scanner event, not its translated ROM keycode', async () => {
+		const events: Array<[number, boolean]> = [];
+		const api = createEvalApi({
+			injectMatrixEvent: (code: number, release: boolean) => events.push([code, release]),
+			step: () => {},
+		} as any);
+		await api.keys.app.tap('shift');
+		expect(events).toEqual([
+			[0x02, false],
+			[0x02, true],
+		]);
+	});
+	it('captures full glass geometry and preserves raw pixels separately', async () => {
+		const frame = {
+			kind: 'iq7000-vram',
+			cols: 488,
+			rows: 256,
+			pixel_format: 'gray8',
+			pixel_scale: 4,
+			pixels: Array(488 * 256).fill(192),
+			annunciators: {
+				shadow_bytes: [0x10, 0, 0, 0],
+				state_bytes: [0, 0, 0, 0],
+				unmapped_shadow_bytes: [0, 0, 0, 0],
+				desynchronized: true,
+				mapping_status: 'rom-derived-hypothesis-v1',
+			},
+		};
+		const pixelIndex = 88 * 488 + 400;
+		frame.pixels[pixelIndex] = 73;
+		const scales: Array<number | undefined> = [];
+		const api = createEvalApi({
+			lcdCapture: (scale?: number) => {
+				scales.push(scale);
+				return frame;
+			},
+			lcdPixels: () => new Uint8Array(96 * 64),
+		} as any);
+		const capture = await api.lcd.capture();
+		expect(capture).toEqual(frame);
+		expect(await api.lcd.pixels()).toHaveLength(96 * 64);
+		frame.annunciators.shadow_bytes[0] = 0;
+		frame.pixels[pixelIndex] = 192;
+		expect(capture.annunciators?.shadow_bytes[0]).toBe(0x10);
+		expect(capture.pixels[pixelIndex]).toBe(73);
+		expect((await api.lcd.capture({ scale: 4 })).pixels[pixelIndex]).toBe(192);
+		expect(scales).toEqual([undefined, 4]);
+		for (const scale of [0, -1, 1.5, 17, NaN, Infinity]) {
+			await expect(api.lcd.capture({ scale })).rejects.toThrow();
+		}
+		expect(scales).toHaveLength(2);
+	});
+
+	it('does not silently substitute a matrix-only capture', async () => {
+		const api = createEvalApi({ lcdPixels: () => new Uint8Array(96 * 64) } as any);
+		await expect(api.lcd.capture()).rejects.toThrow('Full LCD capture is not available');
+		const broken = createEvalApi({ lcdCapture: () => ({ cols: 122, rows: 64, pixels: [] }) } as any);
+		await expect(broken.lcd.capture()).rejects.toThrow('Invalid LCD capture geometry');
+	});
 	it('calls adapter.callFunction and builds last-value memory blocks', async () => {
 		const regWrites: Array<{ name: string; value: number }> = [];
 		const calls: Array<{ address: number; maxInstructions: number; options: any }> = [];

@@ -2,6 +2,7 @@
 
 use crate::memory::MemoryImage;
 use crate::{CoreRuntime, Result};
+use serde::Serialize;
 
 pub const ROM_WINDOW_START: usize = 0x0C0000;
 pub const ROM_WINDOW_LEN: usize = 0x40000;
@@ -16,7 +17,17 @@ const EOL_STROBE: u8 = 0x01;
 const EOL_OUT_DATA: u8 = 0x02;
 const EIL_IN_DATA: u8 = 0x08;
 const EIL_READY: u8 = 0x10;
+const RTC_COMMAND_SET_CLOCK: u8 = 0xF0;
+const RTC_COMMAND_SET_SCHEDULE_ALARM: u8 = 0xF1;
+const RTC_COMMAND_SET_DAILY_ALARM: u8 = 0xF2;
 const RTC_COMMAND_CURRENT_DATETIME: u8 = 0xF4;
+const RTC_COMMAND_SCHEDULE_ALARM_VALUE: u8 = 0xF5;
+const RTC_COMMAND_DAILY_ALARM_VALUE: u8 = 0xF6;
+const RTC_COMMAND_ALARM_STATUS: u8 = 0xF8;
+const RTC_COMMAND_ACK_DAILY_ALARM: u8 = 0xFA;
+const RTC_COMMAND_ACK_SCHEDULE_ALARM: u8 = 0xFF;
+pub const IQ7000_RTC_STATUS_SCHEDULE_ALARM: u8 = 0x01;
+pub const IQ7000_RTC_STATUS_DAILY_ALARM: u8 = 0x02;
 // WORLD stores unsigned standard-time offsets westward from this reference:
 // Auckland is 01:00 (UTC+12), London is 13:00 (UTC), New York is 18:00
 // (UTC-5), and Honolulu is 23:00 (UTC-10). Summer time is a separate ROM
@@ -1319,19 +1330,19 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
         command: 0xF0,
         payload_len: 6,
         response_len: 1,
-        role: "write packed BCD/status",
+        role: "set current packed-BCD datetime; return status",
     },
     Iq7000RtcCommandSpec {
         command: 0xF1,
         payload_len: 6,
         response_len: 1,
-        role: "write packed BCD/status",
+        role: "program absolute schedule-alarm packed-BCD datetime; return status",
     },
     Iq7000RtcCommandSpec {
         command: 0xF2,
         payload_len: 2,
         response_len: 0,
-        role: "short command with write-only payload",
+        role: "program repeating daily alarm HHMM in packed BCD",
     },
     Iq7000RtcCommandSpec {
         command: 0xF4,
@@ -1343,13 +1354,13 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
         command: 0xF5,
         payload_len: 0,
         response_len: 6,
-        role: "read datetime-like BCD",
+        role: "read programmed/latched schedule-alarm datetime BCD",
     },
     Iq7000RtcCommandSpec {
         command: 0xF6,
         payload_len: 0,
         response_len: 2,
-        role: "read short status/value",
+        role: "read programmed/latched daily-alarm HHMM BCD",
     },
     Iq7000RtcCommandSpec {
         command: 0xF7,
@@ -1361,25 +1372,25 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
         command: 0xF8,
         payload_len: 0,
         response_len: 1,
-        role: "read status",
+        role: "read latched alarm causes: bit0 schedule, bit1 daily",
     },
     Iq7000RtcCommandSpec {
         command: 0xF9,
         payload_len: 0,
         response_len: 0,
-        role: "command-only control",
+        role: "unknown command-only control; preserved as a no-op pending hardware evidence",
     },
     Iq7000RtcCommandSpec {
         command: 0xFA,
         payload_len: 0,
         response_len: 0,
-        role: "command-only control",
+        role: "acknowledge the daily-alarm cause (ROM alarm-service use)",
     },
     Iq7000RtcCommandSpec {
         command: 0xFB,
         payload_len: 0,
         response_len: 0,
-        role: "command-only control",
+        role: "unknown command-only control; preserved as a no-op pending hardware evidence",
     },
     Iq7000RtcCommandSpec {
         command: 0xFC,
@@ -1397,7 +1408,7 @@ pub const IQ7000_RTC_COMMAND_SPECS: &[Iq7000RtcCommandSpec] = &[
         command: 0xFF,
         payload_len: 0,
         response_len: 0,
-        role: "command-only reset/control",
+        role: "acknowledge the schedule-alarm cause (ROM alarm-service use)",
     },
 ];
 
@@ -1857,7 +1868,7 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         inputs: "12 ASCII date/time nibbles at X, D4=0x0C",
         outputs: "packed BCD payload sent with RTC opcode F0",
         side_effects: "waits for one-byte status response from the RTC device",
-        status: Iq7000ContractStatus::Confirmed,
+        status: Iq7000ContractStatus::RuntimeCovered,
     },
     Iq7000SemanticContract {
         area: "RTC write",
@@ -1866,7 +1877,7 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         inputs: "workspace buffer parsed through sub_f33d4",
         outputs: "six-byte payload sent with RTC opcode F1",
         side_effects: "waits for one-byte status response from the RTC device",
-        status: Iq7000ContractStatus::Confirmed,
+        status: Iq7000ContractStatus::RuntimeCovered,
     },
     Iq7000SemanticContract {
         area: "RTC short write",
@@ -1875,7 +1886,7 @@ pub const IQ7000_RTC_SEMANTIC_CONTRACTS: &[Iq7000SemanticContract] = &[
         inputs: "two-byte/nibble value parsed through sub_f33ca",
         outputs: "short payload sent with RTC opcode F2",
         side_effects: "write-only ROM path; unlike F0/F1 it performs no response read",
-        status: Iq7000ContractStatus::Confirmed,
+        status: Iq7000ContractStatus::RuntimeCovered,
     },
     Iq7000SemanticContract {
         area: "RTC/alarm worker",
@@ -2344,8 +2355,8 @@ pub const IQ7000_REMAINING_GAPS: &[Iq7000DeviceGap] = &[
     },
     Iq7000DeviceGap {
         area: "RTC",
-        rust_contract: "current-time peripheral, command lengths, and alarm worker entries",
-        remaining: "stateful alarm write/status and ON-key wake scheduling",
+        rust_contract: "ticking calendar, F0/F1/F2/F4/F5/F6/F8 protocol, FA/FF cause acknowledgements, and inferred ONKI OFF/HALT wake",
+        remaining: "F7/FC/FD fields, F9/FB effects, oscillator calibration, and physical wake/acknowledgement timing",
     },
     Iq7000DeviceGap {
         area: "SYSTM/dev0D/dev0E",
@@ -2449,6 +2460,10 @@ impl Iq7000ClockSeed {
     }
 
     pub fn rtc_datetime_wire_bytes(&self) -> [u8; 6] {
+        self.rtc_datetime().wire_bytes()
+    }
+
+    fn rtc_datetime(&self) -> Iq7000RtcDateTime {
         let digits = &self.bytes[..12];
         let utc_year = ascii_decimal(&digits[..4]);
         let utc_month = ascii_decimal(&digits[4..6]);
@@ -2462,22 +2477,14 @@ impl Iq7000ClockSeed {
             utc_hour,
             RTC_REFERENCE_UTC_OFFSET_HOURS,
         );
-        let century_flag = u8::from(year >= 2000);
-        // The RTC shifts the least-significant field first. The ROM's F333D
-        // reader stores each arriving byte from BP+5 down to BP+0, restoring
-        // the formatter order: status/century, YY, MM, DD, HH, MM. Its city
-        // table represents standard-time offsets westward from UTC+13, so the
-        // hardware clock basis is UTC+13 rather than the host's local
-        // wall-clock timezone. The ROM applies its independent summer-time
-        // flags while looking up a city.
-        [
-            packed_bcd_value(minute),
-            packed_bcd_value(hour),
-            packed_bcd_value(day),
-            packed_bcd_value(month),
-            packed_bcd_value(year % 100),
-            century_flag,
-        ]
+        Iq7000RtcDateTime {
+            year: year as u16,
+            month: month as u8,
+            day: day as u8,
+            hour: hour as u8,
+            minute: minute as u8,
+            second: 0,
+        }
     }
 }
 
@@ -2527,6 +2534,125 @@ fn packed_bcd_value(value: u32) -> u8 {
     (((value / 10) << 4) | (value % 10)) as u8
 }
 
+fn unpack_packed_bcd(value: u8) -> Option<u8> {
+    let high = value >> 4;
+    let low = value & 0x0F;
+    (high <= 9 && low <= 9).then_some(high * 10 + low)
+}
+
+/// Calendar value used by the deterministic IQ-7000 RTC device. The physical
+/// wire format has minute resolution; seconds only retain sub-minute progress
+/// between reads and alarm comparisons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Iq7000RtcDateTime {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+
+impl Iq7000RtcDateTime {
+    fn from_wire_bytes(bytes: [u8; 6]) -> Option<Self> {
+        let minute = unpack_packed_bcd(bytes[0])?;
+        let hour = unpack_packed_bcd(bytes[1])?;
+        let day = unpack_packed_bcd(bytes[2])?;
+        let month = unpack_packed_bcd(bytes[3])?;
+        let year_in_century = unpack_packed_bcd(bytes[4])?;
+        let century = bytes[5] & 0x0F;
+        let year = match century {
+            0 => 1900 + u16::from(year_in_century),
+            1 => 2000 + u16::from(year_in_century),
+            _ => return None,
+        };
+        if !(1..=12).contains(&month)
+            || day == 0
+            || u32::from(day) > days_in_month(u32::from(year), u32::from(month))
+            || hour > 23
+            || minute > 59
+        {
+            return None;
+        }
+        Some(Self {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second: 0,
+        })
+    }
+
+    /// The RTC shifts the least-significant field first. The ROM's F333D
+    /// reader stores each arriving byte from BP+5 down to BP+0, restoring the
+    /// formatter order: status/century, YY, MM, DD, HH, MM.
+    pub fn wire_bytes(self) -> [u8; 6] {
+        [
+            packed_bcd_value(u32::from(self.minute)),
+            packed_bcd_value(u32::from(self.hour)),
+            packed_bcd_value(u32::from(self.day)),
+            packed_bcd_value(u32::from(self.month)),
+            packed_bcd_value(u32::from(self.year % 100)),
+            u8::from(self.year >= 2000),
+        ]
+    }
+
+    fn same_minute(self, other: Self) -> bool {
+        self.year == other.year
+            && self.month == other.month
+            && self.day == other.day
+            && self.hour == other.hour
+            && self.minute == other.minute
+    }
+
+    fn increment_one_second(&mut self) {
+        self.second += 1;
+        if self.second < 60 {
+            return;
+        }
+        self.second = 0;
+        self.minute += 1;
+        if self.minute < 60 {
+            return;
+        }
+        self.minute = 0;
+        self.hour += 1;
+        if self.hour < 24 {
+            return;
+        }
+        self.hour = 0;
+        self.day += 1;
+        if u32::from(self.day) <= days_in_month(u32::from(self.year), u32::from(self.month)) {
+            return;
+        }
+        self.day = 1;
+        self.month += 1;
+        if self.month <= 12 {
+            return;
+        }
+        self.month = 1;
+        self.year += 1;
+        if self.year > 2099 {
+            self.year = 1900;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Iq7000RtcState {
+    pub current: Iq7000RtcDateTime,
+    pub schedule_alarm: Option<Iq7000RtcDateTime>,
+    pub daily_alarm_hour: Option<u8>,
+    pub daily_alarm_minute: Option<u8>,
+    pub latched_schedule: Option<Iq7000RtcDateTime>,
+    pub latched_daily: Option<[u8; 2]>,
+    pub pending_status: u8,
+    pub alarm_wake_level: bool,
+    pub last_command: Option<u8>,
+    pub acknowledgement_contract: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RtcWritePhase {
     Idle,
@@ -2546,6 +2672,13 @@ enum RtcReadPhase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Iq7000RtcPeripheral {
     seed: Iq7000ClockSeed,
+    current: Iq7000RtcDateTime,
+    subsecond_timing_units: u64,
+    schedule_alarm: Option<Iq7000RtcDateTime>,
+    daily_alarm: Option<(u8, u8)>,
+    latched_schedule: Option<Iq7000RtcDateTime>,
+    latched_daily: Option<[u8; 2]>,
+    pending_status: u8,
     eol: u8,
     write_phase: RtcWritePhase,
     write_acc: u8,
@@ -2553,16 +2686,25 @@ pub struct Iq7000RtcPeripheral {
     read_phase: RtcReadPhase,
     response_bits: Vec<bool>,
     response_index: usize,
+    payload_command: Option<u8>,
+    payload_bytes: Vec<u8>,
     payload_remaining: u8,
-    response_after_payload: Vec<u8>,
     current_read_data: u8,
     last_command: Option<u8>,
 }
 
 impl Iq7000RtcPeripheral {
     pub fn new(seed: Iq7000ClockSeed) -> Self {
+        let current = seed.rtc_datetime();
         Self {
             seed,
+            current,
+            subsecond_timing_units: 0,
+            schedule_alarm: None,
+            daily_alarm: None,
+            latched_schedule: None,
+            latched_daily: None,
+            pending_status: 0,
             eol: 0,
             write_phase: RtcWritePhase::Idle,
             write_acc: 0,
@@ -2570,20 +2712,106 @@ impl Iq7000RtcPeripheral {
             read_phase: RtcReadPhase::Idle,
             response_bits: Vec::new(),
             response_index: 0,
+            payload_command: None,
+            payload_bytes: Vec::new(),
             payload_remaining: 0,
-            response_after_payload: Vec::new(),
             current_read_data: 0,
             last_command: None,
         }
     }
 
     pub fn set_seed(&mut self, seed: Iq7000ClockSeed) {
+        self.current = seed.rtc_datetime();
         self.seed = seed;
+        self.subsecond_timing_units = 0;
         self.reset_protocol();
+        self.latch_matching_alarms_now();
     }
 
     pub fn seed(&self) -> &Iq7000ClockSeed {
         &self.seed
+    }
+
+    pub fn state(&self) -> Iq7000RtcState {
+        let (daily_alarm_hour, daily_alarm_minute) = self
+            .daily_alarm
+            .map_or((None, None), |(hour, minute)| (Some(hour), Some(minute)));
+        Iq7000RtcState {
+            current: self.current,
+            schedule_alarm: self.schedule_alarm,
+            daily_alarm_hour,
+            daily_alarm_minute,
+            latched_schedule: self.latched_schedule,
+            latched_daily: self.latched_daily,
+            pending_status: self.pending_status,
+            alarm_wake_level: self.alarm_wake_level(),
+            last_command: self.last_command,
+            acknowledgement_contract: "ROM-derived: FA clears daily; FF clears schedule; F9/FB no-op pending hardware trace",
+        }
+    }
+
+    pub fn alarm_wake_level(&self) -> bool {
+        self.pending_status & (IQ7000_RTC_STATUS_SCHEDULE_ALARM | IQ7000_RTC_STATUS_DAILY_ALARM)
+            != 0
+    }
+
+    pub fn pending_status(&self) -> u8 {
+        self.pending_status
+    }
+
+    /// Advance the independent RTC timebase and stop at the first newly
+    /// asserted alarm. This lets an OFF/HALT scheduler skip idle timing units
+    /// without stepping past the exact wake boundary.
+    pub fn advance_timing_units_until_alarm(
+        &mut self,
+        timing_units: u64,
+        timebase_hz: u64,
+    ) -> (u64, bool) {
+        if timing_units == 0 || timebase_hz == 0 {
+            return (timing_units, false);
+        }
+        let mut remaining = timing_units;
+        let mut consumed = 0u64;
+        while remaining != 0 {
+            let until_second = timebase_hz - self.subsecond_timing_units;
+            if remaining < until_second {
+                self.subsecond_timing_units += remaining;
+                consumed += remaining;
+                break;
+            }
+            remaining -= until_second;
+            consumed += until_second;
+            self.subsecond_timing_units = 0;
+            let was_asserted = self.alarm_wake_level();
+            self.current.increment_one_second();
+            self.latch_matching_alarms_at_minute_boundary();
+            if !was_asserted && self.alarm_wake_level() {
+                return (consumed, true);
+            }
+        }
+        (consumed, false)
+    }
+
+    pub fn advance_timing_units(&mut self, timing_units: u64, timebase_hz: u64) -> bool {
+        let was_asserted = self.alarm_wake_level();
+        let mut remaining = timing_units;
+        while remaining != 0 {
+            let (consumed, _) = self.advance_timing_units_until_alarm(remaining, timebase_hz);
+            if consumed == 0 {
+                break;
+            }
+            remaining -= consumed;
+        }
+        !was_asserted && self.alarm_wake_level()
+    }
+
+    pub fn advance_seconds(&mut self, seconds: u64) -> bool {
+        let was_asserted = self.alarm_wake_level();
+        for _ in 0..seconds {
+            self.current.increment_one_second();
+            self.latch_matching_alarms_at_minute_boundary();
+        }
+        !was_asserted && self.alarm_wake_level()
     }
 
     pub fn handle_eol_write(&mut self, value: u8) {
@@ -2646,8 +2874,9 @@ impl Iq7000RtcPeripheral {
         self.read_phase = RtcReadPhase::Idle;
         self.response_bits.clear();
         self.response_index = 0;
+        self.payload_command = None;
+        self.payload_bytes.clear();
         self.payload_remaining = 0;
-        self.response_after_payload.clear();
         self.current_read_data = 0;
         self.last_command = None;
     }
@@ -2662,10 +2891,10 @@ impl Iq7000RtcPeripheral {
             self.write_acc = 0;
             self.write_bits = 0;
             if self.payload_remaining > 0 {
+                self.payload_bytes.push(byte);
                 self.payload_remaining -= 1;
-                if self.payload_remaining == 0 && !self.response_after_payload.is_empty() {
-                    let response = std::mem::take(&mut self.response_after_payload);
-                    self.queue_response_bytes(&response);
+                if self.payload_remaining == 0 {
+                    self.finish_payload();
                 }
             } else {
                 self.accept_command(byte);
@@ -2677,24 +2906,164 @@ impl Iq7000RtcPeripheral {
         self.last_command = Some(command);
         self.response_bits.clear();
         self.response_index = 0;
+        self.payload_command = None;
+        self.payload_bytes.clear();
         self.payload_remaining = 0;
-        self.response_after_payload.clear();
         match command {
-            0xF0 | 0xF1 => {
+            RTC_COMMAND_SET_CLOCK | RTC_COMMAND_SET_SCHEDULE_ALARM => {
+                self.payload_command = Some(command);
                 self.payload_remaining = 6;
-                self.response_after_payload.push(0);
             }
-            0xF2 => {
+            RTC_COMMAND_SET_DAILY_ALARM => {
+                self.payload_command = Some(command);
                 self.payload_remaining = 2;
             }
-            RTC_COMMAND_CURRENT_DATETIME | 0xF5 => {
-                self.queue_response_bytes(&self.seed.rtc_datetime_wire_bytes());
+            RTC_COMMAND_CURRENT_DATETIME => {
+                let response = self.current.wire_bytes();
+                self.queue_response_bytes(&response);
             }
-            0xF6 => self.queue_response_bytes(&[0, 0]),
+            RTC_COMMAND_SCHEDULE_ALARM_VALUE => {
+                let response = self
+                    .latched_schedule
+                    .or(self.schedule_alarm)
+                    .map_or([0; 6], Iq7000RtcDateTime::wire_bytes);
+                self.queue_response_bytes(&response);
+            }
+            RTC_COMMAND_DAILY_ALARM_VALUE => {
+                let response = self.latched_daily.or_else(|| {
+                    self.daily_alarm.map(|(hour, minute)| {
+                        [
+                            packed_bcd_value(u32::from(minute)),
+                            packed_bcd_value(u32::from(hour)),
+                        ]
+                    })
+                });
+                self.queue_response_bytes(&response.unwrap_or([0; 2]));
+            }
             0xF7 => self.queue_response_bytes(&[0, 0, 0, 0]),
-            0xF8 | 0xFD => self.queue_response_bytes(&[0]),
+            RTC_COMMAND_ALARM_STATUS => self.queue_response_bytes(&[self.pending_status]),
+            0xF9 | 0xFB => {
+                // These command-only controls are exercised by the ROM, but
+                // their physical effects are not distinguishable from code
+                // inspection. Keeping them non-destructive avoids inventing
+                // alarm cancellation semantics.
+            }
+            RTC_COMMAND_ACK_DAILY_ALARM => {
+                self.pending_status &= !IQ7000_RTC_STATUS_DAILY_ALARM;
+                self.latched_daily = None;
+            }
+            RTC_COMMAND_ACK_SCHEDULE_ALARM => {
+                self.pending_status &= !IQ7000_RTC_STATUS_SCHEDULE_ALARM;
+                self.latched_schedule = None;
+            }
             0xFC => self.queue_response_bytes(&[0, 0]),
+            0xFD => self.queue_response_bytes(&[0]),
             _ => {}
+        }
+    }
+
+    fn finish_payload(&mut self) {
+        let command = self.payload_command.take();
+        let payload = std::mem::take(&mut self.payload_bytes);
+        match command {
+            Some(RTC_COMMAND_SET_CLOCK) => {
+                let status = match <[u8; 6]>::try_from(payload.as_slice())
+                    .ok()
+                    .and_then(Iq7000RtcDateTime::from_wire_bytes)
+                {
+                    Some(datetime) => {
+                        self.current = datetime;
+                        self.subsecond_timing_units = 0;
+                        self.latch_matching_alarms_now();
+                        0
+                    }
+                    None => 4,
+                };
+                self.queue_response_bytes(&[status]);
+            }
+            Some(RTC_COMMAND_SET_SCHEDULE_ALARM) => {
+                let status = match <[u8; 6]>::try_from(payload.as_slice())
+                    .ok()
+                    .and_then(Iq7000RtcDateTime::from_wire_bytes)
+                {
+                    Some(datetime) if !self.datetime_is_before_current_minute(datetime) => {
+                        self.schedule_alarm = Some(datetime);
+                        if datetime.same_minute(self.current) {
+                            self.latch_schedule_alarm(datetime);
+                        }
+                        0
+                    }
+                    _ => {
+                        // The ROM uses the status-4/no-valid-deadline path
+                        // when its projection finds no eligible future
+                        // schedule record. Remove the programmed deadline,
+                        // but do not acknowledge an already latched cause.
+                        self.schedule_alarm = None;
+                        4
+                    }
+                };
+                self.queue_response_bytes(&[status]);
+            }
+            Some(RTC_COMMAND_SET_DAILY_ALARM) => {
+                if let [minute_bcd, hour_bcd] = payload.as_slice() {
+                    if *minute_bcd == 0xFF && *hour_bcd == 0xFF {
+                        // F2's ROM-side parser is explicitly seeded with FF;
+                        // an empty daily-alarm field therefore sends FF,FF.
+                        self.daily_alarm = None;
+                        return;
+                    }
+                    if let (Some(minute), Some(hour)) =
+                        (unpack_packed_bcd(*minute_bcd), unpack_packed_bcd(*hour_bcd))
+                    {
+                        if minute <= 59 && hour <= 23 {
+                            self.daily_alarm = Some((hour, minute));
+                            if self.current.hour == hour && self.current.minute == minute {
+                                self.latch_daily_alarm(hour, minute);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn datetime_is_before_current_minute(&self, datetime: Iq7000RtcDateTime) -> bool {
+        let mut current_minute = self.current;
+        current_minute.second = 0;
+        datetime < current_minute
+    }
+
+    fn latch_schedule_alarm(&mut self, datetime: Iq7000RtcDateTime) {
+        self.latched_schedule = Some(datetime);
+        self.pending_status |= IQ7000_RTC_STATUS_SCHEDULE_ALARM;
+    }
+
+    fn latch_daily_alarm(&mut self, hour: u8, minute: u8) {
+        self.latched_daily = Some([
+            packed_bcd_value(u32::from(minute)),
+            packed_bcd_value(u32::from(hour)),
+        ]);
+        self.pending_status |= IQ7000_RTC_STATUS_DAILY_ALARM;
+    }
+
+    fn latch_matching_alarms_now(&mut self) {
+        if let Some(schedule) = self.schedule_alarm {
+            if schedule.same_minute(self.current) {
+                self.latch_schedule_alarm(schedule);
+                self.schedule_alarm = None;
+            }
+        }
+        if let Some((hour, minute)) = self.daily_alarm {
+            if self.current.hour == hour && self.current.minute == minute {
+                self.latch_daily_alarm(hour, minute);
+            }
+        }
+    }
+
+    fn latch_matching_alarms_at_minute_boundary(&mut self) {
+        if self.current.second == 0 {
+            self.latch_matching_alarms_now();
         }
     }
 
@@ -3305,11 +3674,11 @@ mod tests {
         assert_eq!(peripheral.last_command, Some(0xF1));
         assert!(!peripheral.has_pending_response());
 
-        for byte in [0x19, 0x21, 0x25, 0x04, 0x26] {
+        for byte in [0x20, 0x10, 0x26, 0x04, 0x26] {
             host_write_byte(&mut peripheral, byte);
             assert!(!peripheral.has_pending_response());
         }
-        host_write_byte(&mut peripheral, 0x19);
+        host_write_byte(&mut peripheral, 0x01);
 
         assert!(peripheral.has_pending_response());
         assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
@@ -3326,5 +3695,173 @@ mod tests {
 
         assert_eq!(peripheral.last_command, Some(0xF2));
         assert!(!peripheral.has_pending_response());
+    }
+
+    #[test]
+    fn rtc_f0_sets_clock_and_calendar_advances_across_leap_day() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_CLOCK);
+        for byte in [0x59, 0x23, 0x29, 0x02, 0x00, 0x01] {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+        peripheral.advance_seconds(60);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_CURRENT_DATETIME);
+        for expected in [0x00, 0x00, 0x01, 0x03, 0x00, 0x01] {
+            assert_eq!(host_read_byte_like_rom(&mut peripheral), expected);
+        }
+    }
+
+    #[test]
+    fn rtc_f2_ff_sentinel_disables_future_daily_alarm_without_acknowledging_a_cause() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_DAILY_ALARM);
+        host_write_byte(&mut peripheral, 0x20);
+        host_write_byte(&mut peripheral, 0x10);
+        assert!(peripheral.advance_seconds(60));
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_DAILY_ALARM);
+        host_write_byte(&mut peripheral, 0xFF);
+        host_write_byte(&mut peripheral, 0xFF);
+
+        assert_eq!(peripheral.state().daily_alarm_hour, None);
+        assert_eq!(peripheral.pending_status(), IQ7000_RTC_STATUS_DAILY_ALARM);
+    }
+
+    #[test]
+    fn rtc_schedule_alarm_latches_status_value_and_wake_until_ff_ack() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+        let alarm = [0x20, 0x10, 0x26, 0x04, 0x26, 0x01];
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+        for byte in alarm {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+        assert!(!peripheral.alarm_wake_level());
+
+        assert!(peripheral.advance_seconds(60));
+        assert!(peripheral.alarm_wake_level());
+        host_write_byte(&mut peripheral, RTC_COMMAND_ALARM_STATUS);
+        assert_eq!(
+            host_read_byte_like_rom(&mut peripheral),
+            IQ7000_RTC_STATUS_SCHEDULE_ALARM
+        );
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SCHEDULE_ALARM_VALUE);
+        for expected in alarm {
+            assert_eq!(host_read_byte_like_rom(&mut peripheral), expected);
+        }
+
+        host_write_byte(&mut peripheral, 0xF9);
+        assert!(
+            peripheral.alarm_wake_level(),
+            "unknown F9 must be non-destructive"
+        );
+        host_write_byte(&mut peripheral, 0xFB);
+        assert!(
+            peripheral.alarm_wake_level(),
+            "unknown FB must be non-destructive"
+        );
+        host_write_byte(&mut peripheral, RTC_COMMAND_ACK_SCHEDULE_ALARM);
+        assert_eq!(peripheral.pending_status(), 0);
+        assert!(!peripheral.alarm_wake_level());
+    }
+
+    #[test]
+    fn rtc_daily_alarm_repeats_and_fa_acknowledges_only_daily_cause() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_DAILY_ALARM);
+        host_write_byte(&mut peripheral, 0x20);
+        host_write_byte(&mut peripheral, 0x10);
+        assert!(peripheral.advance_seconds(60));
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_ALARM_STATUS);
+        assert_eq!(
+            host_read_byte_like_rom(&mut peripheral),
+            IQ7000_RTC_STATUS_DAILY_ALARM
+        );
+        host_write_byte(&mut peripheral, RTC_COMMAND_DAILY_ALARM_VALUE);
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x20);
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x10);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_ACK_DAILY_ALARM);
+        assert_eq!(peripheral.pending_status(), 0);
+        assert!(!peripheral.alarm_wake_level());
+    }
+
+    #[test]
+    fn rtc_acknowledgements_are_cause_specific() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+        let alarm = [0x20, 0x10, 0x26, 0x04, 0x26, 0x01];
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+        for byte in alarm {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_DAILY_ALARM);
+        host_write_byte(&mut peripheral, 0x20);
+        host_write_byte(&mut peripheral, 0x10);
+        assert!(peripheral.advance_seconds(60));
+        assert_eq!(
+            peripheral.pending_status(),
+            IQ7000_RTC_STATUS_SCHEDULE_ALARM | IQ7000_RTC_STATUS_DAILY_ALARM
+        );
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_ACK_DAILY_ALARM);
+        assert_eq!(
+            peripheral.pending_status(),
+            IQ7000_RTC_STATUS_SCHEDULE_ALARM
+        );
+        assert!(peripheral.alarm_wake_level());
+        host_write_byte(&mut peripheral, RTC_COMMAND_ACK_SCHEDULE_ALARM);
+        assert_eq!(peripheral.pending_status(), 0);
+    }
+
+    #[test]
+    fn rtc_timing_units_stop_at_exact_alarm_assertion() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+        let alarm = [0x20, 0x10, 0x26, 0x04, 0x26, 0x01];
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+        for byte in alarm {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+
+        let (consumed, asserted) = peripheral.advance_timing_units_until_alarm(1000, 10);
+        assert_eq!(consumed, 600);
+        assert!(asserted);
+        assert_eq!(peripheral.state().current.second, 0);
+        assert_eq!(peripheral.state().current.minute, 20);
+    }
+
+    #[test]
+    fn rtc_rejects_invalid_or_past_schedule_alarm_with_status_four() {
+        let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").expect("seed parses");
+        let mut peripheral = Iq7000RtcPeripheral::new(seed);
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+        for byte in [0x18, 0x10, 0x26, 0x04, 0x26, 0x01] {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x04);
+        assert!(peripheral.state().schedule_alarm.is_none());
+
+        host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+        for byte in [0x99, 0x10, 0x26, 0x04, 0x26, 0x01] {
+            host_write_byte(&mut peripheral, byte);
+        }
+        assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x04);
+        assert!(peripheral.state().schedule_alarm.is_none());
     }
 }

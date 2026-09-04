@@ -54,6 +54,9 @@ Notes:
   `--iq7000-rtc YYYYMMDDHHMM` (UTC) for deterministic captures or `--iq7000-rtc off` for
   raw ROM behavior. The RTC peripheral converts UTC to the ROM's UTC+13 hardware basis before
   the World/Home city-offset code runs; the ROM applies its separate per-city summer-time flag.
+  The RTC ticks across RUN/HALT/OFF, implements the ROM's F0/F1/F2/F4/F5/F6/F8 alarm protocol,
+  and models due schedule/daily alarms as a held ON/power-wake level acknowledged by FA/FF.
+  The physical wiring, exact timing, F7/FC/FD fields, and F9/FB effects remain provisional.
 - Use `--refresh-steps 20000` to control redraw cadence.
 - Use `--input-steps 1000` to poll for key presses more frequently.
 - Use `--no-alt-screen` for tmux capture panes.
@@ -133,18 +136,17 @@ IQ-7000 app/editor work, the runner also accepts named event keys such as
 CAPS key once; the IQ-7000 ROM starts with CAPS enabled, so include it before
 lowercase/mixed-case text entry on a freshly booted image. `text:...` expands
 printable characters through the generated per-model input map; use `\\n` inside
-text to emit the MEMO newline key. IQ-7000 PNG/JSON captures draw only the
-confirmed SHIFT/CAPS LCD annunciators. JSON diagnostics preserve the two
-sources separately as `state_raw` (`0x1FDA3`) and `shadow_raw` (`0x006160`),
-name their OR explicitly as `raw_union`, and report unmapped bits numerically
-per source. In particular, raw bit `0x80` has no assigned icon or physical
-meaning.
+text to emit the MEMO newline key. IQ-7000 PNGs and the live web display share
+the full right-hand fixed-segment renderer. It decodes the four LCD shadows,
+not the potentially stale workspace copy. BATT/CARD/beep/alarm/arrows remain
+provisional physical assignments, explicitly labelled in capture metadata.
+See [IQ-7000 LCD segments](docs/iq7000_lcd_annunciators.md) for the mapping,
+confidence limits, and full-display capture API.
 
 In the live terminal LCD (`sc62015-lcd --model iq-7000`), `F6` injects the
 IQ-7000 SHIFT event, `F7` injects CAPS, and `F8` injects the FUNCTION event;
 Caps Lock is also accepted when the terminal reports it. The status line shows
-`lcd=SHIFT:...,CAPS:...`; unknown bits are appended numerically as
-`UNMAPPED_STATE:0xNN` and/or `UNMAPPED_SHADOW:0xNN` without drawing an icon.
+all thirteen candidate flags and preserves unknown bits numerically.
 
 `CoreRuntime::set_external_interrupt_level` is currently a neutral API/test
 hook. Its level-sensitive EXI re-latch policy is an explicit emulator model

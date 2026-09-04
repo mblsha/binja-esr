@@ -5,6 +5,16 @@ export const LCD_CHIP_COLS = 64;
 
 export type Rgba = readonly [number, number, number, number];
 
+export function grayscaleToRgba(pixels: Uint8Array, cols: number, rows: number): Uint8ClampedArray {
+	if (pixels.length !== cols * rows) throw new Error('grayscale geometry mismatch');
+	const out = new Uint8ClampedArray(pixels.length * 4);
+	for (let i = 0; i < pixels.length; i++) {
+		out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = pixels[i];
+		out[i * 4 + 3] = 255;
+	}
+	return out;
+}
+
 export function pixelsToRgba(
 	pixels: Uint8Array,
 	cols = LCD_COLS,
@@ -17,8 +27,13 @@ export function pixelsToRgba(
 	}
 
 	const out = new Uint8ClampedArray(rows * cols * 4);
+	// Resolve the palette once, not once per pixel at live-display frame rates.
+	const mix = (weight: number) => off.map((channel, index) => Math.round(channel + (on[index] - channel) * weight));
+	const palette = [off, on, mix(0.5), mix(0.13)];
 	for (let i = 0; i < pixels.length; i++) {
-		const src = pixels[i] ? on : off;
+		// Match the core/native PNG palette. Inactive glass outlines must not
+		// become fully lit just because their palette index is nonzero.
+		const src = palette[pixels[i]] ?? on;
 		const dst = i * 4;
 		out[dst] = src[0];
 		out[dst + 1] = src[1];

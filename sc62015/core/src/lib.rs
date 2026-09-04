@@ -5,8 +5,11 @@ pub mod async_driver;
 pub mod device;
 pub mod generated_key_input;
 pub mod iq7000;
+pub mod iq7000_annunciators;
 pub mod keyboard;
 pub mod lcd;
+pub mod lcd_capture;
+pub mod lcd_render;
 pub mod lcd_text;
 pub mod llama;
 pub mod loop_detector;
@@ -692,6 +695,59 @@ impl CoreRuntime {
             .write_external_byte(iq7000::CLOCK_INITIALIZED_FLAG, 0);
     }
 
+    pub fn iq7000_rtc_state(&self) -> Option<iq7000::Iq7000RtcState> {
+        self.iq7000_rtc
+            .as_ref()
+            .map(iq7000::Iq7000RtcPeripheral::state)
+    }
+
+    pub fn advance_iq7000_rtc_seconds(&mut self, seconds: u64) -> bool {
+        let newly_asserted = self
+            .iq7000_rtc
+            .as_mut()
+            .is_some_and(|rtc| rtc.advance_seconds(seconds));
+        if self.iq7000_alarm_wake_level() {
+            self.refresh_on_key_interrupt_level();
+        }
+        newly_asserted
+    }
+
+    fn iq7000_alarm_wake_level(&self) -> bool {
+        self.iq7000_rtc
+            .as_ref()
+            .is_some_and(iq7000::Iq7000RtcPeripheral::alarm_wake_level)
+    }
+
+    fn effective_onk_level(&self) -> bool {
+        self.onk_level || self.iq7000_alarm_wake_level()
+    }
+
+    fn advance_iq7000_rtc_timing_units(&mut self, timing_units: u64) -> bool {
+        let timebase_hz = self.device_model().timer_profile().timebase_hz;
+        let newly_asserted = self
+            .iq7000_rtc
+            .as_mut()
+            .is_some_and(|rtc| rtc.advance_timing_units(timing_units, timebase_hz));
+        if self.iq7000_alarm_wake_level() {
+            self.refresh_on_key_interrupt_level();
+        }
+        newly_asserted
+    }
+
+    fn advance_iq7000_rtc_until_alarm(&mut self, timing_units: u64) -> (u64, bool) {
+        let timebase_hz = self.device_model().timer_profile().timebase_hz;
+        let result = self
+            .iq7000_rtc
+            .as_mut()
+            .map_or((timing_units, false), |rtc| {
+                rtc.advance_timing_units_until_alarm(timing_units, timebase_hz)
+            });
+        if self.iq7000_alarm_wake_level() {
+            self.refresh_on_key_interrupt_level();
+        }
+        result
+    }
+
     /// Change one physical keyboard-matrix contact. The selected electrical
     /// KIL level is sampled at the next scheduler boundary; this path does not
     /// inject a translated FIFO byte or directly assert `ISR.KEYI`.
@@ -1082,7 +1138,7 @@ impl CoreRuntime {
     }
 
     fn refresh_on_key_interrupt_level(&mut self) {
-        if !self.onk_level {
+        if !self.effective_onk_level() {
             return;
         }
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
@@ -1336,12 +1392,13 @@ impl CoreRuntime {
                 .unwrap_or(0)
                 & USR_RX_READY)
                 != 0;
+        let onk_will_assert = self.effective_onk_level();
 
         let mut predicted_isr = asserted_isr;
         if key_will_reassert {
             predicted_isr |= ISR_KEYI;
         }
-        if self.onk_level {
+        if onk_will_assert {
             predicted_isr |= ISR_ONKI;
         }
         if self.external_interrupt_level {
@@ -1353,7 +1410,7 @@ impl CoreRuntime {
 
         let pending_or_will_reassert = self.timer.irq_pending
             || key_will_reassert
-            || self.onk_level
+            || onk_will_assert
             || self.external_interrupt_level
             || sio_rx_will_assert
             || (asserted_isr & ISR_KNOWN_MASK) != 0;
@@ -1789,11 +1846,12 @@ impl CoreRuntime {
             } else {
                 !self.state.is_halted()
                     || asserted_isr != 0
-                    || self.onk_level
+                    || self.effective_onk_level()
                     || self.external_interrupt_level
             };
             let prepared_instruction = {
                 let pc = self.state.pc() & ADDRESS_MASK;
+                let onk_level = self.effective_onk_level();
                 let keyboard_ptr = self
                     .keyboard
                     .as_mut()
@@ -1836,7 +1894,7 @@ impl CoreRuntime {
                         .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
                     iq7000_rtc,
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
-                    onk_level: self.onk_level,
+                    onk_level,
                     on_key_ssr_mask,
                     cycle: self.metadata.cycle_count,
                     pc,
@@ -2012,25 +2070,52 @@ impl CoreRuntime {
                 continue;
             }
             if self.state.is_off() {
-                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                    // Hardware wake filtering is not evidence that ignored
-                    // status bits are destroyed. Preserve the complete ISR
-                    // image and only gate the provisional OFF wake decision.
-                    self.timer.irq_isr = isr;
-                    if (isr & ISR_ONKI) != 0 {
-                        self.state.set_power_state(PowerState::Running);
-                        self.timer.irq_pending = true;
-                        self.timer.irq_imr = self
-                            .memory
-                            .read_internal_byte(IMEM_IMR_OFFSET)
-                            .unwrap_or(self.timer.irq_imr);
-                        self.timer.irq_source = Some("ONK".to_string());
-                        self.timer.last_fired = self.timer.irq_source.clone();
-                    } else {
+                let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                let mut woke_after_rtc_idle = false;
+                if (isr & ISR_ONKI) == 0 && self.effective_onk_level() {
+                    // A held physical/RTC level may outlive a firmware clear
+                    // of ISR.ONKI. Re-latching it is itself this OFF idle
+                    // boundary, so execution waits for the next boundary.
+                    self.refresh_on_key_interrupt_level();
+                    isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    woke_after_rtc_idle = (isr & ISR_ONKI) != 0;
+                }
+                if (isr & ISR_ONKI) == 0 {
+                    if self.iq7000_rtc.is_none() {
                         return Ok(());
                     }
-                } else {
-                    return Ok(());
+                    // The RTC has its own always-on timebase. Consume the
+                    // caller's remaining OFF-boundary budget efficiently,
+                    // but stop exactly when an alarm first asserts its
+                    // inferred ON/power-wake level.
+                    let boundary_budget = remaining.saturating_add(1);
+                    let timing_budget = u64::try_from(boundary_budget).unwrap_or(u64::MAX);
+                    let (consumed, alarm_asserted) =
+                        self.advance_iq7000_rtc_until_alarm(timing_budget);
+                    remaining = boundary_budget
+                        .saturating_sub(usize::try_from(consumed).unwrap_or(boundary_budget));
+                    isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    woke_after_rtc_idle = alarm_asserted && (isr & ISR_ONKI) != 0;
+                    if !woke_after_rtc_idle {
+                        return Ok(());
+                    }
+                }
+                // Hardware wake filtering is not evidence that ignored
+                // status bits are destroyed. Preserve the complete ISR image
+                // and only gate the OFF wake decision on ONKI.
+                self.timer.irq_isr = isr;
+                self.state.set_power_state(PowerState::Running);
+                self.timer.irq_pending = true;
+                self.timer.irq_imr = self
+                    .memory
+                    .read_internal_byte(IMEM_IMR_OFFSET)
+                    .unwrap_or(self.timer.irq_imr);
+                self.timer.irq_source = Some("ONK".to_string());
+                self.timer.last_fired = self.timer.irq_source.clone();
+                if woke_after_rtc_idle {
+                    // Alarm assertion and power wake consume an idle
+                    // boundary. Fetch/delivery starts on the next boundary.
+                    continue;
                 }
             }
             // ONK and external interrupts are level-sensitive: firmware
@@ -2045,6 +2130,7 @@ impl CoreRuntime {
                     self.metadata.instruction_count =
                         self.metadata.instruction_count.saturating_add(1);
                     self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                    self.advance_iq7000_rtc_timing_units(1);
                     continue;
                 }
             }
@@ -2053,6 +2139,7 @@ impl CoreRuntime {
                     self.metadata.instruction_count =
                         self.metadata.instruction_count.saturating_add(1);
                     self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                    self.advance_iq7000_rtc_timing_units(1);
                     continue;
                 }
             }
@@ -2165,6 +2252,7 @@ impl CoreRuntime {
                 // continues and may wake the core through STI.
                 self.timer.defer_mti(1);
                 self.metadata.cycle_count = new_cycle;
+                self.advance_iq7000_rtc_timing_units(1);
                 self.tick_timers_and_keyboard_selected(new_cycle, false, true);
                 if self
                     .memory
@@ -2190,10 +2278,12 @@ impl CoreRuntime {
                         .unwrap_or(end_cycle);
                     let skipped = target_cycle.wrapping_sub(new_cycle);
                     if skipped != 0 {
-                        self.timer.defer_mti(skipped);
-                        self.metadata.cycle_count = target_cycle;
-                        self.tick_timers_and_keyboard_selected(target_cycle, false, true);
-                        remaining -= usize::try_from(skipped)
+                        let (rtc_skipped, _) = self.advance_iq7000_rtc_until_alarm(skipped);
+                        let actual_target_cycle = new_cycle.wrapping_add(rtc_skipped);
+                        self.timer.defer_mti(rtc_skipped);
+                        self.metadata.cycle_count = actual_target_cycle;
+                        self.tick_timers_and_keyboard_selected(actual_target_cycle, false, true);
+                        remaining -= usize::try_from(rtc_skipped)
                             .expect("idle skip is bounded by the usize input budget");
                         if self
                             .memory
@@ -2236,6 +2326,7 @@ impl CoreRuntime {
                 })?;
             let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
             let (opcode, instr_len, pc_after, deferred_instruction_trace) = {
+                let onk_level = self.effective_onk_level();
                 let keyboard_ptr = self
                     .keyboard
                     .as_mut()
@@ -2284,7 +2375,7 @@ impl CoreRuntime {
                         .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
                     iq7000_rtc,
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
-                    onk_level: self.onk_level,
+                    onk_level,
                     on_key_ssr_mask,
                     cycle: self.metadata.cycle_count,
                     pc: pc_before,
@@ -2371,6 +2462,7 @@ impl CoreRuntime {
             }
             self.advance_sio(cycle_increment);
             self.metadata.cycle_count = new_cycle;
+            self.advance_iq7000_rtc_timing_units(cycle_increment);
             if let Some(trace) = deferred_instruction_trace {
                 let mem_imr = self
                     .memory
@@ -3279,6 +3371,45 @@ mod tests {
             .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0xF4);
     }
 
+    fn rtc_host_write_byte(peripheral: &mut iq7000::Iq7000RtcPeripheral, byte: u8) {
+        const EOL_STROBE: u8 = 0x01;
+        const EOL_OUT_DATA: u8 = 0x02;
+        const EIL_READY: u8 = 0x10;
+
+        peripheral.handle_eol_write(EOL_STROBE);
+        for bit in 0..8 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            let data = if ((byte >> bit) & 1) != 0 {
+                EOL_STROBE | EOL_OUT_DATA
+            } else {
+                EOL_STROBE
+            };
+            peripheral.handle_eol_write(data);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+        }
+        peripheral.handle_eol_write(0);
+    }
+
+    fn rtc_host_read_byte(peripheral: &mut iq7000::Iq7000RtcPeripheral) -> u8 {
+        const EOL_STROBE: u8 = 0x01;
+        const EIL_IN_DATA: u8 = 0x08;
+        const EIL_READY: u8 = 0x10;
+
+        peripheral.handle_eol_write(EOL_STROBE);
+        let mut assembled = 0u8;
+        for _ in 0..8 {
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, EIL_READY);
+            assert_eq!(peripheral.handle_eil_read() & EIL_READY, 0);
+            let carry = (peripheral.handle_eil_read() & EIL_IN_DATA) != 0;
+            assembled >>= 1;
+            if carry {
+                assembled |= 0x80;
+            }
+        }
+        peripheral.handle_eol_write(0);
+        assembled ^ 0xFF
+    }
+
     #[test]
     fn core_runtime_does_not_accumulate_host_mirror_dirty_queues() {
         let mut runtime = CoreRuntime::new();
@@ -3410,6 +3541,77 @@ mod tests {
             rt.state.get_reg(RegName::FZ),
             0,
             "RTC EIL.ready must assert"
+        );
+    }
+
+    #[test]
+    fn iq7000_schedule_alarm_wakes_off_runtime_through_level_sensitive_onki() {
+        let mut rt = CoreRuntime::new();
+        rt.set_device_model(DeviceModel::Iq7000)
+            .expect("set IQ-7000 model");
+        rt.set_iq7000_clock_seed_yyyymmddhhmm("202604252119")
+            .expect("install RTC seed");
+
+        let rtc = rt.iq7000_rtc.as_mut().expect("RTC installed");
+        rtc_host_write_byte(rtc, 0xF1);
+        for byte in [0x20, 0x10, 0x26, 0x04, 0x26, 0x01] {
+            rtc_host_write_byte(rtc, byte);
+        }
+        assert_eq!(rtc_host_read_byte(rtc), 0x00);
+
+        rt.state.set_pc(0x0200);
+        rt.memory.write_external_byte(0x0200, 0x00);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.state.power_off();
+        let cycle_before = rt.cycle_count();
+        let rtc_minute = usize::try_from(DeviceModel::Iq7000.timer_profile().timebase_hz * 60)
+            .expect("test timebase fits usize");
+
+        rt.step_scheduler_boundaries(rtc_minute)
+            .expect("RTC reaches schedule alarm while CPU is OFF");
+
+        assert!(!rt.state.is_off(), "RTC wake level must leave OFF state");
+        assert_eq!(rt.state.pc(), 0x0200, "wake itself is an idle boundary");
+        assert_eq!(
+            rt.cycle_count(),
+            cycle_before,
+            "the CPU/system-clock cycle counter remains frozen while OFF"
+        );
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0
+        );
+        assert_eq!(
+            rt.iq7000_rtc_state().expect("RTC state").pending_status,
+            iq7000::IQ7000_RTC_STATUS_SCHEDULE_ALARM
+        );
+
+        // A held RTC output also wakes correctly if OFF is entered after
+        // firmware has cleared the architectural latch.
+        rt.state.power_off();
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        let pc_before_relatched_wake = rt.state.pc();
+        rt.step_scheduler_boundaries(1)
+            .expect("held RTC output re-latches an OFF wake");
+        assert!(!rt.state.is_off());
+        assert_eq!(rt.state.pc(), pc_before_relatched_wake);
+
+        // Firmware may clear ISR.ONKI before it acknowledges the external RTC.
+        // The still-asserted RTC output must immediately re-latch ONKI.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.refresh_on_key_interrupt_level();
+        assert_ne!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0
+        );
+
+        rtc_host_write_byte(rt.iq7000_rtc.as_mut().expect("RTC installed"), 0xFF);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        rt.refresh_on_key_interrupt_level();
+        assert_eq!(
+            rt.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0) & ISR_ONKI,
+            0,
+            "FF acknowledgement releases the inferred RTC wake level"
         );
     }
 

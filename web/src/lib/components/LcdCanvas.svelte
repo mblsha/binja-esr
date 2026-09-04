@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { afterUpdate } from 'svelte';
-	import { LCD_COLS, LCD_ROWS, pixelsToRgba } from '$lib/lcd';
+	import { LCD_COLS, LCD_ROWS, pixelsToRgba, grayscaleToRgba } from '$lib/lcd';
 
 	export let pixels: Uint8Array | null = null;
 	export let cols = LCD_COLS;
 	export let rows = LCD_ROWS;
 	export let scale = 4;
+	export let pixelFormat: 'palette' | 'gray8' = 'palette';
 
 	let canvas: HTMLCanvasElement | null = null;
 
@@ -14,7 +15,10 @@
 		const ctx = canvas.getContext('2d');
 		if (!ctx) return;
 
-		const rgba = pixelsToRgba(p, cols, rows, [20, 255, 150, 255], [0, 0, 0, 255]);
+		const rgba =
+			pixelFormat === 'gray8'
+				? grayscaleToRgba(p, cols, rows)
+				: pixelsToRgba(p, cols, rows, [0, 0, 0, 255], [192, 192, 192, 255]);
 		const image = ctx.createImageData(cols, rows);
 		image.data.set(rgba);
 		ctx.putImageData(image, 0, 0);
