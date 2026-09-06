@@ -14,6 +14,7 @@ use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET};
+use sc62015_core::pacing::{ExecutionMode, Pacer, HOST_SLICE_TARGET_US};
 use sc62015_core::{
     iq7000_annunciators::Iq7000Annunciators, CoreRuntime, LcdKind, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
@@ -299,6 +300,7 @@ struct CallArtifacts {
 #[wasm_bindgen]
 pub struct Sc62015Emulator {
     runtime: CoreRuntime,
+    pacer: Pacer,
     rom_image: Vec<u8>,
     model: DeviceModel,
     text_decoder: Option<DeviceTextDecoder>,
@@ -319,6 +321,7 @@ impl Sc62015Emulator {
     pub fn new() -> Self {
         Self {
             runtime: CoreRuntime::new(),
+            pacer: Pacer::for_model(DeviceModel::DEFAULT, ExecutionMode::Interactive),
             rom_image: Vec::new(),
             model: DeviceModel::DEFAULT,
             text_decoder: None,
@@ -330,6 +333,88 @@ impl Sc62015Emulator {
 
     pub fn device_model(&self) -> String {
         self.model.label().to_string()
+    }
+
+    pub fn execution_mode(&self) -> String {
+        self.pacer.mode().label().into()
+    }
+
+    pub fn set_execution_mode(&mut self, mode: &str) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        let mode = ExecutionMode::parse_label(mode)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        self.pacer.set_mode(mode);
+        Ok(())
+    }
+
+    /// Pause/resume and explicit debugger work start a new host pacing epoch.
+    /// This changes no CPU, timer, RTC or input state.
+    pub fn rebase_pacing(&mut self) {
+        self.pacer.rebase();
+    }
+
+    pub fn pacing_status(&self) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        struct Status {
+            mode: ExecutionMode,
+            nominal_timebase_hz: u64,
+            calibration: &'static str,
+            dropped_host_ns: u64,
+            instructions_retired: u64,
+            cpu_timing_units: u64,
+            elapsed_timing_units: u64,
+        }
+        serde_wasm_bindgen::to_value(&Status {
+            mode: self.pacer.mode(),
+            nominal_timebase_hz: self.pacer.timebase_hz(),
+            calibration: if self.model == DeviceModel::Iq7000 {
+                "IQ-7000 PC compatibility fallback; not hardware calibrated"
+            } else {
+                "PC-E500 compatibility timebase; not hardware calibrated"
+            },
+            dropped_host_ns: self.pacer.dropped_host_ns(),
+            instructions_retired: self.runtime.instruction_count(),
+            cpu_timing_units: self.runtime.cycle_count(),
+            elapsed_timing_units: self.runtime.elapsed_timing_units(),
+        })
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Continuous Run uses the same Rust policy as the native frontend.
+    /// Explicit step/call APIs intentionally bypass pacing.
+    pub fn automatic_slice(&mut self, scheduler_boundaries: u32) -> Result<JsValue, JsValue> {
+        self.require_no_active_call()?;
+        let started = host_monotonic_now()?;
+        let ns = started * 1_000_000.0;
+        if !ns.is_finite() || ns < 0.0 || ns >= u64::MAX as f64 {
+            return Err(JsValue::from_str("invalid monotonic host timestamp"));
+        }
+        let mut clock_error = None;
+        let result = self
+            .runtime
+            .run_automatic_slice(
+                &mut self.pacer,
+                ns as u64,
+                scheduler_boundaries as usize,
+                |_| match host_monotonic_now() {
+                    Ok(now) if now.is_finite() && now >= started => {
+                        now - started >= HOST_SLICE_TARGET_US as f64 / 1000.0
+                    }
+                    Ok(_) => {
+                        clock_error = Some(JsValue::from_str("invalid monotonic host timestamp"));
+                        true
+                    }
+                    Err(error) => {
+                        clock_error = Some(error);
+                        true
+                    }
+                },
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        if let Some(error) = clock_error {
+            return Err(error);
+        }
+        serde_wasm_bindgen::to_value(&result).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn has_rom(&self) -> bool {
@@ -440,6 +525,7 @@ impl Sc62015Emulator {
         let rom = self.rom_image.clone();
         self.runtime = CoreRuntime::for_model(self.model, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.pacer = Pacer::for_model(self.model, self.pacer.mode());
         if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
             self.runtime
                 .set_iq7000_clock_seed_yyyymmddhhmm(seed)
@@ -941,6 +1027,58 @@ mod tests {
         emulator.load_rom(rom).expect("load");
         emulator.set_reg("S", 0xB9003).unwrap();
         emulator
+    }
+
+    #[wasm_bindgen_test]
+    fn pacing_exports_do_not_replace_explicit_budgets_or_mutate_the_machine_on_mode_change() {
+        #[derive(Deserialize)]
+        struct Progress {
+            boundary_budget_used: usize,
+        }
+        #[derive(Deserialize)]
+        struct Slice {
+            progress: Progress,
+        }
+        #[derive(Deserialize)]
+        struct Automatic {
+            slice: Option<Slice>,
+        }
+        for model in ["pc-e500", "iq-7000"] {
+            let mut emulator = function_test_emulator();
+            emulator
+                .load_rom_with_model(include_bytes!("../testdata/pf1_demo_rom_window.rom"), model)
+                .unwrap();
+            let before = emulator.instruction_count();
+            let pc = emulator.get_reg("PC");
+            emulator.set_execution_mode("deterministic").unwrap();
+            assert!(emulator.set_execution_mode("realtime").is_err());
+            assert_eq!(emulator.execution_mode(), "deterministic");
+            let result: Automatic =
+                serde_wasm_bindgen::from_value(emulator.automatic_slice(100).unwrap()).unwrap();
+            assert!(result.slice.is_none());
+            assert_eq!(emulator.instruction_count(), before);
+            assert_eq!(emulator.get_reg("PC"), pc);
+            emulator.step_scheduler_boundaries(10).unwrap();
+            assert!(emulator.instruction_count() > before);
+            emulator.set_execution_mode("turbo").unwrap();
+            let result: Automatic =
+                serde_wasm_bindgen::from_value(emulator.automatic_slice(10).unwrap()).unwrap();
+            assert_eq!(result.slice.unwrap().progress.boundary_budget_used, 10);
+            emulator.reset().unwrap();
+            assert_eq!(emulator.execution_mode(), "turbo");
+            assert_eq!(
+                emulator.pacer.timebase_hz(),
+                emulator.model.timer_profile().timebase_hz
+            );
+            emulator.set_execution_mode("interactive").unwrap();
+            emulator.rebase_pacing();
+            let result: Automatic =
+                serde_wasm_bindgen::from_value(emulator.automatic_slice(100).unwrap()).unwrap();
+            assert!(
+                result.slice.is_none(),
+                "first interactive slice only establishes the host epoch"
+            );
+        }
     }
 
     #[wasm_bindgen_test]

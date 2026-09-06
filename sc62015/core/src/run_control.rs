@@ -31,6 +31,9 @@ pub struct RunProgress {
     /// Delta of the machine's relative timing counter, not physical cycles or
     /// host time. The independently advancing OFF RTC is not this counter.
     pub timing_units_advanced: u64,
+    /// CPU timing plus independently elapsed OFF idle time. For host pacing
+    /// only; neither this counter nor host deadlines drive architectural timers.
+    pub elapsed_timing_units_advanced: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -59,6 +62,7 @@ impl CoreRuntime {
     ) -> Result<RunSliceResult> {
         let initial_instructions = self.instruction_count();
         let initial_timing = self.cycle_count();
+        let initial_elapsed = self.elapsed_timing_units();
         let mut progress = RunProgress::default();
         while progress.boundary_budget_used < boundary_budget {
             if should_yield(&progress) {
@@ -74,6 +78,8 @@ impl CoreRuntime {
             progress.instructions_retired =
                 self.instruction_count().wrapping_sub(initial_instructions);
             progress.timing_units_advanced = self.cycle_count().wrapping_sub(initial_timing);
+            progress.elapsed_timing_units_advanced =
+                self.elapsed_timing_units().wrapping_sub(initial_elapsed);
         }
         Ok(RunSliceResult {
             reason: RunStopReason::BoundaryBudget,
@@ -130,6 +136,10 @@ mod tests {
         assert_eq!(actual.timer.next_sti, expected.timer.next_sti);
         assert_eq!(actual.timer.irq_pending, expected.timer.irq_pending);
         assert_eq!(actual.iq7000_rtc, expected.iq7000_rtc);
+        assert_eq!(
+            actual.elapsed_timing_units(),
+            expected.elapsed_timing_units()
+        );
     }
 
     #[test]
@@ -214,13 +224,60 @@ mod tests {
     }
 
     #[test]
-    fn inert_off_budget_is_not_reported_as_emulated_time() {
-        let mut runtime = machine(DeviceModel::PcE500, PowerState::Off);
-        let result = runtime.run_slice(257, |_| false).unwrap();
-        assert_eq!(result.progress.boundary_budget_used, 257);
-        assert_eq!(result.progress.instructions_retired, 0);
-        assert_eq!(result.progress.timing_units_advanced, 0);
-        assert_eq!(runtime.state.power_state(), PowerState::Off);
+    fn off_elapsed_time_is_separate_from_frozen_cpu_timing_and_retirement() {
+        for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+            let mut runtime = machine(model, PowerState::Off);
+            let result = runtime.run_slice(257, |_| false).unwrap();
+            assert_eq!(result.progress.boundary_budget_used, 257);
+            assert_eq!(result.progress.instructions_retired, 0);
+            assert_eq!(result.progress.timing_units_advanced, 0);
+            assert_eq!(result.progress.elapsed_timing_units_advanced, 257);
+            assert_eq!(runtime.state.power_state(), PowerState::Off);
+        }
+    }
+
+    #[test]
+    fn running_to_off_in_one_slice_counts_elapsed_time_without_counting_off_as_cpu_time() {
+        for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+            let mut runtime = machine(model, PowerState::Running);
+            runtime.memory.write_external_byte(0x10000, 0xDF); // OFF
+            let result = runtime.run_slice(100, |_| false).unwrap();
+            assert_eq!(result.progress.instructions_retired, 1);
+            assert!(runtime.state.is_off());
+            assert_eq!(
+                result.progress.elapsed_timing_units_advanced,
+                result.progress.timing_units_advanced + 99
+            );
+        }
+    }
+
+    #[test]
+    fn paced_slices_preserve_both_machines_across_power_states_and_host_schedules() {
+        use crate::pacing::{ExecutionMode, Pacer};
+        for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+            for power in [PowerState::Running, PowerState::Halted, PowerState::Off] {
+                let mut expected = machine(model, power);
+                expected.step_scheduler_boundaries(20_000).unwrap();
+                for host_gap in [1_000, 1_000_000, 1_000_000_000] {
+                    let mut runtime = machine(model, power);
+                    let mut pacer = Pacer::for_model(model, ExecutionMode::Interactive);
+                    let mut used = 0;
+                    let mut now = 0;
+                    while used < 20_000 {
+                        let result = runtime
+                            .run_automatic_slice(&mut pacer, now, 20_000 - used, |p| {
+                                p.boundary_budget_used >= 128
+                            })
+                            .unwrap();
+                        used += result
+                            .slice
+                            .map_or(0, |slice| slice.progress.boundary_budget_used);
+                        now += host_gap;
+                    }
+                    assert_machine_matches(&runtime, &expected);
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator
 //! Opt-in Rust ROM comparison. No synthetic screen or FIFO injection.
 
+use sc62015_core::pacing::{ExecutionMode, Pacer};
 use sc62015_core::{collect_registers, CoreRuntime, DeviceModel};
 use std::fs;
 use std::path::PathBuf;
@@ -73,6 +74,53 @@ fn sliced_execution_matches_direct_boot_for_both_real_roms() {
             direct_lcd.iter().flatten().any(|pixel| *pixel != 0),
             "ROM did not draw"
         );
+        for mode in [ExecutionMode::Interactive, ExecutionMode::Turbo] {
+            let mut paced = machine();
+            let mut pacer = Pacer::for_model(model, mode);
+            let mut remaining = 1_000_000;
+            let mut now = 0;
+            let mut calls = 0;
+            while remaining > 0 {
+                let slice_start = Instant::now();
+                let result = paced
+                    .run_automatic_slice(&mut pacer, now, remaining, |_| {
+                        slice_start.elapsed() >= Duration::from_millis(4)
+                    })
+                    .unwrap();
+                remaining -= result
+                    .slice
+                    .map_or(0, |slice| slice.progress.boundary_budget_used);
+                // Inject scheduler jitter/background stalls without waiting in
+                // real time. No clock/input/FIFO/memory patch is applied to ROM.
+                now += [1_000, 1_000_000, 1_000_000_000][calls % 3];
+                calls += 1;
+            }
+            assert_eq!(
+                collect_registers(&paced.state),
+                collect_registers(&direct.state)
+            );
+            assert_eq!(paced.state.power_state(), direct.state.power_state());
+            assert_eq!(paced.instruction_count(), direct.instruction_count());
+            assert_eq!(paced.cycle_count(), direct.cycle_count());
+            assert_eq!(paced.elapsed_timing_units(), direct.elapsed_timing_units());
+            assert_eq!(
+                paced.memory.internal_slice(),
+                direct.memory.internal_slice()
+            );
+            assert_eq!(
+                paced.memory.external_slice(),
+                direct.memory.external_slice()
+            );
+            assert_eq!(paced.timer.next_mti, direct.timer.next_mti);
+            assert_eq!(paced.timer.next_sti, direct.timer.next_sti);
+            assert_eq!(paced.iq7000_rtc_state(), direct.iq7000_rtc_state());
+            assert_eq!(paced.lcd.as_ref().unwrap().display_buffer(), direct_lcd);
+            eprintln!(
+                "{}: {} pacing matched 1M explicit boundaries after {calls} host calls",
+                model.label(),
+                mode.label()
+            );
+        }
         slice_times.sort();
         let p99 = slice_times[(slice_times.len() - 1) * 99 / 100];
         eprintln!(

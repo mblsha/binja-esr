@@ -11,9 +11,9 @@ button or wait for an unsupported peripheral, but host controls must remain
 usable and explain what is happening. Do not force interrupts, skip ROM loops,
 stub device calls, or silently reset the machine to simulate responsiveness.
 
-Keep three distinct coordinates: machine-relative timing units, host monotonic
-execution budgets, and display presentation cadence. Interactive pacing is not
-proof of physically calibrated instruction timing.
+Keep CPU-relative timing, independently elapsed OFF time, host monotonic
+execution budgets, and display presentation cadence distinct. Interactive
+pacing is not proof of physically calibrated instruction timing.
 
 ## Deliverables
 
@@ -61,7 +61,9 @@ The result distinguishes a completed boundary budget from a host-requested
 yield. It reports submitted boundary budget, retired instructions, and the
 relative timing-counter delta separately. Inert OFF execution can consume the
 submitted budget without advancing that counter; the IQ-7000's independent OFF
-RTC is also not represented by the CPU timing-counter delta.
+RTC is also not represented by the CPU timing-counter delta. The newer
+`elapsed_timing_units_advanced` observation includes OFF idle separately for
+pacing; it does not replace the CPU counter or drive architectural timers.
 
 This is cooperative scheduling, **not hard real-time preemption**. One long
 instruction or synchronous host callback can exceed the deadline. No partial
@@ -439,3 +441,55 @@ guarantee, and does not supersede earlier slower observations.
 This bounds **display backlog**, not a single Rust renderer, text decoder,
 snapshot or artifact serialization. Those costs, native terminal rendering,
 background-tab pacing and sustained latency qualification remain active work.
+
+## Shared Rust pacing policy (2026-09-06)
+
+`pacing::Pacer` and `CoreRuntime::run_automatic_slice` share the host policy
+between native and WASM adapters. The pacer takes a supplied monotonic host
+timestamp; it never reads the guest bus, skips firmware, jumps a timer, or
+mutates RTC state. Explicit `run_slice`/step/call budgets remain unpaced.
+
+- **Interactive:** accumulate nominal timing credit using the model timer
+  profile (currently 1,024,000 compatibility units/s). This is not measured
+  hardware MHz; IQ-7000 still uses the explicitly uncalibrated PC fallback.
+- **Turbo:** execute without a host-speed throttle, still using bounded
+  slices and polling host controls between slices.
+- **Deterministic:** refuse autonomous Run; require an explicit scheduler
+  boundary budget. Repeatability additionally requires identical initial
+  machine/RTC state and boundary-scheduled inputs. Merely selecting this mode
+  does not make a host-time seed or live human keyboard input deterministic.
+
+Pacing charges actual elapsed timing from successful slices, not requested
+boundaries or retired instructions. The CPU counter remains frozen in OFF.
+A separate, nonarchitectural OFF-idle observation makes mixed RUN/OFF slices
+account for **CPU timing plus OFF idle**, including the existing independently
+advancing IQ RTC. The observation is not serialized as architectural snapshot
+state; reset/load and Pause/Resume establish new host pacing epochs.
+
+Positive catch-up credit is capped at 50 ms of nominal host time. Discarded
+backlog is reported, not silently injected into guest timers or the RTC. Atomic
+instruction overshoot remains debt; it is not truncated to fake the target
+rate. Suggested host sleeps never exceed 4 ms. One expensive instruction or
+callback is still not preemptible by this cooperative design.
+
+The WASM adapter exposes mode selection, pacing status, rebase and automatic
+slices, rejecting mode changes during an owned debugger call. Model reload
+preserves the chosen mode but resets pacing credit and uses the new model's
+timebase. Status includes CPU timing, total elapsed timing, retired instructions
+and discarded host backlog without adding guest reads.
+
+Validation: 555 native Rust tests passed (six existing ignored cases plus the
+separate opt-in two-ROM test); 26 WASM tests passed. Core and WASM Clippy passed;
+the WASM dependency retains its 18 pre-existing feature-gated warnings. Tests
+cover fractional credit, host stalls, instruction debt, backward-clock failure,
+rebasing, mode changes, explicit-budget preservation, OFF/RTC elapsed accounting,
+and equal machine state under varied paced host schedules for both models in
+RUN/HALT/OFF. Native terminal adoption remains the next separate stage.
+
+The opt-in two-ROM release regression also passed: one million submitted
+boundaries per model, comparing direct execution with deadline slices and with
+both interactive and turbo pacing. Injected monotonic host jitter includes
+one-second stalls without waiting in real time. Registers, power state, timing
+counters, internal/external RAM, timer deadlines, RTC state and actual nonblank
+LCD buffers matched exactly. This qualifies chunking/pacing, not calibrated
+speed or all application behavior.

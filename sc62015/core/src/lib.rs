@@ -14,6 +14,7 @@ pub mod lcd_text;
 pub mod llama;
 pub mod loop_detector;
 pub mod memory;
+pub mod pacing;
 pub mod pce500;
 pub mod pce500_peripherals;
 pub mod perfetto;
@@ -422,6 +423,8 @@ impl LcdBusCapture {
 
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
+    // Host pacing observation, not an architectural CPU counter or snapshot field.
+    off_idle_timing_units: u64,
     pub memory: MemoryImage,
     pub state: LlamaState,
     loop_detector: Option<LoopDetector>,
@@ -460,6 +463,7 @@ impl CoreRuntime {
         memory.set_overlay_logging(false);
         let mut rt = Self {
             metadata: SnapshotMetadata::default(),
+            off_idle_timing_units: 0,
             memory,
             state: LlamaState::new(),
             loop_detector: None,
@@ -509,6 +513,14 @@ impl CoreRuntime {
 
     pub fn cycle_count(&self) -> u64 {
         self.metadata.cycle_count
+    }
+
+    /// Relative elapsed scheduler time for host pacing, including OFF idle.
+    /// CPU timers still use `cycle_count()` and retain their original OFF rules.
+    /// This observation is not oscillator calibration and has no stable epoch
+    /// across reset/snapshot load; hosts must rebase their pacer at those boundaries.
+    pub fn elapsed_timing_units(&self) -> u64 {
+        self.cycle_count().wrapping_add(self.off_idle_timing_units)
     }
 
     /// Start an exact, bounded LCD bus-write capture for diagnostics.
@@ -2090,6 +2102,9 @@ impl CoreRuntime {
                 }
                 if (isr & ISR_ONKI) == 0 {
                     if self.iq7000_rtc.is_none() {
+                        self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(
+                            u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX),
+                        );
                         return Ok(());
                     }
                     // The RTC has its own always-on timebase. Consume the
@@ -2100,6 +2115,7 @@ impl CoreRuntime {
                     let timing_budget = u64::try_from(boundary_budget).unwrap_or(u64::MAX);
                     let (consumed, alarm_asserted) =
                         self.advance_iq7000_rtc_until_alarm(timing_budget);
+                    self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(consumed);
                     remaining = boundary_budget
                         .saturating_sub(usize::try_from(consumed).unwrap_or(boundary_budget));
                     isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
@@ -2846,6 +2862,7 @@ impl CoreRuntime {
         self.external_interrupt_level = metadata.external_interrupt_level;
         self.onk_level = metadata.onk_level;
         self.metadata = metadata;
+        self.off_idle_timing_units = 0;
         Ok(())
     }
 
@@ -3572,6 +3589,7 @@ mod tests {
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
         rt.state.power_off();
         let cycle_before = rt.cycle_count();
+        let elapsed_before = rt.elapsed_timing_units();
         let rtc_minute = usize::try_from(DeviceModel::Iq7000.timer_profile().timebase_hz * 60)
             .expect("test timebase fits usize");
 
@@ -3579,6 +3597,10 @@ mod tests {
             .expect("RTC reaches schedule alarm while CPU is OFF");
 
         assert!(!rt.state.is_off(), "RTC wake level must leave OFF state");
+        assert_eq!(
+            rt.elapsed_timing_units() - elapsed_before,
+            rtc_minute as u64
+        );
         assert_eq!(rt.state.pc(), 0x0200, "wake itself is an idle boundary");
         assert_eq!(
             rt.cycle_count(),
