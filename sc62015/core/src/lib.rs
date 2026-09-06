@@ -17,6 +17,7 @@ pub mod memory;
 pub mod pce500;
 pub mod pce500_peripherals;
 pub mod perfetto;
+pub mod run_control;
 pub mod sio;
 pub mod snapshot;
 pub mod timer;
@@ -59,6 +60,7 @@ pub use pce500_peripherals::{
     MemoryCardBlock, MemoryCardImage, Pce500PeripheralBridge, RamDiskImage, StorageError,
 };
 pub use perfetto::PerfettoTracer;
+pub use run_control::{RunProgress, RunSliceResult, RunStopReason, RUN_CONTROL_POLL_BOUNDARIES};
 pub use sio::{
     SioInputLines, SioQueuedByte, SioSnapshot, SioStub, SioTimedEvent, SioTimingConfig,
     SioTimingSnapshot,
