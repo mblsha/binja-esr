@@ -6,6 +6,7 @@ import { WorkerOperations } from './worker_operations';
 import { callBounded } from './bounded_call';
 import { runIsolatedScript } from './isolated_script';
 import { applyContact, HostInputs, type InputContact } from './host_inputs';
+import { LatestFrame } from './latest_frame';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -43,7 +44,9 @@ type WorkerRequest =
 			generation?: number;
 	  }
 	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
-	| { id: number; type: 'input_state' };
+	| { id: number; type: 'input_state' }
+	| { id: number; type: 'frame_consumed'; sequence: number }
+	| { id: number; type: 'frame_delivery_state' };
 
 type WorkerReply =
 	| { type: 'reply'; id: number; ok: true; result?: any }
@@ -517,12 +520,19 @@ function captureFrame(forceText: boolean): Frame {
 	};
 }
 
-function postFrame(frame: Frame) {
-	(self as any).postMessage({ type: 'frame', frame }, [
-		frame.lcdPixels,
-		frame.lcdAnnunciatorBytes,
-		frame.lcdChipPixels,
-	]);
+const frames = new LatestFrame<Frame>(
+	(frame, sequence) => {
+		(self as any).postMessage({ type: 'frame', frame, sequence }, [
+			frame.lcdPixels,
+			frame.lcdAnnunciatorBytes,
+			frame.lcdChipPixels,
+		]);
+	},
+	(error) => self.postMessage({ type: 'render_error', error: String(error) }),
+);
+
+function requestFrame(forceText: boolean) {
+	frames.request(() => captureFrame(forceText));
 }
 
 function pumpEmulator(id: number) {
@@ -532,6 +542,7 @@ function pumpEmulator(id: number) {
 	} catch (err) {
 		// Crash stops the run loop; render loop will stop too.
 		running = false;
+		frames.discardPending();
 		(self as any).postMessage({ type: 'fatal', error: String(err) });
 		return;
 	}
@@ -541,7 +552,7 @@ function pumpEmulator(id: number) {
 function pumpRender(id: number) {
 	if (!running || !emulator || id !== runLoopId) return;
 	const startMs = performance.now();
-	postFrame(captureFrame(false));
+	requestFrame(false);
 	const elapsedMs = performance.now() - startMs;
 	const intervalMs = 1000 / Math.max(1, targetFps);
 	const delayMs = Math.max(0, intervalMs - elapsedMs);
@@ -551,6 +562,14 @@ function pumpRender(id: number) {
 async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 	try {
 		switch (msg.type) {
+			case 'frame_consumed': {
+				frames.consumed(msg.sequence);
+				return; // This is the one-way presentation credit, not another RPC.
+			}
+			case 'frame_delivery_state': {
+				replyOk(msg.id, frames.snapshot());
+				return;
+			}
 			case 'set_options': {
 				if (typeof msg.targetFps === 'number') targetFps = msg.targetFps;
 				if (msg.debug) debugOptions = { ...debugOptions, ...msg.debug };
@@ -572,7 +591,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				}
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
-				postFrame(captureFrame(true));
+				requestFrame(true);
 				replyOk(msg.id);
 				return;
 			}
@@ -588,13 +607,13 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					limitBudget: inputs.limitBudget,
 					onProgress: inputs.advance,
 				});
-				postFrame(captureFrame(true));
+				requestFrame(true);
 				replyOk(msg.id);
 				return;
 			}
 			case 'snapshot': {
 				await ensureEmulator();
-				postFrame(captureFrame(true));
+				requestFrame(true);
 				replyOk(msg.id);
 				return;
 			}
@@ -618,12 +637,13 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					typeof scriptError === 'string' && (isLikelyWasmTrap(scriptError) || isWasmBindgenBorrowError(scriptError));
 
 				if (fatalWasmError) {
+					frames.discardPending();
 					if (typeof res?.error === 'string' && !res.error.toLowerCase().includes('reload')) {
 						res.error = `${res.error}\n(postFrame skipped: emulator may need reload after a WASM trap)`;
 					}
 				} else if (!signal?.aborted) {
 					try {
-						postFrame(captureFrame(true));
+						requestFrame(true);
 					} catch (err) {
 						const msg = err instanceof Error ? err.message : String(err);
 						if (res && typeof res === 'object') {
@@ -657,7 +677,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				// Ownership has been released. A slow final LCD/text capture
 				// must not delay acknowledgement of the architectural pause.
 				try {
-					if (emulator) postFrame(captureFrame(true));
+					if (emulator) requestFrame(true);
 				} catch (error) {
 					(self as any).postMessage({ type: 'render_error', error: String(error) });
 				}

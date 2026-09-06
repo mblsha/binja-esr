@@ -38,6 +38,8 @@ proof of physically calibrated instruction timing.
    boundaries with retired instructions.
 4. **Pacing and presentation:** explicit interactive/turbo/deterministic modes,
    bounded catch-up policy, latest-frame delivery, and cheap normal-play status.
+   Browser latest-only delivery is implemented; pacing and per-capture cost
+   qualification remain unfinished.
 5. **Qualification:** actual browser input against both ROMs; HALT/OFF/wake,
    long counted instructions, busy loops, slow execution, script cancellation,
    tab focus/background and reload stress; architectural chunking/bus-order
@@ -301,8 +303,9 @@ Validation:
   model-specific text input and native terminal input remain unfinished. Pause
   latency does not measure a key being consumed by ROM firmware. ON contact
   assertions are tested, but sustained OFF/wake UI qualification remains open.
-- Rendering/debug snapshots can still delay subsequent controls; latest-only
-  frame delivery and measured rendering overhead remain pending.
+- Individual rendering/debug captures can still delay subsequent controls;
+  browser delivery is latest-only, but measured rendering overhead and bounded
+  trace/artifact processing remain pending.
 - Pacing/turbo/deterministic modes, long-instruction and fault stress tests,
   native terminal input/render isolation, and sustained app-input testing are
   not finished. The core's 64-boundary polling is cooperative, not a hard
@@ -396,3 +399,43 @@ CI=1 PCE500_E2E_PORT=4197 IQ7000_E2E_REAL_ROM=1 \
 
 This stage does not qualify native TUI input, full text entry, end-to-end OFF
 wake, or a p99 input-to-firmware latency target. Those remain active goal work.
+
+## Latest-only browser display delivery (2026-09-06)
+
+The machine worker may have **one transferred display frame in flight** and
+**one lazy request for the newest state**. The UI returns that frame's sequence
+credit after applying the Svelte/canvas update. Until then, further render or
+refresh requests replace the lazy request: they neither capture pixels nor
+allocate a queue of stale screenshots/debug snapshots. Capture reads the current
+machine when credit becomes available, not when the request was enqueued.
+
+Credits are sequence-specific and survive ROM model changes. Old/duplicate
+credits cannot release a newer frame, and an ignored old-generation frame is
+still acknowledged so the current model can display. Pause, input and ROM-load
+acknowledgements are independent of frame credit. Deferred capture is scheduled
+in a later host turn; a failed capture reports a display error, not a fictional
+CPU pause/reset. Machine faults discard deferred captures. Function Runner LCD
+artifacts are separate, explicit captures and are not dropped by live-display
+coalescing.
+
+The two compiled-browser backpressure regressions, one per model, withhold real
+frame credit, issue 200 refresh requests, verify that only one frame was sent,
+and then Pause, assert/release ON, and replace the model before returning credit.
+The next frame is from the replacement model; no stale queue drains afterward.
+Unit tests cover lazy/coalesced capture, current-state capture, invalid credits,
+fault discard and capture/transport error recovery. The two short synthetic
+browser regressions are included in the PR guard, not private-ROM CI.
+
+Final local validation: 108 frontend unit/component tests passed, Svelte had
+zero errors/warnings, and Prettier passed. The full public Chromium suite passed
+36 tests with four opt-in ROM cases skipped (45.4 seconds including rebuild).
+After the last UI error-reporting change, the current app was rebuilt and both
+backpressure tests plus four actual-ROM checks passed together (six tests,
+12.2 seconds). The synthetic twenty-sample Pause smoke observed maxima of
+15.65 ms for PC-E500 and 17.23 ms for IQ-7000 on the recorded M1 Ultra/Chromium
+host; this is not a sustained p99, input-consumption or per-capture timing
+guarantee, and does not supersede earlier slower observations.
+
+This bounds **display backlog**, not a single Rust renderer, text decoder,
+snapshot or artifact serialization. Those costs, native terminal rendering,
+background-tab pacing and sustained latency qualification remain active work.

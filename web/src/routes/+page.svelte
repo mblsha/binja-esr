@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
@@ -196,7 +196,7 @@
 			lastError = error.message;
 			workerHealth = 'unresponsive';
 		});
-		worker.onmessage = (event: MessageEvent<any>) => {
+		worker.onmessage = async (event: MessageEvent<any>) => {
 			const data = event.data;
 			if (!data) return;
 			if (data.type === 'reply') {
@@ -204,7 +204,15 @@
 				return;
 			}
 			if (data.type === 'frame') {
-				applyWorkerFrame(data.frame);
+				try {
+					applyWorkerFrame(data.frame);
+					await tick(); // Return credit after the canvas/component update, not just message arrival.
+				} catch (error) {
+					lastError = `Display update failed: ${String(error)}`;
+				} finally {
+					if (typeof data.sequence === 'number')
+						workerPost({ id: workerNextId++, type: 'frame_consumed', sequence: data.sequence });
+				}
 				return;
 			}
 			if (data.type === 'execution_progress' && data.generation === romLoadGeneration && functionRunnerBusy) {
@@ -218,7 +226,7 @@
 			if (data.type === 'fatal') {
 				failWorker(`Worker error: ${data.error ?? 'unknown error'}`);
 			}
-			if (data.type === 'render_error') lastError = `Paused, but final display capture failed: ${data.error}`;
+			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
 		};
 		worker.onerror = (event) => {
 			failWorker(

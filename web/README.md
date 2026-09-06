@@ -40,6 +40,11 @@ npm run wasm:test
 
 ## Function runner stubs
 
+Live display delivery keeps one frame in transit and coalesces pending refresh
+requests into a lazy capture of the newest state. A slow UI cannot accumulate
+a queue of old screenshots. Pause/input acknowledgements do not wait for display
+credit. Explicit Function Runner LCD artifacts are not coalesced or dropped.
+
 The browser Function Runner uses a disposable script worker, separate from the
 worker that owns the Rust/WASM machine. Stop terminates runaway user JavaScript
 (including stub/probe callbacks), then waits for cooperative machine execution
