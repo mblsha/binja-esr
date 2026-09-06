@@ -5,9 +5,6 @@
 	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
 	import { matrixCodeForKeyEvent } from '$lib/keymap';
 	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
-	import { createEvalApi, Flag, Reg } from '$lib/debug/sc62015_eval_api';
-	import { IOCS } from '$lib/debug/iocs';
-	import { runUserJs } from '$lib/debug/run_user_js';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import FunctionRunnerExamplesPanel from '$lib/components/FunctionRunnerExamplesPanel.svelte';
 	import type { FunctionRunnerOutput } from '$lib/debug/function_runner_types';
@@ -16,7 +13,6 @@
 	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
 	import { runHostSlice, stepBounded } from '$lib/emulator/bounded_step';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
-	import { callBounded } from '$lib/emulator/bounded_call';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -212,13 +208,19 @@
 				functionProgress = `Call ${hex(data.address)}: ${data.steps} call-budget steps, ${data.schedulerBoundaries} scheduler boundaries`;
 				return;
 			}
+			if (data.type === 'script_progress' && data.generation === romLoadGeneration && functionRunnerBusy) {
+				functionProgress = `Isolated script: ${data.operation}`;
+				return;
+			}
 			if (data.type === 'fatal') {
 				failWorker(`Worker error: ${data.error ?? 'unknown error'}`);
 			}
 			if (data.type === 'render_error') lastError = `Paused, but final display capture failed: ${data.error}`;
 		};
 		worker.onerror = (event) => {
-			failWorker(`Worker crashed: ${String(event)}`);
+			failWorker(
+				`Worker crashed: ${event.message || 'failed to load or execute worker'} (${event.filename || 'unknown source'})`,
+			);
 		};
 		worker.onmessageerror = () => failWorker('Worker message could not be decoded');
 		pushWorkerOptions();
@@ -235,8 +237,6 @@
 	function safeJson(value: any): string {
 		return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 	}
-
-	let perfettoSymbolsPromise: Promise<void> | null = null;
 
 	function resetSymbols() {
 		symbolsPromise = null;
@@ -271,21 +271,6 @@
 		return symbolsPromise;
 	}
 
-	async function ensurePerfettoSymbols(): Promise<void> {
-		if (perfettoSymbolsPromise) return perfettoSymbolsPromise;
-		perfettoSymbolsPromise = (async () => {
-			try {
-				const symbols = await ensureSymbols();
-				if (!symbols || symbols.length === 0) return;
-				await ensureEmulator();
-				emulator.set_perfetto_function_symbols(symbols);
-			} catch {
-				// Ignore missing symbol sources (public CI does not ship private rom-analysis).
-			}
-		})();
-		return perfettoSymbolsPromise;
-	}
-
 	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
 		functionRunnerBusy = true;
 		functionProgress = null;
@@ -296,76 +281,7 @@
 				return await workerCall('eval_js', { source });
 			}
 
-			const emu = await ensureEmulator();
-			const api = createEvalApi({
-				callFunction: async (
-					address: number,
-					maxInstructions: number,
-					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
-				) => {
-					if (options?.trace) await ensurePerfettoSymbols();
-					return callBounded(
-						emu,
-						address,
-						maxInstructions,
-						{
-							trace: Boolean(options?.trace),
-							probe_pc: options?.probe ? options.probe.pc : null,
-							probe_max_samples: options?.probe?.maxSamples ?? 256,
-						},
-						{ onProgress: applyVirtualReleaseBudget },
-					);
-				},
-				startPerfettoTrace: async (name: string) => {
-					await ensurePerfettoSymbols();
-					if (typeof emu.perfetto_start !== 'function') {
-						throw new Error('perfetto_start is not available in this runtime');
-					}
-					emu.perfetto_start(name);
-				},
-				stopPerfettoTrace: () => {
-					if (typeof emu.perfetto_stop_b64 !== 'function') {
-						throw new Error('perfetto_stop_b64 is not available in this runtime');
-					}
-					const raw = emu.perfetto_stop_b64();
-					if (typeof raw !== 'string') {
-						throw new Error('perfetto_stop_b64 returned a non-string value');
-					}
-					return raw;
-				},
-				reset: async () => {
-					await Promise.resolve(emu.reset?.());
-				},
-				step: async (instructions: number) => {
-					await stepBounded(emu, instructions, { onProgress: applyVirtualReleaseBudget });
-				},
-				getReg: (name: string) => emu.get_reg?.(name) ?? 0,
-				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
-				read8: (addr: number) => emu.read_u8?.(addr) ?? 0,
-				write8: (addr: number, value: number) => emu.write_u8?.(addr, value),
-				lcdText: () => emu.lcd_text(),
-				lcdPixels: () => emu.lcd_pixels(),
-				lcdCapture: (scale) => emu.lcd_capture(scale),
-				pressMatrixCode: (code: number) => emu.press_matrix_code?.(code),
-				releaseMatrixCode: (code: number) => emu.release_matrix_code?.(code),
-				injectMatrixEvent: (code: number, release: boolean) => emu.inject_matrix_event?.(code, release),
-			});
-
-			let resultJson: string | null = null;
-			let error: string | null = null;
-			try {
-				const result = await runUserJs(source, api, Reg, Flag, IOCS);
-				resultJson = safeJson(result);
-			} catch (err) {
-				error = err instanceof Error ? err.message : String(err);
-			}
-			return {
-				events: api.events,
-				calls: api.calls,
-				prints: api.prints,
-				resultJson,
-				error,
-			};
+			throw new Error('Function Runner requires isolated workers; scripts are disabled in the no-Worker fallback.');
 		} catch (err) {
 			return {
 				events: [],
@@ -623,7 +539,6 @@
 		if (generation !== romLoadGeneration) return;
 		releaseAllPhysicalHeldCodes();
 		resetSymbols();
-		perfettoSymbolsPromise = null;
 		if (worker) {
 			await workerCall('load_rom', { bytes, romSource: source, model, generation }, [bytes.buffer]);
 		} else {

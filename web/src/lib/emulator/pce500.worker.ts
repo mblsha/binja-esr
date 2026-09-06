@@ -1,11 +1,10 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
-import { createStubDispatcher, type StubDispatcher } from '../debug/sc62015_stub_dispatch';
-import type { StubRegistration } from '../debug/sc62015_stub_types';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 import { ExecutionCancelled, runHostSlice, stepBounded } from './bounded_step';
 import { WorkerOperations } from './worker_operations';
 import { callBounded } from './bounded_call';
+import { runIsolatedScript } from './isolated_script';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -114,7 +113,6 @@ let lastLcdText: string[] | null = null;
 const pressedCodes = new Set<number>();
 const pendingVirtualRelease = new Map<number, number>();
 let perfettoSymbolsPromise: Promise<void> | null = null;
-let stubDispatcher: StubDispatcher | null = null;
 
 function safeJson(value: any): string {
 	return JSON.stringify(value, (_key, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
@@ -128,22 +126,6 @@ function isLikelyWasmTrap(message: string): boolean {
 function isWasmBindgenBorrowError(message: string): boolean {
 	const lower = message.toLowerCase();
 	return lower.includes('recursive use of an object detected') || lower.includes('unsafe aliasing');
-}
-
-function initStubDispatcher() {
-	if (stubDispatcher || !emulator || !wasm) return;
-	if (typeof emulator.read_u8 !== 'function') return;
-	stubDispatcher = createStubDispatcher({
-		read8: (addr) => emulator.read_u8(addr),
-	});
-}
-
-function requireStubDispatcher(): StubDispatcher {
-	initStubDispatcher();
-	if (!stubDispatcher) {
-		throw new Error('stub support requires updated WASM exports (rebuild web wasm)');
-	}
-	return stubDispatcher;
 }
 
 async function ensurePerfettoSymbols(): Promise<void> {
@@ -163,138 +145,150 @@ async function ensurePerfettoSymbols(): Promise<void> {
 }
 
 async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
-	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
-	const { runUserJs } = await import('../debug/run_user_js');
-	const { IOCS } = await import('../debug/iocs');
-
-	function wrapError(context: string, err: unknown): Error {
-		const msg = err instanceof Error ? err.message : String(err);
-		return new Error(`${context}: ${msg}`);
-	}
-	const runWithError = <T>(context: string, fn: () => T): T => {
-		try {
-			return fn();
-		} catch (err) {
-			throw wrapError(context, err);
-		}
-	};
-	const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
-		try {
-			if (signal?.aborted) throw new ExecutionCancelled(0);
-			return await fn();
-		} catch (err) {
-			throw wrapError(context, err);
-		}
-	};
-	const api = createEvalApi({
-		callFunction: async (
-			address: number,
-			maxInstructions: number,
-			options?: {
-				trace?: boolean;
-				probe?: { pc: number; maxSamples?: number };
-				stubs?: Array<{ id: number; pc: number }>;
-			} | null,
-		) =>
-			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
-				if (options?.trace) await ensurePerfettoSymbols();
-				let lastProgress = -Infinity;
-				return callBounded(
-					emulator,
-					address,
-					maxInstructions,
-					{
-						trace: Boolean(options?.trace),
-						probe_pc: options?.probe ? options.probe.pc : null,
-						probe_max_samples: options?.probe?.maxSamples ?? 256,
-						stubs: options?.stubs ?? [],
-					},
-					{
-						signal,
-						onProgress: (used, slice) => {
-							applyVirtualReleaseBudget(used);
-							const now = performance.now();
-							if (now - lastProgress >= 100 || slice.state === 'complete') {
-								lastProgress = now;
-								(self as any).postMessage({
-									type: 'execution_progress',
-									generation: machineGeneration,
-									address,
-									steps: slice.steps,
-									schedulerBoundaries: slice.scheduler_boundaries,
-								});
-							}
-						},
-						dispatchStub: (request) => requireStubDispatcher().dispatch(request.id, request.regs, request.flags),
-					},
-				);
-			}),
-		startPerfettoTrace: async (name: string) =>
-			runWithErrorAsync(`perfetto.start(${name})`, async () => {
-				await ensurePerfettoSymbols();
-				if (typeof emulator.perfetto_start !== 'function') {
-					throw new Error('perfetto_start is not available in this runtime');
-				}
-				emulator.perfetto_start(name);
-			}),
-		stopPerfettoTrace: () =>
-			runWithError('perfetto.stop()', () => {
-				if (typeof emulator.perfetto_stop_b64 !== 'function') {
-					throw new Error('perfetto_stop_b64 is not available in this runtime');
-				}
-				const raw = emulator.perfetto_stop_b64();
-				if (typeof raw !== 'string') {
-					throw new Error('perfetto_stop_b64 returned a non-string value');
-				}
-				return raw;
-			}),
-		reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
-		step: async (instructions: number) =>
-			runWithErrorAsync(`step(${instructions})`, async () => {
-				await stepBounded(emulator, instructions, { signal, onProgress: applyVirtualReleaseBudget });
-			}),
-		getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
-		setReg: (name: string, value: number) =>
-			runWithError(`setReg(${name}=${value})`, () => emulator.set_reg?.(name, value)),
-		read8: (addr: number) =>
-			runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
-		write8: (addr: number, value: number) =>
-			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
-		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
-		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels()),
-		lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
-		pressMatrixCode: (code: number) =>
-			runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () => emulator.press_matrix_code?.(code)),
-		releaseMatrixCode: (code: number) =>
-			runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
-				emulator.release_matrix_code?.(code),
-			),
-		injectMatrixEvent: (code: number, release: boolean) =>
-			runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
-				emulator.inject_matrix_event?.(code, release),
-			),
-		registerStub: (stub: StubRegistration) => {
-			requireStubDispatcher().registerStub(stub);
+	const { createEvalApi } = await import('../debug/sc62015_eval_api');
+	let lastScriptProgress = -Infinity;
+	let reportedPrint = false;
+	return runIsolatedScript({
+		source,
+		signal,
+		read8: (addr) => emulator.read_u8(addr),
+		onRequest: (path) => {
+			const now = performance.now();
+			if (now - lastScriptProgress >= 100 || (path === 'print' && !reportedPrint)) {
+				if (path === 'print') reportedPrint = true;
+				lastScriptProgress = now;
+				self.postMessage({ type: 'script_progress', generation: machineGeneration, operation: path });
+			}
 		},
-		clearStubs: () => {
-			stubDispatcher?.clearStubs();
+		createApi: ({ signal, dispatchStub }) => {
+			let mutating = false;
+			const requireIdle = () => {
+				if (mutating) throw new Error('Await the active machine operation before starting another mutation');
+			};
+			function wrapError(context: string, err: unknown): Error {
+				const msg = err instanceof Error ? err.message : String(err);
+				return new Error(`${context}: ${msg}`);
+			}
+			const runWithError = <T>(context: string, fn: () => T): T => {
+				try {
+					return fn();
+				} catch (err) {
+					throw wrapError(context, err);
+				}
+			};
+			const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
+				requireIdle();
+				mutating = true;
+				try {
+					if (signal?.aborted) throw new ExecutionCancelled(0);
+					return await fn();
+				} catch (err) {
+					throw wrapError(context, err);
+				} finally {
+					mutating = false;
+				}
+			};
+			return createEvalApi({
+				callFunction: async (
+					address: number,
+					maxInstructions: number,
+					options?: {
+						trace?: boolean;
+						probe?: { pc: number; maxSamples?: number };
+						stubs?: Array<{ id: number; pc: number }>;
+					} | null,
+				) =>
+					runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
+						if (options?.trace) await ensurePerfettoSymbols();
+						let lastProgress = -Infinity;
+						return callBounded(
+							emulator,
+							address,
+							maxInstructions,
+							{
+								trace: Boolean(options?.trace),
+								probe_pc: options?.probe ? options.probe.pc : null,
+								probe_max_samples: options?.probe?.maxSamples ?? 256,
+								stubs: options?.stubs ?? [],
+							},
+							{
+								signal,
+								onProgress: (used, slice) => {
+									applyVirtualReleaseBudget(used);
+									const now = performance.now();
+									if (now - lastProgress >= 100 || slice.state === 'complete') {
+										lastProgress = now;
+										(self as any).postMessage({
+											type: 'execution_progress',
+											generation: machineGeneration,
+											address,
+											steps: slice.steps,
+											schedulerBoundaries: slice.scheduler_boundaries,
+										});
+									}
+								},
+								dispatchStub,
+							},
+						);
+					}),
+				startPerfettoTrace: async (name: string) =>
+					runWithErrorAsync(`perfetto.start(${name})`, async () => {
+						await ensurePerfettoSymbols();
+						if (typeof emulator.perfetto_start !== 'function') {
+							throw new Error('perfetto_start is not available in this runtime');
+						}
+						emulator.perfetto_start(name);
+					}),
+				stopPerfettoTrace: () =>
+					runWithError('perfetto.stop()', () => {
+						if (typeof emulator.perfetto_stop_b64 !== 'function') {
+							throw new Error('perfetto_stop_b64 is not available in this runtime');
+						}
+						const raw = emulator.perfetto_stop_b64();
+						if (typeof raw !== 'string') {
+							throw new Error('perfetto_stop_b64 returned a non-string value');
+						}
+						return raw;
+					}),
+				reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
+				step: async (instructions: number) =>
+					runWithErrorAsync(`step(${instructions})`, async () => {
+						await stepBounded(emulator, instructions, { signal, onProgress: applyVirtualReleaseBudget });
+					}),
+				getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
+				setReg: (name: string, value: number) =>
+					runWithError(`setReg(${name}=${value})`, () => {
+						requireIdle();
+						emulator.set_reg?.(name, value);
+					}),
+				read8: (addr: number) =>
+					runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
+				write8: (addr: number, value: number) =>
+					runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => {
+						requireIdle();
+						emulator.write_u8?.(addr, value);
+					}),
+				lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
+				lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels()),
+				lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
+				pressMatrixCode: (code: number) =>
+					runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () =>
+						emulator.press_matrix_code?.(code),
+					),
+				releaseMatrixCode: (code: number) =>
+					runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
+						emulator.release_matrix_code?.(code),
+					),
+				injectMatrixEvent: (code: number, release: boolean) =>
+					runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
+						emulator.inject_matrix_event?.(code, release),
+					),
+				// Handler closures and their registry live only in the disposable worker.
+				registerStub: () => {},
+				clearStubs: () => {},
+			});
 		},
 	});
-	let resultJson: string | null = null;
-	let error: string | null = null;
-	try {
-		const result = await runUserJs(source, api, Reg, Flag, IOCS);
-		resultJson = safeJson(result);
-	} catch (err) {
-		error = err instanceof Error ? err.message : String(err);
-	}
-	return {
-		events: api.events,
-		calls: api.calls,
-		prints: api.prints,
-		resultJson,
-		error,
-	};
 }
 
 async function ensureEmulator(): Promise<any> {
@@ -330,7 +324,6 @@ async function initializeEmulator(): Promise<any> {
 		} catch {
 			buildInfo = null;
 		}
-		initStubDispatcher();
 	}
 	try {
 		const raw = emulator?.device_model?.() ?? wasm?.default_device_model?.();

@@ -43,6 +43,7 @@ await e.call(${addr}, ${registers}, { maxInstructions: 200_000, trace: true });
 		const text = await error.textContent();
 		expect(text ?? '').not.toContain('recursive use of an object detected');
 		expect(text ?? '').not.toContain('unsafe aliasing');
+		throw new Error(text ?? 'Function Runner failed');
 	}
 
 	// Ensure the script actually executed the call.

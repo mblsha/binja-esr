@@ -28,8 +28,8 @@ proof of physically calibrated instruction timing.
    Normal running, explicit stepping and Function Runner `e.step()`/`e.call()` use
    bounded Rust execution;
    control acknowledgements, request failure handling and ROM-load generation
-   checks are implemented. Arbitrary JavaScript isolation and bounded artifact
-   processing remain pending.
+   checks and browser JavaScript isolation are implemented. Bounded artifact
+   processing and broader runtime fault classification remain pending.
 3. **Reliable input:** correct release/repress/focus-loss behavior, complete
    model-specific controls, and distinct raw-contact versus timed synthetic-tap
    contracts. Never conflate scheduler boundaries with retired instructions.
@@ -152,7 +152,7 @@ Local validation:
   The observations do **not** consistently meet the initial sub-50 ms target.
   Test attachments include the sample list and host/browser identification.
 
-The public PR workflow runs only seven short synthetic browser-control
+The public PR workflow runs only eighteen short synthetic browser-control
 regressions, excluding the repeated latency measurements; the full browser
 suite runs on pushes. Both reuse CI's explicitly built app. Private ROM and
 hardware runs are not new mandatory CI requirements.
@@ -232,18 +232,77 @@ Validation of this stage:
   twenty synthetic-ROM samples each. This does not supersede the earlier
   slower observations or qualify function-call/trace-finalization latency.
 
+## Isolated browser scripts (2026-09-06)
+
+Browser user code, stub handlers, probe handlers and trace-body callbacks now
+execute in a disposable child worker. The Rust machine and `EvalApi` artifact
+store stay in the machine owner. Stop terminates only the script worker, rejects
+outstanding callback requests, cancels bounded execution, and drains pending
+machine operations and their cleanup before acknowledging. Completed and partial
+call/trace artifacts remain available. Late requests/replies cannot mutate the
+next session. Unawaited overlapping machine mutations are rejected.
+
+Synchronous register and debugger memory APIs use a request/reply mailbox, with
+`Atomics.wait` **only in the script worker**. Each read queries the current owner;
+there is no approximate machine snapshot or shared guest RAM. Artifact reads are
+copies. Data crossing this boundary is JSON-shaped; nonfinite numbers fail
+closed, and BigInts become decimal strings. Explicit callback APIs retain their
+closures and result ordering. User object getters/serialization execute on the
+script side, not in a machine-owned WASM borrow.
+
+The shared mailbox requires a secure, cross-origin-isolated context. Vite
+development/preview now sets headers before static worker serving; SvelteKit
+sets them on its responses too. Production proxies/CDNs must set them on worker
+assets as well as HTML. Plain LAN HTTP is not sufficient. Missing isolation
+refuses Function Runner; the main-thread script fallback has been removed.
+See [web setup](../web/README.md#function-runner-stubs) and the
+[browser requirements](https://developer.mozilla.org/en-US/docs/Web/API/WorkerGlobalScope/crossOriginIsolated).
+
+Limits: 16 MiB RPC replies, 30-second synchronous RPC waits, 64 outstanding RPC
+jobs and a 270-second browser-script host deadline. Limits report failure and
+cancel pending work; they are not changes to CPU/RTC timing or a security
+sandbox. The CLI still uses offline user-script execution.
+
+Validation:
+
+- 89 frontend tests passed; Svelte checks and formatting passed. After final
+  UTF-8 payload-limit hardening, all four targeted stub/isolation browser checks
+  passed again.
+- Full Chromium suite: 24 passed, three opt-in tests skipped. Eight tests run
+  actual infinite JavaScript loops (script, stub, probe and trace callback, both
+  models), wait for a real callback/print RPC, Stop, verify surviving RAM and
+  debugger-stack bytes, and run another trace. Additional checks cover closure
+  ordering, current registers, copied artifacts, missing isolation headers,
+  mutation rejection during a pending step and no-Worker refusal. These are
+  synthetic fixtures using the actual Rust/WASM runtime, not app/hardware proof.
+- On the same Apple M1 Ultra / Chromium 143 reference host, those eight
+  click-to-stopped-UI measurements were 134–153 ms (one per case). This includes
+  Playwright click action and UI settlement; it is **not** the worker-ack metric.
+  Twenty ordinary Run/Stop samples per model peaked at 16.66/15.57 ms. Neither
+  limited sample set establishes a p99 guarantee or supersedes earlier slower
+  real-ROM observations.
+- Three existing opt-in tests passed using the actual local licensed ROMs:
+  PC-E500 PF1 boot-menu navigation, its reset/PF1/traced-call sequence, and
+  IQ-7000 MEMO followed by SHIFT with ROM-driven CAPS/key-beep/SHIFT segments.
+  The IQ test saved the actual live canvas. This is narrow ROM-driven flow
+  evidence, not full application/input qualification or hardware tracing.
+
 ### Remaining limitations
 
-- Arbitrary user JavaScript and stub handlers still run in the machine worker.
-  An infinite JavaScript loop can block message delivery despite bounded Rust
-  slices. Timeouts describe that truthfully but do not preempt it; script
-  isolation is required next. Trace serialization and large result processing
-  are also not host-time bounded yet.
+- Browser arbitrary JavaScript is isolated; native Rust execution and the Node
+  CLI remain separate surfaces. Trace serialization, artifact growth and large
+  result processing in the machine owner are not host-time bounded yet.
 - The no-Worker fallback has bounded stepping but is not a qualified isolated
-  production frontend; arbitrary scripts can still freeze its UI.
+  production frontend; Function Runner is now refused there.
 - Virtual-key release timing, repress/focus-loss handling and model-specific
   controls still need the input stage. Pause latency does not measure a key
-  reaching the matrix or being consumed by ROM firmware.
+  reaching the matrix or being consumed by ROM firmware. Scripted taps execute
+  their owner-side release cleanup on cancellation, but explicit raw key-downs
+  remain explicit state, including across a cancelled script; source-aware
+  contact ownership/release still needs work.
+  The browser adapter also still needs explicit `onKey` press/release wiring
+  to the existing WASM exports (the optional adapter methods currently permit a
+  silent no-op); cover ON wake with the input-stage regression tests.
 - Rendering/debug snapshots can still delay subsequent controls; latest-only
   frame delivery and measured rendering overhead remain pending.
 - Pacing/turbo/deterministic modes, long-instruction and fault stress tests,

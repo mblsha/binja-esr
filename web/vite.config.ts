@@ -5,6 +5,22 @@ import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 const isVitest = process.env.VITEST === 'true' || process.env.VITEST === '1';
+const isolationHeaders = {
+	'Cross-Origin-Opener-Policy': 'same-origin',
+	'Cross-Origin-Embedder-Policy': 'require-corp'
+};
+
+function scriptIsolationHeaders(): Plugin {
+	const install = (server: { middlewares: { use: Function } }) => {
+		server.middlewares.use((_req: unknown, res: { setHeader(name: string, value: string): void }, next: () => void) => {
+			for (const [name, value] of Object.entries(isolationHeaders)) res.setHeader(name, value);
+			next();
+		});
+	};
+	// SvelteKit preview serves immutable worker assets before Vite's normal
+	// header middleware. Worker responses must carry COEP too, not only HTML.
+	return { name: 'script-isolation-headers', configureServer: install, configurePreviewServer: install };
+}
 
 function parseAllowedHosts(): string[] | true | undefined {
 	const raw = process.env.VITE_ALLOWED_HOSTS;
@@ -37,7 +53,7 @@ function wasmPackageReload(): Plugin {
 }
 
 export default defineConfig({
-	plugins: [sveltekit(), wasmPackageReload()],
+	plugins: [scriptIsolationHeaders(), sveltekit(), wasmPackageReload()],
 	worker: {
 		format: 'es'
 	},
@@ -46,10 +62,12 @@ export default defineConfig({
 	},
 	server: {
 		host: true,
+		headers: isolationHeaders,
 		allowedHosts: parseAllowedHosts()
 	},
 	preview: {
 		host: true,
+		headers: isolationHeaders,
 		allowedHosts: parseAllowedHosts()
 	},
 	test: {

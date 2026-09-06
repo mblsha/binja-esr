@@ -23,7 +23,8 @@ export type StatusFlag = 'C' | 'Z';
 
 export type ProbeRegisters = Record<string, number>;
 export type ProbeSample = { pc: number; count: number; regs: ProbeRegisters };
-export type ProbeHandler = (sample: ProbeSample) => void;
+// The return value is ignored, but an async handler is awaited (e.g. isolated RPC).
+export type ProbeHandler = (sample: ProbeSample) => unknown;
 
 export type CallArtifacts = {
 	address: number;
@@ -747,7 +748,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				if (activeProbe && artifacts.probe_samples?.length) {
 					for (const sample of artifacts.probe_samples) {
 						try {
-							activeProbe.handler(sample);
+							await activeProbe.handler(sample);
 						} catch {
 							/* ignore probe handler errors */
 						}

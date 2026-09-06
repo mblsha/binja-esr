@@ -116,7 +116,7 @@ describe('PC-E500 web emulator', () => {
 		expect(getByTestId('regs-table')).toBeTruthy();
 	});
 
-	it('function runner can call with trace enabled (no wasm-bindgen aliasing)', async () => {
+	it('refuses to execute scripts in the no-Worker test fallback', async () => {
 		const romBytes = await loadTestRom();
 
 		vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
@@ -154,7 +154,7 @@ describe('PC-E500 web emulator', () => {
 			throw new Error(`Unexpected fetch: ${url}`);
 		});
 
-		const { getByTestId, getByText, queryByTestId, getAllByTestId } = render(Page);
+		const { getByTestId, getByText, queryAllByTestId } = render(Page);
 
 		const step20k = getByText('Step 20k') as HTMLButtonElement;
 		await waitFor(() => expect(step20k.disabled).toBe(false));
@@ -184,8 +184,8 @@ await e.call(pc, { S: 0xB9003 }, { maxInstructions: 2_000, trace: true });
 		await fireEvent.click(run);
 
 		await waitFor(() => {
-			expect(queryByTestId('fnr-error')).toBeNull();
-			expect(getAllByTestId('fnr-call').length).toBeGreaterThanOrEqual(1);
+			expect(getByTestId('fnr-error').textContent).toContain('requires isolated workers');
+			expect(queryAllByTestId('fnr-call')).toHaveLength(0);
 		});
 	});
 });

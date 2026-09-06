@@ -39,6 +39,38 @@ npm run wasm:test
 ```
 
 ## Function runner stubs
+
+The browser Function Runner uses a disposable script worker, separate from the
+worker that owns the Rust/WASM machine. Stop terminates runaway user JavaScript
+(including stub/probe callbacks), then waits for cooperative machine execution
+and debugger cleanup. It does not reset or roll back guest state. Explicit raw
+key-down state is not automatically undone; use balanced taps/releases.
+
+Serve the app over HTTPS or localhost with these headers on **both HTML and
+worker JavaScript**, including immutable assets served by a proxy/CDN:
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Vite development/preview and SvelteKit responses are configured here. Production
+static-asset hosting must preserve the headers too. Plain HTTP on a remote LAN
+hostname is not a secure context: normal emulation may work but Function Runner
+will refuse scripts. There is no UI-thread script fallback. See
+[MDN's worker-isolation requirements](https://developer.mozilla.org/en-US/docs/Web/API/WorkerGlobalScope/crossOriginIsolated).
+
+`e.reg()` and stub memory readers remain synchronous, but always query the live
+machine owner. Only the script worker waits on a shared reply mailbox; emulated
+RAM itself is not shared or duplicated. `e.calls`/`events`/`prints` and `last()`
+return owned data copies, not mutable references to the owner's artifact store.
+RPC data is JSON-shaped (BigInts become decimal strings); functions travel only
+through the explicit callback APIs. Nonfinite numbers are rejected. A reply is
+limited to 16 MiB, synchronous RPC waits to 30 seconds, and a browser script to
+270 seconds of host time. These are host safety limits, not emulated timing.
+The Node `fnr:cli` retains its offline execution model; browser script isolation
+is not a security sandbox or a claim that the CLI preempts arbitrary JavaScript.
+
 The Function Runner (UI + `fnr:cli`) can intercept execution at a specific PC and apply patches.
 
 ```js
