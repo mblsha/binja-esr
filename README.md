@@ -59,6 +59,9 @@ Notes:
   The physical wiring, exact timing, F7/FC/FD fields, and F9/FB effects remain provisional.
 - Use `--refresh-steps 20000` to control redraw cadence.
 - Use `--input-steps 1000` to poll for key presses more frequently.
+- Terminal execution also checks a 4 ms host-yield target between small Rust
+  scheduler batches; long individual instructions can exceed that target.
+- Use `--loop-diagnostics` to opt into instruction-history/loop detection.
 - Use `--no-alt-screen` for tmux capture panes.
 - Use `--force-tty` when running detached.
 - Use `--pf-numbers` to map digits 1–5 to PF1–PF5 (disables typing those digits).
@@ -67,6 +70,11 @@ Notes:
 - Use `--card auto|present|absent` to control memory card slot state. `auto`
   selects a blank writable PC-E500 card and an absent IQ-7000 card.
 - Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.
+
+The active [Rust interactive-responsiveness plan](docs/rust_interactive_responsiveness.md)
+tracks bounded execution, reliable controls/input, pacing, and remaining browser
+and terminal qualification. Faster-than-realtime throughput alone is not proof
+of responsive interaction.
 
 The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captures:
 

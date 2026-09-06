@@ -79,17 +79,22 @@ struct Args {
     #[arg(long, value_enum, default_value_t = CardMode::Auto)]
     card: CardMode,
 
-    /// Number of instructions to execute before exiting (0 = run until Ctrl+C).
+    /// Scheduler-boundary budget before exiting (0 = run until Ctrl+C).
     #[arg(long, default_value_t = 0)]
     steps: u64,
 
-    /// Number of instructions between LCD refresh checks.
+    /// Scheduler-boundary budget between LCD refresh checks.
     #[arg(long, default_value_t = 20_000)]
     refresh_steps: u64,
 
-    /// Number of instructions between input polls (0 = only poll each refresh).
+    /// Maximum boundary budget between input polls (0 = use refresh budget).
+    /// Host execution also yields between small batches after about 4 ms.
     #[arg(long, default_value_t = 1_000)]
     input_steps: u64,
+
+    /// Enable instruction-history/loop diagnostics (off for normal interaction).
+    #[arg(long, default_value_t = false)]
+    loop_diagnostics: bool,
 
     /// Sleep this many milliseconds after each refresh check (0 = no sleep).
     #[arg(long, default_value_t = 0)]
@@ -159,7 +164,7 @@ struct Args {
     #[arg(long, default_value_t = AUTO_TYPE_START_DELAY_STEPS)]
     auto_type_delay: u64,
 
-    /// Write loop report JSON on exit (defaults to loop_report_<epoch>.json).
+    /// Enable loop diagnostics and write the report JSON here on exit.
     #[arg(long, value_name = "PATH")]
     loop_report: Option<PathBuf>,
 }
@@ -279,6 +284,19 @@ fn render_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loop_diagnostics_are_opt_in_for_both_models() {
+        for model in ["pc-e500", "iq-7000"] {
+            let normal = Args::try_parse_from(["sc62015-lcd", "--model", model]).unwrap();
+            assert!(!normal.loop_diagnostics);
+            assert!(normal.loop_report.is_none());
+            let diagnostics =
+                Args::try_parse_from(["sc62015-lcd", "--model", model, "--loop-diagnostics"])
+                    .unwrap();
+            assert!(diagnostics.loop_diagnostics);
+        }
+    }
 
     fn iq7000_runtime() -> CoreRuntime {
         let mut runtime = CoreRuntime::new();
@@ -1634,11 +1652,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         runtime.timer.enabled = false;
     }
     args.card.resolve(args.model).apply(&mut runtime.memory)?;
-    let loop_config = LoopDetectorConfig {
-        detect_stride: args.refresh_steps,
-        ..Default::default()
-    };
-    runtime.enable_loop_detector(loop_config);
+    if args.loop_diagnostics || args.loop_report.is_some() {
+        let loop_config = LoopDetectorConfig {
+            detect_stride: args.refresh_steps,
+            ..Default::default()
+        };
+        runtime.enable_loop_detector(loop_config);
+    }
     runtime.power_on_reset()?;
     apply_iq7000_rtc_arg(&mut runtime, args.model, &args.iq7000_rtc)?;
 
@@ -1748,9 +1768,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 remaining.min(args.input_steps)
             };
             if !did_stub {
-                runtime.step(chunk as usize)?;
-                executed = executed.saturating_add(chunk);
-                remaining = remaining.saturating_sub(chunk);
+                let slice_start = Instant::now();
+                let result = runtime
+                    .run_slice(usize::try_from(chunk).unwrap_or(usize::MAX), |_| {
+                        slice_start.elapsed() >= Duration::from_millis(4)
+                    })?;
+                let used = result.progress.boundary_budget_used as u64;
+                executed = executed.saturating_add(used);
+                remaining = remaining.saturating_sub(used);
             }
             if apply_pending_presses(
                 &mut runtime,
