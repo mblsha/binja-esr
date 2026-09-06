@@ -82,6 +82,7 @@ describe('PC-E500 web emulator', () => {
 		await waitFor(() => expect(step20k.disabled).toBe(false));
 
 		await fireEvent.click(step20k);
+		await waitFor(() => expect(step20k.disabled).toBe(false));
 		await waitFor(() => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('BOOT');
@@ -98,8 +99,11 @@ describe('PC-E500 web emulator', () => {
 		await fireEvent.pointerDown(pf1);
 		await fireEvent.pointerUp(pf1);
 		await fireEvent.click(step20k);
+		await waitFor(() => expect(step20k.disabled).toBe(false));
 		await fireEvent.click(step20k);
+		await waitFor(() => expect(step20k.disabled).toBe(false));
 		await fireEvent.click(step20k);
+		await waitFor(() => expect(step20k.disabled).toBe(false));
 
 		await waitFor(() => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
@@ -157,6 +161,7 @@ describe('PC-E500 web emulator', () => {
 
 		// Ensure ROM is loaded (the function runner uses the same emulator instance).
 		await fireEvent.click(step20k);
+		await waitFor(() => expect(step20k.disabled).toBe(false));
 		await waitFor(() => {
 			const text = (getByTestId('lcd-text').textContent ?? '').trim();
 			expect(text).toContain('BOOT');

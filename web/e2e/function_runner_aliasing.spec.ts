@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('function runner: reset + PF1 tap + traced call does not trigger wasm-bindgen aliasing error', async ({
-	page
+	page,
 }) => {
 	await page.goto('/');
 
@@ -19,12 +19,15 @@ test('function runner: reset + PF1 tap + traced call does not trigger wasm-bindg
 
 	const realRomMode = process.env.PCE500_E2E_REAL_ROM === '1';
 	const addr = realRomMode ? '0x00F2A87' : 'e.reg(Reg.PC)';
+	// The minimal synthetic ROM never initializes S. Supply a real writable
+	// diagnostic stack rather than depending on wraparound into the ROM vector.
+	const registers = realRomMode ? 'undefined' : '{ S: 0xB9003 }';
 
 	const script = `
 await e.reset({ fresh: true, warmupTicks: 100_000 });
 
 await e.keyboard.tap(0x56); // PF1 (virtual injection), holds ~40k instr by default
-await e.call(${addr}, undefined, { maxInstructions: 200_000, trace: true });
+await e.call(${addr}, ${registers}, { maxInstructions: 200_000, trace: true });
 `;
 	await editor.fill(script);
 

@@ -14,6 +14,8 @@
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
 	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
+	import { runHostSlice, stepBounded } from '$lib/emulator/bounded_step';
+	import { WorkerRequests } from '$lib/emulator/worker_requests';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -23,9 +25,14 @@
 
 	let wasm: any = null;
 	let emulator: any = null;
+	let emulatorReady: Promise<any> | null = null;
 	let worker: Worker | null = null;
 	let workerNextId = 1;
-	const workerPending = new Map<number, { resolve: (value: any) => void; reject: (err: unknown) => void }>();
+	let workerRequests: WorkerRequests | null = null;
+	let workerHealth: 'ready' | 'unresponsive' | 'faulted' = 'ready';
+	let controlPending: 'start' | 'stop' | null = null;
+	let stepBusy = false;
+	let fallbackStepAbort: AbortController | null = null;
 	const canUseWorker =
 		typeof window !== 'undefined' && typeof Worker !== 'undefined' && !Boolean((import.meta as any)?.env?.VITEST);
 
@@ -54,6 +61,8 @@
 	let instructionCount: string | null = null;
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
+	let romLoadGeneration = 0;
+	let loadingRom = false;
 	let romModel: RomModel = 'pc-e500';
 	let romModelWasPersisted = false;
 	$: romModel = $romModelStore;
@@ -86,13 +95,9 @@
 	let symbolsPromise: Promise<SymbolEntry[] | null> | null = null;
 	let symbolsPromiseModel: RomModel | null = null;
 
-	const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
-	const runSliceTargetMs = 0.4;
-	const runMaxWorkMs = 4;
 	const RUN_YIELD_MS = 0;
 	let runLoopId = 0;
-	let runSliceInstructions = 2000;
 
 	let debugKio: {
 		pc: number | null;
@@ -109,6 +114,8 @@
 	let debugKioJson: string | null = null;
 
 	function applyWorkerFrame(frame: any) {
+		if (typeof frame?.generation === 'number' && frame.generation !== romLoadGeneration) return;
+		if (frame?.model && frame.model !== romModel) return;
 		try {
 			if (frame?.lcdPixels instanceof ArrayBuffer) {
 				lcdPixels = new Uint8Array(frame.lcdPixels);
@@ -155,13 +162,19 @@
 	}
 
 	function workerCall<T = any>(type: string, payload: any = {}, transfer?: Transferable[]): Promise<T> {
-		if (!worker) return Promise.reject(new Error('worker not ready'));
+		if (!workerRequests) return Promise.reject(new Error('worker not ready'));
 		const id = workerNextId++;
 		const message = { id, type, ...payload };
-		return new Promise((resolve, reject) => {
-			workerPending.set(id, { resolve, reject });
-			workerPost(message, transfer);
-		});
+		const timeoutMs = type === 'stop' ? 1_000 : type === 'eval_js' ? 300_000 : 30_000;
+		return workerRequests.request<T>(message, transfer, timeoutMs);
+	}
+
+	function failWorker(message: string) {
+		lastError = `${message}. Reload the page to replace the worker; unsaved emulator state will be lost.`;
+		workerHealth = 'faulted';
+		running = false;
+		romLoaded = false;
+		workerRequests?.fail(new Error(message));
 	}
 
 	function pushWorkerOptions() {
@@ -178,15 +191,15 @@
 	async function ensureWorker(): Promise<void> {
 		if (!canUseWorker || worker) return;
 		worker = new Worker(new URL('../lib/emulator/pce500.worker.ts', import.meta.url), { type: 'module' });
+		workerRequests = new WorkerRequests(workerPost, (error) => {
+			lastError = error.message;
+			workerHealth = 'unresponsive';
+		});
 		worker.onmessage = (event: MessageEvent<any>) => {
 			const data = event.data;
 			if (!data) return;
 			if (data.type === 'reply') {
-				const pending = workerPending.get(data.id);
-				if (!pending) return;
-				workerPending.delete(data.id);
-				if (data.ok) pending.resolve(data.result);
-				else pending.reject(new Error(data.error ?? 'worker error'));
+				workerRequests?.reply(data);
 				return;
 			}
 			if (data.type === 'frame') {
@@ -194,14 +207,14 @@
 				return;
 			}
 			if (data.type === 'fatal') {
-				lastError = `Worker error: ${data.error ?? 'unknown error'}`;
-				running = false;
+				failWorker(`Worker error: ${data.error ?? 'unknown error'}`);
 			}
+			if (data.type === 'render_error') lastError = `Paused, but final display capture failed: ${data.error}`;
 		};
 		worker.onerror = (event) => {
-			lastError = `Worker crashed: ${String(event)}`;
-			running = false;
+			failWorker(`Worker crashed: ${String(event)}`);
 		};
+		worker.onmessageerror = () => failWorker('Worker message could not be decoded');
 		pushWorkerOptions();
 	}
 
@@ -270,7 +283,7 @@
 	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
 		functionRunnerBusy = true;
 		try {
-			if (running) stop();
+			if (running && !(await stop())) throw new Error('Pause was not acknowledged');
 			await ensureWorker();
 			if (worker) {
 				return await workerCall('eval_js', { source });
@@ -314,7 +327,7 @@
 					await Promise.resolve(emu.reset?.());
 				},
 				step: async (instructions: number) => {
-					await Promise.resolve(emu.step?.(instructions));
+					await stepBounded(emu, instructions, { onProgress: applyVirtualReleaseBudget });
 				},
 				getReg: (name: string) => emu.get_reg?.(name) ?? 0,
 				setReg: (name: string, value: number) => emu.set_reg?.(name, value),
@@ -517,6 +530,17 @@
 	}
 
 	async function ensureEmulator(): Promise<any> {
+		if (emulatorReady) return emulatorReady;
+		emulatorReady = initializeEmulator().catch((error) => {
+			emulatorReady = null;
+			emulator = null;
+			wasm = null;
+			throw error;
+		});
+		return emulatorReady;
+	}
+
+	async function initializeEmulator(): Promise<any> {
 		if (!wasm) {
 			wasm = await import('$lib/wasm/sc62015_wasm');
 			if (typeof wasm.default === 'function') {
@@ -554,7 +578,7 @@
 		if (worker) {
 			try {
 				const model = (await workerCall('get_model')) as any;
-				if (typeof model === 'string') $romModelStore = model as RomModel;
+				if (!romModelWasPersisted && typeof model === 'string') $romModelStore = model as RomModel;
 			} catch {
 				// ignore
 			}
@@ -564,31 +588,46 @@
 	}
 
 	async function tryAutoLoadRom(force = false) {
-		await ensureWorker();
-		if (!force) await syncRomModelFromRuntime();
-		if (!force && !worker && emulator?.has_rom?.()) return;
+		const generation = ++romLoadGeneration;
+		loadingRom = true;
+		romLoaded = false;
 		try {
-			const res = await fetch(`/api/rom?model=${encodeURIComponent(romModel)}`);
-			if (!res.ok) return;
-			resetSymbols();
-			perfettoSymbolsPromise = null;
-			romSource = res.headers.get('x-rom-source');
+			await ensureWorker();
+			if (!force) await syncRomModelFromRuntime();
+			if (generation !== romLoadGeneration) return;
+			const model = romModel;
+			const res = await fetch(`/api/rom?model=${encodeURIComponent(model)}`);
+			if (!res.ok) throw new Error(`ROM fetch failed (${res.status}) for ${model}`);
 			const bytes = new Uint8Array(await res.arrayBuffer());
-			if (worker) {
-				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
-				romLoaded = true;
-				if (callStackOpen) void ensureSymbols();
-				return;
-			}
-			const emu = await ensureEmulator();
-			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
-			romLoaded = true;
-			if (callStackOpen) void ensureSymbols();
-			refreshAllNow();
+			await installRom(bytes, model, res.headers.get('x-rom-source'), generation);
 		} catch (err) {
-			lastError = `Auto-load failed: ${String(err)}`;
-			romLoaded = false;
+			if (generation === romLoadGeneration) lastError = `Auto-load failed: ${String(err)}`;
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
 		}
+	}
+
+	async function installRom(bytes: Uint8Array, model: RomModel, source: string | null, generation: number) {
+		if (generation !== romLoadGeneration) return;
+		if (!(await stop())) throw new Error('Pause was not acknowledged; ROM was not replaced');
+		if (generation !== romLoadGeneration) return;
+		releaseAllPhysicalHeldCodes();
+		resetSymbols();
+		perfettoSymbolsPromise = null;
+		if (worker) {
+			await workerCall('load_rom', { bytes, romSource: source, model, generation }, [bytes.buffer]);
+		} else {
+			const emu = await ensureEmulator();
+			if (generation !== romLoadGeneration) return;
+			if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
+			else emu.load_rom(bytes);
+			refreshAllNow();
+		}
+		if (generation !== romLoadGeneration) return;
+		romSource = source;
+		romLoaded = true;
+		lastError = null;
+		if (callStackOpen) void ensureSymbols();
 	}
 
 	function refreshFast() {
@@ -769,7 +808,26 @@
 		console.log('[pce500] devtools helpers installed: __pce500.dump(), __pce500.tapPF1(), __pce500.readInternal(0xF2)');
 	}
 
-	$: statusLabel = running ? 'RUNNING' : halted ? 'HALTED' : 'STOPPED';
+	$: statusLabel =
+		workerHealth === 'faulted'
+			? 'FAULTED'
+			: workerHealth === 'unresponsive'
+				? 'UNRESPONSIVE — STATE UNCONFIRMED'
+				: controlPending === 'stop'
+					? 'PAUSE REQUESTED'
+					: controlPending === 'start'
+						? 'START REQUESTED'
+						: loadingRom
+							? 'LOADING ROM'
+							: functionRunnerBusy
+								? 'EXECUTING SCRIPT'
+								: stepBusy
+									? 'STEPPING'
+									: running
+										? 'RUNNING'
+										: halted
+											? 'HALTED'
+											: 'STOPPED';
 	$: pc = pcReg;
 	$: if (worker) {
 		targetFps;
@@ -786,18 +844,27 @@
 	}
 
 	async function stepOnce(count: number) {
+		if (stepBusy || functionRunnerBusy || controlPending || workerHealth !== 'ready') return;
+		if (running && !(await stop())) return;
+		stepBusy = true;
 		if (worker) {
 			try {
 				await workerCall('step', { instructions: count });
 			} catch (err) {
 				lastError = String(err);
 				running = false;
+			} finally {
+				stepBusy = false;
 			}
 			return;
 		}
-		if (!emulator) return;
+		if (!emulator) {
+			stepBusy = false;
+			return;
+		}
+		fallbackStepAbort = new AbortController();
 		try {
-			stepCore(count);
+			await stepBounded(emulator, count, { signal: fallbackStepAbort.signal, onProgress: applyVirtualReleaseBudget });
 			refreshFast();
 			const nowMs = performance.now();
 			refreshUi(nowMs);
@@ -805,29 +872,22 @@
 		} catch (err) {
 			lastError = String(err);
 			running = false;
+		} finally {
+			fallbackStepAbort = null;
+			stepBusy = false;
 		}
 	}
 
 	function stepCore(count: number) {
 		if (!emulator) return;
-		emulator.step(count);
-		applyVirtualReleaseBudget(count);
+		const used = runHostSlice(emulator, count);
+		applyVirtualReleaseBudget(used);
 	}
 
 	function pumpEmulator(id: number) {
 		if (!running || !emulator || id !== runLoopId) return;
-		const startMs = performance.now();
 		try {
-			while (performance.now() - startMs < runMaxWorkMs) {
-				const sliceStart = performance.now();
-				stepCore(runSliceInstructions);
-				const sliceMs = performance.now() - sliceStart;
-				if (sliceMs > 0) {
-					const scaled = Math.floor(runSliceInstructions * (runSliceTargetMs / sliceMs));
-					runSliceInstructions = Math.max(RUN_SLICE_MIN_INSTRUCTIONS, Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled));
-				}
-				if (!running || id !== runLoopId) return;
-			}
+			stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
 		} catch (err) {
 			lastError = String(err);
 			running = false;
@@ -851,53 +911,62 @@
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
-
+		const generation = ++romLoadGeneration;
+		const model = romModel;
+		loadingRom = true;
+		romLoaded = false;
 		lastError = null;
 		try {
 			const bytes = new Uint8Array(await file.arrayBuffer());
-			resetSymbols();
-			perfettoSymbolsPromise = null;
-			romSource = file.name;
 			await ensureWorker();
-			if (worker) {
-				await workerCall('load_rom', { bytes, romSource, model: romModel }, [bytes.buffer]);
-				romLoaded = true;
-				if (callStackOpen) void ensureSymbols();
-				return;
-			}
-			const emu = await ensureEmulator();
-			emu.load_rom_with_model?.(bytes, romModel) ?? emu.load_rom(bytes);
-			romLoaded = true;
-			if (callStackOpen) void ensureSymbols();
-			refreshAllNow();
+			await installRom(bytes, model, file.name, generation);
 		} catch (err) {
-			lastError = String(err);
-			romLoaded = false;
+			if (generation === romLoadGeneration) lastError = String(err);
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
 		}
 	}
 
-	function start() {
-		if (!romLoaded) return;
-		if (running) return;
+	async function start() {
+		if (!romLoaded || running || controlPending || stepBusy || functionRunnerBusy || workerHealth !== 'ready') return;
 		lastLcdTextUpdateMs = 0;
-		running = true;
 		if (worker) {
-			void workerCall('start');
+			controlPending = 'start';
+			try {
+				await workerCall('start');
+				running = true;
+			} catch (error) {
+				lastError = String(error);
+			} finally {
+				if (controlPending === 'start') controlPending = null;
+			}
 			return;
 		}
-		runSliceInstructions = 2000;
+		running = true;
 		runLoopId += 1;
 		pumpEmulator(runLoopId);
 		pumpRender(runLoopId);
 	}
 
-	function stop() {
-		running = false;
+	async function stop(): Promise<boolean> {
 		if (worker) {
-			void workerCall('stop');
-			return;
+			controlPending = 'stop';
+			try {
+				await workerCall('stop');
+				running = false;
+				workerHealth = 'ready';
+				return true;
+			} catch (error) {
+				lastError = String(error);
+				return false;
+			} finally {
+				controlPending = null;
+			}
 		}
+		fallbackStepAbort?.abort();
+		running = false;
 		runLoopId += 1;
+		return true;
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
@@ -941,6 +1010,10 @@
 	}
 
 	onDestroy(() => {
+		workerRequests?.fail(new Error('Emulator page closed'));
+		fallbackStepAbort?.abort();
+		running = false;
+		runLoopId++;
 		if (worker) {
 			worker.terminate();
 			worker = null;
@@ -978,10 +1051,28 @@
 	{/if}
 
 	<div class="controls">
-		<button on:click={() => stepOnce(1_000)} disabled={!romLoaded}>Step 1k</button>
-		<button on:click={() => stepOnce(20_000)} disabled={!romLoaded}>Step 20k</button>
-		<button on:click={start} disabled={!romLoaded || running}>Run</button>
-		<button on:click={stop} disabled={!running}>Stop</button>
+		<button
+			on:click={() => stepOnce(1_000)}
+			disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
+			>Step 1k</button
+		>
+		<button
+			on:click={() => stepOnce(20_000)}
+			disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
+			>Step 20k</button
+		>
+		<button
+			on:click={start}
+			disabled={!romLoaded || running || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
+			>Run</button
+		>
+		<button
+			on:click={stop}
+			disabled={workerHealth === 'faulted' ||
+				controlPending === 'stop' ||
+				(!running && !stepBusy && !functionRunnerBusy && controlPending !== 'start' && workerHealth !== 'unresponsive')}
+			>Stop</button
+		>
 		<label>
 			Target FPS:
 			<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
@@ -1193,12 +1284,9 @@
 
 	{#if romLoaded}
 		<FunctionRunnerPanel
-			disabled={!romLoaded}
+			disabled={!romLoaded || stepBusy || !!controlPending || workerHealth !== 'ready'}
 			busy={functionRunnerBusy}
 			onRun={runFunctionRunner}
-			onBeforeRun={() => {
-				if (running) stop();
-			}}
 		/>
 	{/if}
 

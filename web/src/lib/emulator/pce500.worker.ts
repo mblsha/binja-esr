@@ -3,6 +3,8 @@ import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { createStubDispatcher, type StubDispatcher } from '../debug/sc62015_stub_dispatch';
 import type { StubRegistration } from '../debug/sc62015_stub_types';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
+import { ExecutionCancelled, runHostSlice, stepBounded } from './bounded_step';
+import { WorkerOperations } from './worker_operations';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -13,7 +15,14 @@ type DebugOptions = {
 };
 
 type WorkerRequest =
-	| { id: number; type: 'load_rom'; bytes: Uint8Array; romSource?: string | null; model?: RomModel }
+	| {
+			id: number;
+			type: 'load_rom';
+			bytes: Uint8Array;
+			romSource?: string | null;
+			model?: RomModel;
+			generation?: number;
+	  }
 	| { id: number; type: 'get_model' }
 	| { id: number; type: 'step'; instructions: number }
 	| { id: number; type: 'start' }
@@ -45,6 +54,8 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	model: RomModel;
+	generation: number;
 	lcdPixels: ArrayBuffer;
 	lcdAnnunciatorBytes: ArrayBuffer;
 	lcdChipPixels: ArrayBuffer;
@@ -67,7 +78,6 @@ type Frame = {
 const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const IMEM_BASE = 0x100000;
 
-const RUN_SLICE_MIN_INSTRUCTIONS = 1;
 const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
 const RUN_YIELD_MS = 0;
 
@@ -80,8 +90,11 @@ function formatHostUtcRtcSeed(now = new Date()): string {
 
 let wasm: any = null;
 let emulator: any = null;
+let emulatorReady: Promise<any> | null = null;
+const operations = new WorkerOperations();
 let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 let romModel: RomModel = 'pc-e500';
+let machineGeneration = 0;
 
 let running = false;
 let targetFps = 30;
@@ -94,7 +107,6 @@ let debugOptions: DebugOptions = {
 };
 
 let runLoopId = 0;
-let runSliceInstructions = 2000;
 let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
@@ -153,7 +165,7 @@ async function ensurePerfettoSymbols(): Promise<void> {
 	return perfettoSymbolsPromise;
 }
 
-async function evalScript(source: string): Promise<any> {
+async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 	const { createEvalApi, Reg, Flag } = await import('../debug/sc62015_eval_api');
 	const { runUserJs } = await import('../debug/run_user_js');
 	const { IOCS } = await import('../debug/iocs');
@@ -171,6 +183,7 @@ async function evalScript(source: string): Promise<any> {
 	};
 	const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
 		try {
+			if (signal?.aborted) throw new ExecutionCancelled(0);
 			return await fn();
 		} catch (err) {
 			throw wrapError(context, err);
@@ -219,7 +232,9 @@ async function evalScript(source: string): Promise<any> {
 			}),
 		reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
 		step: async (instructions: number) =>
-			runWithErrorAsync(`step(${instructions})`, () => Promise.resolve(emulator.step?.(instructions))),
+			runWithErrorAsync(`step(${instructions})`, async () => {
+				await stepBounded(emulator, instructions, { signal, onProgress: applyVirtualReleaseBudget });
+			}),
 		getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
 		setReg: (name: string, value: number) =>
 			runWithError(`setReg(${name}=${value})`, () => emulator.set_reg?.(name, value)),
@@ -265,6 +280,17 @@ async function evalScript(source: string): Promise<any> {
 }
 
 async function ensureEmulator(): Promise<any> {
+	if (emulatorReady) return emulatorReady;
+	emulatorReady = initializeEmulator().catch((error) => {
+		emulatorReady = null;
+		emulator = null;
+		wasm = null;
+		throw error;
+	});
+	return emulatorReady;
+}
+
+async function initializeEmulator(): Promise<any> {
 	if (!wasm) {
 		wasm = await import('../wasm/sc62015_wasm');
 		if (typeof wasm.default === 'function') {
@@ -330,9 +356,10 @@ function applyVirtualReleaseBudget(stepped: number) {
 	}
 }
 
-function stepCore(instructions: number) {
-	emulator.step(instructions);
-	applyVirtualReleaseBudget(instructions);
+function stepCore(boundaries: number) {
+	const used = runHostSlice(emulator, boundaries);
+	applyVirtualReleaseBudget(used);
+	return used;
 }
 
 function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: string } | null {
@@ -428,6 +455,8 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		model: romModel,
+		generation: machineGeneration,
 		lcdAnnunciatorBytes: annunciatorBytesCopy.buffer,
 		lcdChipPixels: chipPixelsCopy.buffer,
 		lcdCols,
@@ -457,20 +486,8 @@ function postFrame(frame: Frame) {
 
 function pumpEmulator(id: number) {
 	if (!running || !emulator || id !== runLoopId) return;
-	const runMaxWorkMs = 4;
-	const runSliceTargetMs = 0.4;
-	const startMs = performance.now();
 	try {
-		while (performance.now() - startMs < runMaxWorkMs) {
-			const sliceStart = performance.now();
-			stepCore(runSliceInstructions);
-			const sliceMs = performance.now() - sliceStart;
-			if (sliceMs > 0) {
-				const scaled = Math.floor(runSliceInstructions * (runSliceTargetMs / sliceMs));
-				runSliceInstructions = Math.max(RUN_SLICE_MIN_INSTRUCTIONS, Math.min(RUN_SLICE_MAX_INSTRUCTIONS, scaled));
-			}
-			if (!running || id !== runLoopId) return;
-		}
+		stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
 	} catch (err) {
 		// Crash stops the run loop; render loop will stop too.
 		running = false;
@@ -490,7 +507,7 @@ function pumpRender(id: number) {
 	setTimeout(() => pumpRender(id), delayMs);
 }
 
-async function handleRequest(msg: WorkerRequest) {
+async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 	try {
 		switch (msg.type) {
 			case 'set_options': {
@@ -501,9 +518,12 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'load_rom': {
 				const emu = await ensureEmulator();
+				if (signal?.aborted) throw new ExecutionCancelled(0);
 				romModel = msg.model ?? romModel;
 				perfettoSymbolsPromise = null;
-				emu.load_rom_with_model?.(msg.bytes, romModel) ?? emu.load_rom(msg.bytes);
+				if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(msg.bytes, romModel);
+				else emu.load_rom(msg.bytes);
+				machineGeneration = msg.generation ?? machineGeneration + 1;
 				if (romModel === 'iq-7000' && typeof emu.set_iq7000_rtc_yyyymmddhhmm === 'function') {
 					emu.set_iq7000_rtc_yyyymmddhhmm(formatHostUtcRtcSeed());
 				}
@@ -522,7 +542,7 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'step': {
 				await ensureEmulator();
-				stepCore(msg.instructions);
+				await stepBounded(emulator, msg.instructions, { signal, onProgress: applyVirtualReleaseBudget });
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
 				return;
@@ -546,7 +566,8 @@ async function handleRequest(msg: WorkerRequest) {
 					runLoopId += 1;
 				}
 				await ensureEmulator();
-				const res = await evalScript(msg.source);
+				if (signal?.aborted) throw new ExecutionCancelled(0);
+				const res = await evalScript(msg.source, signal);
 				const scriptError = typeof res?.error === 'string' ? res.error : null;
 				const fatalWasmError =
 					typeof scriptError === 'string' && (isLikelyWasmTrap(scriptError) || isWasmBindgenBorrowError(scriptError));
@@ -570,12 +591,15 @@ async function handleRequest(msg: WorkerRequest) {
 			}
 			case 'start': {
 				await ensureEmulator();
+				if (signal?.aborted) throw new ExecutionCancelled(0);
 				if (!running) {
 					running = true;
-					runSliceInstructions = 2000;
 					runLoopId += 1;
-					pumpEmulator(runLoopId);
-					pumpRender(runLoopId);
+					const id = runLoopId;
+					setTimeout(() => {
+						pumpEmulator(id);
+						pumpRender(id);
+					}, 0);
 				}
 				replyOk(msg.id);
 				return;
@@ -583,7 +607,15 @@ async function handleRequest(msg: WorkerRequest) {
 			case 'stop': {
 				running = false;
 				runLoopId += 1;
+				await operations.stop();
 				replyOk(msg.id);
+				// Ownership has been released. A slow final LCD/text capture
+				// must not delay acknowledgement of the architectural pause.
+				try {
+					if (emulator) postFrame(captureFrame(true));
+				} catch (error) {
+					(self as any).postMessage({ type: 'render_error', error: String(error) });
+				}
 				return;
 			}
 			case 'virtual_key': {
@@ -618,6 +650,24 @@ async function handleRequest(msg: WorkerRequest) {
 	}
 }
 
+async function dispatchRequest(msg: WorkerRequest) {
+	if (['load_rom', 'step', 'eval_js', 'start'].includes(msg.type)) {
+		try {
+			await operations.run(async (signal) => {
+				if (msg.type !== 'start') {
+					running = false;
+					runLoopId++;
+				}
+				await handleRequest(msg, signal);
+			});
+		} catch (error) {
+			replyErr(msg.id, error);
+		}
+	} else {
+		await handleRequest(msg);
+	}
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-	void handleRequest(event.data);
+	void dispatchRequest(event.data);
 };

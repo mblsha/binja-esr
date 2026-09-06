@@ -6,6 +6,9 @@ const realRomMode = process.env.PCE500_E2E_REAL_ROM === '1';
 const syntheticRom = resolve(process.cwd(), 'emulator-wasm/testdata/pf1_demo_rom_window.rom');
 const configuredRom = process.env.PCE500_ROM_PATH ? resolve(process.cwd(), process.env.PCE500_ROM_PATH) : null;
 const romPath = realRomMode ? configuredRom : syntheticRom;
+// CI already builds WASM and Vite before browser checks. Local runs still
+// rebuild by default, so a stale binary cannot silently pass a regression.
+const previewCommand = `npm run preview -- --host 127.0.0.1 --port ${port}`;
 
 export default defineConfig({
 	testDir: './e2e',
@@ -25,7 +28,7 @@ export default defineConfig({
 		},
 	],
 	webServer: {
-		command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${port}`,
+		command: process.env.PCE500_E2E_USE_EXISTING_BUILD === '1' ? previewCommand : `npm run build && ${previewCommand}`,
 		port,
 		reuseExistingServer: !process.env.CI,
 		env: {
