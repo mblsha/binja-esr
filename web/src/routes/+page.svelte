@@ -1187,11 +1187,13 @@
 	<p class="hint">
 		{#if romModel === 'iq-7000'}
 			IQ controls: F1–F5 = Calendar/Schedule/TEL/MEMO/Calc; F6–F8 = Card/World/Home; Page Up/Down = Search; Enter =
-			Store.
+			Store; F11 = newline.
 		{:else}
-			PC-E500 controls: F1–F5 = PF1–PF5, arrows, Enter, Backspace, Delete, Insert and Space.
+			PC-E500 controls: F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear.
 		{/if}
-		Both: Shift, Caps Lock and F12 = ON. This is an initial control subset; full text-key mapping is still being qualified.
+		Both: A–Z, 0–9, arrows, Enter, Backspace, Delete, Insert, Space; F9 = SHIFT; F10 = CAPS; F12 = ON. Device CAPS controls
+		letter case. Host Shift operates device legends, not desktop text composition; use the on-screen operator keys or numeric
+		keypad for arithmetic.
 	</p>
 	{#if lastInputAck}<p class="hint" data-testid="input-ack">{lastInputAck}</p>{/if}
 
@@ -1363,8 +1365,6 @@
 			onRun={runFunctionRunner}
 		/>
 	{/if}
-
-	<p class="hint">Keyboard: F1/F2 (PF1/PF2), arrows (cursor keys). Virtual keyboard supports PF1/PF2 + arrows.</p>
 </main>
 
 <style>

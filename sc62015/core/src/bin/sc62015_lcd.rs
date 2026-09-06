@@ -40,11 +40,6 @@ const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
 const AUTO_TYPE_GAP_STEPS: u64 = 20_000;
 const BASIC_KEY_CODE: u8 = 0x04;
 const ENTER_KEY_CODE: u8 = 0x27;
-const DELETE_KEY_CODE: u8 = 0x4C;
-const BACKSPACE_KEY_CODE: u8 = 0x4D;
-const IQ7000_SHIFT_EVENT_CODE: u8 = 0x01;
-const IQ7000_FUNCTION_EVENT_CODE: u8 = 0x04;
-const IQ7000_CAPS_EVENT_CODE: u8 = 0x09;
 const IMR_MASTER: u8 = 0x80;
 const IMR_KEY: u8 = 0x04;
 const ISR_KEYI: u8 = 0x04;
@@ -287,6 +282,14 @@ mod tests {
         }
         assert!(Args::try_parse_from(["sc62015-lcd", "--target-fps", "0"]).is_err());
         assert!(Args::try_parse_from(["sc62015-lcd", "--target-fps", "61"]).is_err());
+        for flag in ["--auto-basic", "--jump-basic"] {
+            let args = Args::try_parse_from(["sc62015-lcd", "--model", "iq-7000", flag]).unwrap();
+            assert!(validate_execution_args(&args).is_err());
+        }
+        let args =
+            Args::try_parse_from(["sc62015-lcd", "--model", "iq-7000", "--auto-type", "ABC"])
+                .unwrap();
+        assert!(validate_execution_args(&args).is_err());
     }
 
     #[test]
@@ -456,66 +459,81 @@ mod tests {
     }
 
     #[test]
-    fn iq7000_tui_function_keys_inject_shift_caps_events() {
+    fn native_iq_controls_use_physical_contacts_and_never_inject_fifo_events() {
+        for (key, expected, label) in [
+            (KeyCode::F(4), 0x08, "MEMO"),
+            (KeyCode::F(6), 0x1a, "CARD"),
+            (KeyCode::F(9), 0x02, "SHIFT"),
+            (KeyCode::F(10), 0x24, "CAPS"),
+            (KeyCode::F(11), 0x3d, "RETURN"),
+            (KeyCode::Enter, 0x45, "ENTER"),
+            (KeyCode::Left, 0x14, "LEFT"),
+            (KeyCode::Backspace, 0x3c, "BS"),
+            (KeyCode::Char('A'), 0x1c, "A"),
+            (KeyCode::Char('2'), 0x29, "2"),
+        ] {
+            let mut runtime = iq7000_runtime();
+            let mut releases = Vec::new();
+            let feedback = handle_key_event(
+                &mut runtime,
+                KeyEvent::new(key, KeyModifiers::NONE),
+                false,
+                0,
+                &mut releases,
+                &mut Vec::new(),
+                KeyEventOptions {
+                    pending_on_release: &mut None,
+                    force_key_irq: false,
+                    model: DeviceModel::Iq7000,
+                },
+            );
+            assert_eq!(feedback.label.as_deref(), Some(label));
+            assert_eq!(
+                runtime.keyboard.as_ref().unwrap().pressed_matrix_codes(),
+                vec![expected]
+            );
+            assert!(runtime
+                .keyboard
+                .as_ref()
+                .unwrap()
+                .fifo_snapshot()
+                .is_empty());
+            assert_eq!(runtime.instruction_count(), 0);
+            apply_pending_releases(&mut runtime, &mut releases, PF_KEY_HOLD_STEPS);
+            assert!(runtime
+                .keyboard
+                .as_ref()
+                .unwrap()
+                .pressed_matrix_codes()
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn unsupported_iq_text_reports_unmapped_without_contacts_or_fifo_mutation() {
         let mut runtime = iq7000_runtime();
-        let mut pending_on_release = None;
-        let mut pending_releases = Vec::new();
-        let mut pending_presses = Vec::new();
-
+        let mut releases = Vec::new();
+        let mut presses = Vec::new();
         let feedback = handle_key_event(
             &mut runtime,
-            KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
             false,
             0,
-            &mut pending_releases,
-            &mut pending_presses,
+            &mut releases,
+            &mut presses,
             KeyEventOptions {
-                pending_on_release: &mut pending_on_release,
+                pending_on_release: &mut None,
                 force_key_irq: false,
                 model: DeviceModel::Iq7000,
             },
         );
-        assert_eq!(feedback.label.as_deref(), Some("SHIFT"));
-
-        let feedback = handle_key_event(
-            &mut runtime,
-            KeyEvent::new(KeyCode::F(7), KeyModifiers::NONE),
-            false,
-            0,
-            &mut pending_releases,
-            &mut pending_presses,
-            KeyEventOptions {
-                pending_on_release: &mut pending_on_release,
-                force_key_irq: false,
-                model: DeviceModel::Iq7000,
-            },
-        );
-        assert_eq!(feedback.label.as_deref(), Some("CAPS"));
-
-        let feedback = handle_key_event(
-            &mut runtime,
-            KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE),
-            false,
-            0,
-            &mut pending_releases,
-            &mut pending_presses,
-            KeyEventOptions {
-                pending_on_release: &mut pending_on_release,
-                force_key_irq: false,
-                model: DeviceModel::Iq7000,
-            },
-        );
-        assert_eq!(feedback.label.as_deref(), Some("FUNCTION"));
-
-        let fifo = runtime.keyboard.as_ref().expect("keyboard").fifo_snapshot();
-        assert_eq!(
-            fifo,
-            vec![
-                IQ7000_SHIFT_EVENT_CODE,
-                IQ7000_CAPS_EVENT_CODE,
-                IQ7000_FUNCTION_EVENT_CODE,
-            ]
-        );
+        assert_eq!(feedback.label.as_deref(), Some("unmapped::"));
+        assert!(releases.is_empty());
+        assert!(presses.is_empty());
+        let keyboard = runtime.keyboard.as_ref().unwrap();
+        assert!(keyboard.pressed_matrix_codes().is_empty());
+        assert!(keyboard.fifo_snapshot().is_empty());
+        assert_eq!(runtime.cycle_count(), 0);
     }
 }
 
@@ -1198,72 +1216,29 @@ struct BnidaJson {
     functions: Option<Vec<u32>>,
 }
 
-fn matrix_code_for_char(ch: char) -> Option<u8> {
-    let upper = ch.to_ascii_uppercase();
-    match upper {
-        'A' => Some(0x03),
-        'B' => Some(0x15),
-        'C' => Some(0x0D),
-        'D' => Some(0x0B),
-        'E' => Some(0x09),
-        'F' => Some(0x12),
-        'G' => Some(0x13),
-        'H' => Some(0x1A),
-        'I' => Some(0x20),
-        'J' => Some(0x1B),
-        'K' => Some(0x22),
-        'L' => Some(0x23),
-        'M' => Some(0x1D),
-        'N' => Some(0x1C),
-        'O' => Some(0x21),
-        'P' => Some(0x50),
-        'Q' => Some(0x01),
-        'R' => Some(0x10),
-        'S' => Some(0x0A),
-        'T' => Some(0x11),
-        'U' => Some(0x19),
-        'V' => Some(0x14),
-        'W' => Some(0x08),
-        'X' => Some(0x0C),
-        'Y' => Some(0x18),
-        'Z' => Some(0x05),
-        '0' => Some(0x2F),
-        '1' => Some(0x2E),
-        '2' => Some(0x36),
-        '3' => Some(0x3E),
-        '4' => Some(0x2D),
-        '5' => Some(0x35),
-        '6' => Some(0x3D),
-        '7' => Some(0x2C),
-        '8' => Some(0x34),
-        '9' => Some(0x3C),
-        ' ' => Some(0x16),
-        '.' => Some(0x3F),
-        ',' => Some(0x24),
-        ';' => Some(0x25),
-        '+' => Some(0x47),
-        '-' => Some(0x46),
-        '*' => Some(0x45),
-        '/' => Some(0x44),
-        '=' => Some(0x4F),
-        '(' => Some(0x4B),
-        ')' => Some(0x48),
-        _ => None,
-    }
+fn matrix_code_for_char(model: DeviceModel, ch: char) -> Option<u8> {
+    let name = if ch == ' ' {
+        "SPACE".into()
+    } else {
+        ch.to_ascii_uppercase().to_string()
+    };
+    sc62015_core::physical_keys::matrix_key(model, &name)
 }
 
-fn matrix_code_for_ctrl_digit(digit: char) -> Option<u8> {
-    match digit {
-        '1' => Some(0x56),
-        '2' => Some(0x55),
-        '3' => Some(0x54),
-        '4' => Some(0x53),
-        '5' => Some(0x52),
-        _ => None,
+fn char_key_for_tui(model: DeviceModel, ch: char) -> Option<CharKey> {
+    if model == DeviceModel::Iq7000 {
+        return match ch {
+            ',' => Some(CharKey::Shifted {
+                modifier: 0x02,
+                code: 0x0f,
+            }),
+            // SHIFT+period currently produces a period in the foreground ROM
+            // editor, even with separate taps. Do not pretend to compose ':'
+            // or fall back to an injected event until that path is resolved.
+            ':' => None,
+            _ => matrix_code_for_char(model, ch).map(CharKey::Single),
+        };
     }
-}
-
-fn char_key_for_tui(ch: char) -> Option<CharKey> {
     let shifted = |code| CharKey::Shifted {
         modifier: 0x06, // SHIFT
         code,
@@ -1290,12 +1265,12 @@ fn char_key_for_tui(ch: char) -> Option<CharKey> {
         '^' => Some(shifted(0x23)),               // L
         '?' => Some(shifted(0x24)),               // ,
         ':' => Some(shifted(0x25)),               // ;
-        _ => matrix_code_for_char(ch).map(CharKey::Single),
+        _ => matrix_code_for_char(model, ch).map(CharKey::Single),
     }
 }
 
 fn auto_type_gap_for_char(ch: char) -> u64 {
-    match char_key_for_tui(ch) {
+    match char_key_for_tui(DeviceModel::PcE500, ch) {
         Some(CharKey::Shifted { .. }) => SHIFTED_CHORD_LEAD_STEPS
             .saturating_add(CHAR_KEY_HOLD_STEPS)
             .saturating_add(AUTO_TYPE_GAP_STEPS),
@@ -1351,41 +1326,10 @@ fn inject_key(
     }
 }
 
-fn inject_input_event(runtime: &mut CoreRuntime, code: u8, force_key_irq: bool) -> bool {
-    if force_key_irq && !runtime.timer.kb_irq_enabled {
-        runtime.timer.kb_irq_enabled = true;
-    }
-    let Some(kb) = runtime.keyboard.as_mut() else {
-        return false;
-    };
-    let kb_irq_enabled = runtime.timer.kb_irq_enabled || force_key_irq;
-    let events = kb.inject_input_event(code, &mut runtime.memory, kb_irq_enabled);
-    if events == 0 {
-        return false;
-    }
-    if force_key_irq {
-        runtime.timer.key_irq_latched = true;
-        runtime.timer.irq_pending = true;
-        if runtime.timer.irq_source.is_none() && !runtime.timer.in_interrupt {
-            runtime.timer.irq_source = Some("KEY".to_string());
-        }
-    }
-    if force_key_irq {
-        let current = runtime
-            .memory
-            .read_internal_byte(IMEM_IMR_OFFSET)
-            .unwrap_or(0);
-        let next = current | IMR_MASTER | IMR_KEY;
-        if next != current {
-            runtime.memory.write_internal_byte(IMEM_IMR_OFFSET, next);
-            runtime.state.set_reg(RegName::IMR, next as u32);
-        }
-    }
-    true
-}
-
+#[allow(clippy::too_many_arguments)]
 fn inject_char_key(
     runtime: &mut CoreRuntime,
+    model: DeviceModel,
     ch: char,
     executed: u64,
     pending_releases: &mut Vec<PendingRelease>,
@@ -1393,7 +1337,7 @@ fn inject_char_key(
     hold_steps: u64,
     force_key_irq: bool,
 ) -> bool {
-    match char_key_for_tui(ch) {
+    match char_key_for_tui(model, ch) {
         Some(CharKey::Single(code)) => {
             inject_key(
                 runtime,
@@ -1480,6 +1424,39 @@ fn apply_pending_releases(
     }
 }
 
+fn native_function_key(model: DeviceModel, number: u8) -> Option<&'static str> {
+    if model == DeviceModel::Iq7000 {
+        match number {
+            1 => Some("CALENDAR"),
+            2 => Some("SCHEDULE"),
+            3 => Some("TEL"),
+            4 => Some("MEMO"),
+            5 => Some("CALC"),
+            6 => Some("CARD"),
+            7 => Some("WORLD"),
+            8 => Some("HOME"),
+            9 => Some("SHIFT"),
+            10 => Some("CAPS"),
+            11 => Some("RETURN"),
+            _ => None,
+        }
+    } else {
+        match number {
+            1 => Some("PF1"),
+            2 => Some("PF2"),
+            3 => Some("PF3"),
+            4 => Some("PF4"),
+            5 => Some("PF5"),
+            6 => Some("BASIC"),
+            7 => Some("MENU"),
+            8 => Some("CLEAR"),
+            9 => Some("SHIFT"),
+            10 => Some("CAPS"),
+            _ => None,
+        }
+    }
+}
+
 fn handle_key_event(
     runtime: &mut CoreRuntime,
     key: KeyEvent,
@@ -1489,228 +1466,81 @@ fn handle_key_event(
     pending_presses: &mut Vec<PendingPress>,
     options: KeyEventOptions<'_>,
 ) -> KeyFeedback {
+    let none = || KeyFeedback {
+        label: None,
+        quit: false,
+    };
     if key.kind != KeyEventKind::Press {
+        return none();
+    }
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    if control && matches!(key.code, KeyCode::Char('c' | 'C')) {
         return KeyFeedback {
             label: None,
+            quit: true,
+        };
+    }
+    if key.code == KeyCode::F(12) || (control && matches!(key.code, KeyCode::Char('o' | 'O'))) {
+        runtime.press_on_key();
+        *options.pending_on_release = Some(executed.saturating_add(ON_AUTO_HOLD_BOUNDARIES));
+        return KeyFeedback {
+            label: Some("ON".into()),
             quit: false,
         };
     }
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let KeyCode::Char(ch) = key.code {
-            if ch == 'c' || ch == 'C' {
-                return KeyFeedback {
-                    label: None,
-                    quit: true,
-                };
-            }
-            if ch == 'o' || ch == 'O' {
-                runtime.press_on_key();
-                *options.pending_on_release =
-                    Some(executed.saturating_add(ON_AUTO_HOLD_BOUNDARIES));
-                return KeyFeedback {
-                    label: Some("ON".to_string()),
-                    quit: false,
-                };
-            }
-            if let Some(code) = matrix_code_for_ctrl_digit(ch) {
-                inject_key(
-                    runtime,
-                    code,
-                    executed,
-                    pending_releases,
-                    PF_KEY_HOLD_STEPS,
-                    options.force_key_irq,
-                );
-                return KeyFeedback {
-                    label: Some(format!("PF{}", ch)),
-                    quit: false,
-                };
-            }
+    let name = match key.code {
+        KeyCode::F(number) => native_function_key(options.model, number),
+        KeyCode::Enter => Some("ENTER"),
+        KeyCode::Backspace | KeyCode::Char('\u{8}' | '\u{7f}') => Some("BS"),
+        KeyCode::Delete => Some("DEL"),
+        KeyCode::Insert => Some("INS"),
+        KeyCode::Left => Some("LEFT"),
+        KeyCode::Right => Some("RIGHT"),
+        KeyCode::Up => Some("UP"),
+        KeyCode::Down => Some("DOWN"),
+        KeyCode::PageUp => Some("SEARCH_UP"),
+        KeyCode::PageDown => Some("SEARCH_DOWN"),
+        KeyCode::CapsLock => Some("CAPS"),
+        KeyCode::Esc => Some("CLEAR"),
+        KeyCode::Char(ch @ '1'..='5') if control || pf_numbers => {
+            native_function_key(options.model, ch as u8 - b'0')
         }
+        _ => None,
+    };
+    if let Some(name) = name {
+        if let Some(code) = sc62015_core::physical_keys::matrix_key(options.model, name) {
+            inject_key(
+                runtime,
+                code,
+                executed,
+                pending_releases,
+                PF_KEY_HOLD_STEPS,
+                options.force_key_irq,
+            );
+            return KeyFeedback {
+                label: Some(name.into()),
+                quit: false,
+            };
+        }
+        return none();
     }
-    match key.code {
-        KeyCode::CapsLock if options.model == DeviceModel::Iq7000 => {
-            if inject_input_event(runtime, IQ7000_CAPS_EVENT_CODE, options.force_key_irq) {
-                return KeyFeedback {
-                    label: Some("CAPS".to_string()),
-                    quit: false,
-                };
-            }
-        }
-        KeyCode::Enter => {
-            inject_key(
-                runtime,
-                ENTER_KEY_CODE,
-                executed,
-                pending_releases,
-                CHAR_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("ENTER".to_string()),
-                quit: false,
+    // Terminal text is a keycap stream: the device owns CAPS/SHIFT state.
+    // Do not turn host uppercase letters into IQ SHIFT+letter function commands.
+    if !control {
+        if let KeyCode::Char(ch) = key.code {
+            let hold = if options.model == DeviceModel::Iq7000 {
+                PF_KEY_HOLD_STEPS
+            } else {
+                CHAR_KEY_HOLD_STEPS
             };
-        }
-        KeyCode::Backspace => {
-            inject_key(
-                runtime,
-                BACKSPACE_KEY_CODE,
-                executed,
-                pending_releases,
-                CHAR_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("BS".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::Delete => {
-            inject_key(
-                runtime,
-                DELETE_KEY_CODE,
-                executed,
-                pending_releases,
-                CHAR_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("DEL".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(1) => {
-            inject_key(
-                runtime,
-                0x56,
-                executed,
-                pending_releases,
-                PF_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("PF1".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(2) => {
-            inject_key(
-                runtime,
-                0x55,
-                executed,
-                pending_releases,
-                PF_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("PF2".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(3) => {
-            inject_key(
-                runtime,
-                0x54,
-                executed,
-                pending_releases,
-                PF_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("PF3".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(4) => {
-            inject_key(
-                runtime,
-                0x53,
-                executed,
-                pending_releases,
-                PF_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("PF4".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(5) => {
-            inject_key(
-                runtime,
-                0x52,
-                executed,
-                pending_releases,
-                PF_KEY_HOLD_STEPS,
-                options.force_key_irq,
-            );
-            return KeyFeedback {
-                label: Some("PF5".to_string()),
-                quit: false,
-            };
-        }
-        KeyCode::F(6) if options.model == DeviceModel::Iq7000 => {
-            if inject_input_event(runtime, IQ7000_SHIFT_EVENT_CODE, options.force_key_irq) {
-                return KeyFeedback {
-                    label: Some("SHIFT".to_string()),
-                    quit: false,
-                };
-            }
-        }
-        KeyCode::F(7) if options.model == DeviceModel::Iq7000 => {
-            if inject_input_event(runtime, IQ7000_CAPS_EVENT_CODE, options.force_key_irq) {
-                return KeyFeedback {
-                    label: Some("CAPS".to_string()),
-                    quit: false,
-                };
-            }
-        }
-        KeyCode::F(8) if options.model == DeviceModel::Iq7000 => {
-            if inject_input_event(runtime, IQ7000_FUNCTION_EVENT_CODE, options.force_key_irq) {
-                return KeyFeedback {
-                    label: Some("FUNCTION".to_string()),
-                    quit: false,
-                };
-            }
-        }
-        KeyCode::Char(ch) => {
-            if ch == '\u{8}' || ch == '\u{7f}' {
-                inject_key(
-                    runtime,
-                    BACKSPACE_KEY_CODE,
-                    executed,
-                    pending_releases,
-                    CHAR_KEY_HOLD_STEPS,
-                    options.force_key_irq,
-                );
-                return KeyFeedback {
-                    label: Some("BS".to_string()),
-                    quit: false,
-                };
-            }
-            if pf_numbers {
-                if let Some(code) = matrix_code_for_ctrl_digit(ch) {
-                    inject_key(
-                        runtime,
-                        code,
-                        executed,
-                        pending_releases,
-                        PF_KEY_HOLD_STEPS,
-                        options.force_key_irq,
-                    );
-                    return KeyFeedback {
-                        label: Some(format!("PF{}", ch)),
-                        quit: false,
-                    };
-                }
-            }
             if inject_char_key(
                 runtime,
+                options.model,
                 ch,
                 executed,
                 pending_releases,
                 pending_presses,
-                CHAR_KEY_HOLD_STEPS,
+                hold,
                 options.force_key_irq,
             ) {
                 return KeyFeedback {
@@ -1718,13 +1548,13 @@ fn handle_key_event(
                     quit: false,
                 };
             }
+            return KeyFeedback {
+                label: Some(format!("unmapped:{ch}")),
+                quit: false,
+            };
         }
-        _ => {}
     }
-    KeyFeedback {
-        label: None,
-        quit: false,
-    }
+    none()
 }
 
 fn iq7000_host_rtc_seed() -> String {
@@ -1764,6 +1594,11 @@ fn apply_iq7000_rtc_arg(
 }
 
 fn validate_execution_args(args: &Args) -> Result<(), Box<dyn Error>> {
+    if args.model == DeviceModel::Iq7000
+        && (args.auto_basic || args.jump_basic || args.auto_type.is_some())
+    {
+        return Err("PC-E500 --auto-basic/--jump-basic/--auto-type automation is not valid for IQ-7000; use normal model-specific keys".into());
+    }
     if args.refresh_steps == 0 {
         return Err("refresh_steps must be > 0".into());
     }
@@ -1914,6 +1749,7 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
     let mut pending_releases: Vec<PendingRelease> = Vec::new();
     let mut pending_presses: Vec<PendingPress> = Vec::new();
     let mut pending_on_release: Option<u64> = None;
+    let mut terminal_key_gap: Option<u64> = None;
     let mut auto_type_queue: Vec<char> =
         args.auto_type.clone().unwrap_or_default().chars().collect();
     let mut auto_type_next_step: Option<u64> = None;
@@ -1986,6 +1822,7 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                 let requested = host.controls.state();
                 if requested != observed {
                     if requested.release_epoch != observed.release_epoch {
+                        terminal_key_gap = None;
                         release_host_inputs(
                             &mut runtime,
                             &mut pending_releases,
@@ -2052,6 +1889,7 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                         pending_on_release,
                         auto_basic_step,
                         auto_type_next_step,
+                        terminal_key_gap,
                         ((auto_basic_pending
                             || jump_basic_pending
                             || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
@@ -2089,6 +1927,9 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                     remaining = remaining.saturating_sub(used);
                 }
                 if !observed.paused {
+                    if terminal_key_gap.is_some_and(|deadline| executed >= deadline) {
+                        terminal_key_gap = None;
+                    }
                     if apply_pending_presses(
                         &mut runtime,
                         &mut pending_presses,
@@ -2143,6 +1984,7 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                                     }
                                     _ => inject_char_key(
                                         &mut runtime,
+                                        args.model,
                                         ch,
                                         executed,
                                         &mut pending_releases,
@@ -2208,8 +2050,14 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                 } // Freeze budget-scheduled taps and automation while paused.
 
                 if use_tty {
-                    let (epoch, keys) = host.controls.take_batch();
+                    let ready = !observed.paused
+                        && pending_releases.is_empty()
+                        && pending_presses.is_empty()
+                        && pending_on_release.is_none()
+                        && terminal_key_gap.is_none();
+                    let (epoch, keys) = host.controls.take_batch_limit(usize::from(ready));
                     if epoch != observed.release_epoch {
+                        terminal_key_gap = None;
                         release_host_inputs(
                             &mut runtime,
                             &mut pending_releases,
@@ -2245,6 +2093,18 @@ fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
                             break;
                         }
                         if let Some(label) = feedback.label {
+                            let release = pending_releases
+                                .iter()
+                                .map(|p| p.due_step)
+                                .chain(pending_on_release)
+                                .max()
+                                .unwrap_or(executed);
+                            let gap = if args.model == DeviceModel::Iq7000 {
+                                40_000
+                            } else {
+                                20_000
+                            };
+                            terminal_key_gap = Some(release.saturating_add(gap));
                             last_key = Some(label);
                             last_key_step = executed;
                             dirty = true;

@@ -97,8 +97,13 @@ impl<E> ControlInbox<E> {
     /// already-drained batch if focus loss/overflow advances that epoch again.
     /// Pause requests alone do not invalidate key releases in a drained batch.
     pub fn take_batch(&self) -> (u64, Vec<E>) {
+        self.take_batch_limit(INPUT_BATCH)
+    }
+    /// A tap-based terminal consumes at most one event until its previous
+    /// contact has released. Keep the backlog here so overflow stays bounded.
+    pub fn take_batch_limit(&self, limit: usize) -> (u64, Vec<E>) {
         let mut events = self.events.lock().unwrap();
-        let count = events.len().min(INPUT_BATCH);
+        let count = events.len().min(INPUT_BATCH).min(limit);
         let epoch = self.release_epoch.load(Ordering::Acquire);
         (epoch, events.drain(..count).collect())
     }
@@ -314,6 +319,19 @@ mod tests {
         assert_ne!(inbox.state().release_epoch, epoch);
         inbox.push("new down");
         assert_eq!(inbox.take_batch(), (epoch + 1, vec!["new down"]));
+    }
+
+    #[test]
+    fn serialized_taps_leave_the_remainder_in_the_bounded_queue() {
+        let inbox = ControlInbox::default();
+        for key in ['A', 'B', 'C'] {
+            inbox.push(key);
+        }
+        assert_eq!(inbox.take_batch_limit(0), (0, vec![]));
+        assert_eq!(inbox.take_batch_limit(1), (0, vec!['A']));
+        assert_eq!(inbox.take_batch_limit(1), (0, vec!['B']));
+        inbox.release_all();
+        assert_eq!(inbox.take_batch_limit(1), (1, vec![]));
     }
 
     #[test]

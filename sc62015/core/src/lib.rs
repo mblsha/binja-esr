@@ -20,6 +20,7 @@ pub mod pacing;
 pub mod pce500;
 pub mod pce500_peripherals;
 pub mod perfetto;
+pub mod physical_keys;
 pub mod run_control;
 pub mod sio;
 pub mod snapshot;
