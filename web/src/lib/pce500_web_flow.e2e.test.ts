@@ -80,6 +80,11 @@ describe('PC-E500 web emulator', () => {
 
 		const step20k = getByText('Step 20k') as HTMLButtonElement;
 		await waitFor(() => expect(step20k.disabled).toBe(false));
+		const lcdPanel = getByText('LCD (decoded text)').closest('details')!;
+		expect(lcdPanel.open).toBe(false);
+		expect(getByText('Call stack').closest('details')!.open).toBe(false);
+		lcdPanel.open = true;
+		await fireEvent(lcdPanel, new Event('toggle'));
 
 		await fireEvent.click(step20k);
 		await waitFor(() => expect(step20k.disabled).toBe(false));
@@ -158,6 +163,9 @@ describe('PC-E500 web emulator', () => {
 
 		const step20k = getByText('Step 20k') as HTMLButtonElement;
 		await waitFor(() => expect(step20k.disabled).toBe(false));
+		const lcdPanel = getByText('LCD (decoded text)').closest('details')!;
+		lcdPanel.open = true;
+		await fireEvent(lcdPanel, new Event('toggle'));
 
 		// Ensure ROM is loaded (the function runner uses the same emulator instance).
 		await fireEvent.click(step20k);

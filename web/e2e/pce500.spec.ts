@@ -7,6 +7,7 @@ test('PF1 click changes decoded LCD text', async ({ page }) => {
 
 	const step20k = page.getByRole('button', { name: 'Step 20k' });
 	await expect(step20k).toBeEnabled();
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
 
 	await step20k.click();
 	await expect(page.getByTestId('lcd-text')).toContainText('BOOT');

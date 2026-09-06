@@ -17,6 +17,7 @@ test('real ROM: PF1 changes boot menu', async ({ page }) => {
 	await page.goto('/');
 
 	await page.getByTestId('rom-model').selectOption('pc-e500');
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
 
 	// Boot: the ROM should render the S2(CARD) header after initial init.
 	await clickStep20k(page, 1);

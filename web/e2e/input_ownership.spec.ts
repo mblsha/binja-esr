@@ -168,6 +168,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 test('real IQ ROM consumes the browser physical MEMO and CAPS controls', async ({ page }, info) => {
 	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
 	await open(page, 'iq-7000', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
 	await request(page, 'step', { instructions: 500_000 });
 	await page.getByTestId('vk-memo').click();
 	await request(page, 'step', { instructions: 200_000 });

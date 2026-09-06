@@ -55,6 +55,8 @@ for (const model of ['pc-e500', 'iq-7000']) {
 								sequence: data.sequence,
 								model: data.frame.model,
 								generation: data.frame.generation,
+								lcdText: data.frame.lcdText,
+								callStack: data.frame.callStack,
 							});
 					});
 				}
@@ -67,6 +69,12 @@ for (const model of ['pc-e500', 'iq-7000']) {
 		await page.goto('/');
 		await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.inFlight)).toBeNull();
+		const frames = await page.evaluate(() => (window as any).__displayHarness.received);
+		expect(frames.length).toBeGreaterThan(0);
+		for (const frame of frames) {
+			expect(frame.lcdText).toBeNull();
+			expect(frame.callStack).toBeNull();
+		}
 		await page.evaluate(() => {
 			const h = (window as any).__displayHarness;
 			h.holdCredit = true;

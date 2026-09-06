@@ -116,8 +116,8 @@ let running = false;
 let targetFps = 30;
 let debugOptions: DebugOptions = {
 	regsOpen: false,
-	callStackOpen: true,
-	lcdTextOpen: true,
+	callStackOpen: false,
+	lcdTextOpen: false,
 	debugStateOpen: false,
 	keyboardDebugOpen: false,
 };

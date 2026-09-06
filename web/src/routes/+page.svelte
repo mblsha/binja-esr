@@ -84,8 +84,8 @@
 	let physicalKeyboardEnabled = false;
 	let keyboardDebugOpen = false;
 	let regsOpen = false;
-	let callStackOpen = true;
-	let lcdTextOpen = true;
+	let callStackOpen = false;
+	let lcdTextOpen = false;
 	let debugStateOpen = false;
 	let physicalKeyboardHookInstalled = false;
 	let mounted = false;

@@ -7,6 +7,7 @@ test('physical keyboard: holding F1 changes decoded LCD text', async ({ page }) 
 
 	const step20k = page.getByRole('button', { name: 'Step 20k' });
 	await expect(step20k).toBeEnabled();
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
 
 	const keyboardToggle = page.getByTestId('physical-keyboard-toggle');
 	await expect(keyboardToggle).not.toBeChecked();
