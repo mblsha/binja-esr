@@ -1,8 +1,133 @@
 # Rust interactive-emulator responsiveness
 
-Status: active, staged implementation. Applies to the PC-E500 and IQ-7000
+Status: responsiveness v1 completed and verified locally on 2026-09-06.
+Applies to PC-E500 and IQ-7000
 Rust machines, native terminal frontend, and browser/WASM frontend. Python
 emulator implementation is explicitly outside this work's scope.
+
+## Responsiveness v1 acceptance (current scope)
+
+The original broad goal was cancelled and replaced with this bounded release
+on 2026-09-06. The stage reports below are chronological records, not additional
+v1 prerequisites. No PR, push, Python implementation or hardware work is needed.
+
+- [x] Integrate independent native input/output workers, acknowledged Ctrl+P
+  Pause/Resume and priority Ctrl+C Quit without sharing the machine with I/O.
+- [x] Actual native process tests verify frozen boundary counts after Pause,
+  progress after Resume, and shutdown/raw-mode restoration with full stdout
+  and full stdout+stderr pipes. Both models cover normal control handling.
+- [x] Verify focus-loss/exit contact cleanup and stale-queue invalidation;
+  rerun browser source-ownership and script-cancellation regressions.
+- [x] Verify latest-only native/browser delivery and opt-in expensive normal
+  display diagnostics against the rebuilt frontend.
+- [x] Run affected Rust/WASM/frontend checks and architectural chunking/bus-order
+  regressions; explicitly run both private-ROM smoke paths.
+- [x] Commit verified native integration and browser defaults separately;
+  record final results here and leave no uncommitted implementation changes.
+
+### Native v1 contract
+
+Only the machine thread owns `CoreRuntime`. Input polls on its own thread;
+pause, quit and focus-loss notifications bypass the bounded 128-event key
+queue. Overflow clears stale events/contacts, requests Pause, and reports loss.
+Input batches carry a focus/release epoch so an old queued DOWN cannot undo
+focus cleanup; a pause-only request does not discard queued UP events.
+
+Display delivery retains one in-flight frame and one newest pending frame.
+LCD text decoding and terminal writes run on the output thread using immutable
+display copies. Status acknowledgements describe applied machine controls,
+but a blocked output consumer cannot see them until it resumes reading.
+Shutdown allows 250 ms to drain output, then reports an incomplete display with
+exit code 2 and restores raw input mode independently. It does not wait forever
+for blocked stdout/stderr. Cursor/alternate-screen escape restoration cannot be
+guaranteed when output is blocked. Unix process behavior is tested on macOS;
+the Windows handle adapter is not independently qualified here.
+
+Normal native debug-state formatting requires `--debug-state`; loop diagnostics
+require `--loop-diagnostics` or an explicit report. Browser call-stack and
+decoded-LCD panels default closed and request data only when opened. These
+changes do not bound every explicit trace/snapshot/artifact operation.
+
+### Follow-ups, not v1 gates
+
+Complete native/browser character and navigation maps; replace native IQ's
+legacy translated-event shortcuts with fully ROM-qualified contacts; comprehensive
+artifact/trace budgets and fault taxonomy; extended background/reload/long
+instruction stress and statistical latency qualification. Native terminal taps
+remain assisted boundary-scheduled input, not a physical keyboard timing proof.
+The existing cooperative 4 ms target is not hard instruction preemption, a
+guaranteed latency percentile, or measured silicon timing. Application-wide
+correctness and hardware calibration remain separate work.
+
+### Final v1 verification
+
+- **568 Rust tests passed**, six existing ignored tests plus the separately
+  opt-in ROM test. Core Clippy and formatting passed. New tests cover bounded
+  input batches, overflow/focus epochs, actual contact cleanup, latest-frame
+  replacement under blocked writes, output errors and bounded shutdown.
+- **Two actual-process PTY tests passed** (four subprocess scenarios): normal
+  Pause/Resume/Quit for both model profiles, full stdout, and full stdout plus
+  stderr. Pause acknowledgements include applied boundary counts; subsequent
+  heartbeats remain frozen until Resume. Every subprocess has kill/reap cleanup
+  and three-second observation deadlines. These are regression deadlines, not
+  a promised three-second UI latency or percentile measurement.
+- **26 WASM tests and 111 frontend tests passed.** WASM Clippy, Svelte checks
+  (zero errors/warnings), and frontend formatting passed. The WASM dependency
+  still emits the previously recorded 18 feature-gated warnings.
+- The repository-wide Rust/Python annotation checker still reports eleven
+  failures in files untouched by v1 (missing annotations or the absent legacy
+  `iq7000/emulator.py` reference). They are not new Rust test failures and are
+  not silently fixed by creating Python implementation placeholders. Annotation
+  validation of all eight Rust files changed by v1 passes.
+- **36 compiled Chromium regressions passed**, with four opt-in ROM cases
+  skipped in that public run. This includes huge step/call cancellation,
+  non-yielding script/stub/probe/trace cancellation, owner-specific key cleanup,
+  model replacement and latest-frame backpressure. Repeated latency measurement
+  cases were deliberately excluded from this v1 gate.
+- **All four private-ROM browser checks passed separately** against that build:
+  PC-E500 PF1, traced debugger call, IQ-7000 annunciators, and foreground
+  physical MEMO/CAPS input. No synthetic screen or keyboard FIFO insertion is
+  presented as real-ROM input evidence.
+- The **two-ROM release comparison passed** at one million boundaries per
+  model: direct, sliced, interactive-paced and turbo execution matched CPU,
+  RAM, timers, RTC and LCD state. Immutable text-frame copies decoded identically
+  to live controllers and retained their text after controller reset.
+- The current release **native executable booted both actual ROMs** for one
+  million boundaries and exited successfully with final decoded displays:
+  PC-E500 card initialization menu (12,280 retired; 1,208,846 timing units) and
+  IQ-7000 September 2026 calendar (451,776 retired; 2,208,962 timing units, fixed
+  RTC seed). This is boot/render evidence, not complete native app-input proof.
+
+Reference host: Apple M1 Ultra, macOS 26.6 / Darwin 25.6.0, Chromium 143.0.7499.4.
+The new native tests run in the existing all-targets Rust CI suite; browser
+regressions use the existing short control checks. No hour-long mandatory
+private-ROM or hardware CI stage was added.
+
+Reproduce native checks from the public repository:
+
+```bash
+cargo test --offline --manifest-path sc62015/core/Cargo.toml --all-targets --all-features
+cargo test --offline --release --manifest-path sc62015/core/Cargo.toml --test run_control_rom -- --ignored --nocapture
+cargo clippy --offline --manifest-path sc62015/core/Cargo.toml --all-targets --all-features -- -D warnings
+```
+
+Reproduce the bounded browser suite from `web/`:
+
+```bash
+npm run wasm:test
+npm run test:ci
+npm run check:ci
+CI=1 PCE500_E2E_PORT=4197 npm run e2e -- --workers=1 --grep-invert 'measure acknowledged Pause'
+```
+
+The existing real-ROM commands in the stage records below remain opt-in;
+missing ROM evidence is not replaced with a synthetic fixture.
+
+Implementation commits: `0602f24` (native isolation/control integration) and
+`fd2956e` (browser opt-in display diagnostics). They extend the thirteen earlier
+responsiveness commits on `codex/rust-interactive-responsiveness`; no commits
+were pushed or submitted as PRs. The private checkout's already-advanced
+`public-src` gitlink is intentionally not repinned by this public-source goal.
 
 ## Contract
 
@@ -15,7 +140,7 @@ Keep CPU-relative timing, independently elapsed OFF time, host monotonic
 execution budgets, and display presentation cadence distinct. Interactive
 pacing is not proof of physically calibrated instruction timing.
 
-## Deliverables
+## Original broader roadmap (historical)
 
 1. **Bounded execution foundation:** shared Rust `CoreRuntime::run_slice`,
    native terminal adoption, opt-in expensive loop diagnostics, and deterministic
@@ -108,7 +233,7 @@ cargo test --offline --release --manifest-path sc62015/core/Cargo.toml \
   --test run_control_rom -- --ignored --nocapture
 ```
 
-## Exit criteria still to establish
+## Original extended qualification targets (follow-up)
 
 - Record foreground input-application and Pause acknowledgement latency
   distributions (initial p99 Pause target: under 50 ms on a reference host).

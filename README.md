@@ -76,12 +76,16 @@ Notes:
   evidence that ordinary keyboard input or HALT wake is correct.
 - Use `--card auto|present|absent` to control memory card slot state. `auto`
   selects a blank writable PC-E500 card and an absent IQ-7000 card.
-- Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.
+- PC-E500 keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`.
+- Ctrl+P pauses/resumes after machine acknowledgement; Ctrl+C exits. Slow terminal
+  output is isolated from machine execution and priority controls.
+- Use `--debug-state` for call-stack/keyboard details; expensive diagnostics are
+  off by default. Browser decoded-text and call-stack panels are also opt-in.
 
-The active [Rust interactive-responsiveness plan](docs/rust_interactive_responsiveness.md)
-tracks bounded execution, reliable controls/input, pacing, and remaining browser
-and terminal qualification. Faster-than-realtime throughput alone is not proof
-of responsive interaction.
+The [Rust responsiveness v1 acceptance record and follow-ups](docs/rust_interactive_responsiveness.md)
+cover bounded execution, controls/input, pacing, and current limitations,
+including partial native IQ-7000 key mappings. Faster-than-realtime throughput
+alone is not proof of responsive interaction.
 
 The headless runner (`--bin pce500`) also supports reusable IQ-7000 probe captures:
 
