@@ -7,6 +7,7 @@
 	export let rows = LCD_ROWS;
 	export let scale = 4;
 	export let pixelFormat: 'palette' | 'gray8' = 'palette';
+	export let fit = false;
 
 	let canvas: HTMLCanvasElement | null = null;
 
@@ -33,5 +34,7 @@
 	bind:this={canvas}
 	width={cols}
 	height={rows}
-	style={`width:${cols * scale}px;height:${rows * scale}px;image-rendering:pixelated;`}
+	style={fit
+		? `display:block;width:100%;height:auto;max-height:100%;object-fit:contain;image-rendering:pixelated;`
+		: `width:${cols * scale}px;height:${rows * scale}px;image-rendering:pixelated;`}
 ></canvas>

@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HostInputs, type InputContact, type InputSource } from './host_inputs';
+import {
+	HostInputs,
+	InputBufferOverflow,
+	TYPING_GAP,
+	TYPING_HOLD,
+	type InputContact,
+	type InputSource,
+} from './host_inputs';
 import { stepBounded } from './bounded_step';
 
 function setup() {
@@ -131,5 +138,132 @@ describe('host contact ownership', () => {
 			]);
 			expect(boundaries).toBe(100);
 		}
+	});
+});
+
+describe('buffered typing through physical contacts', () => {
+	const key = (inputs: HostInputs, owner: string, contact: number, down: boolean) =>
+		inputs.set({ source: 'physical', owner, contact, down, buffered: true });
+	const advance = (inputs: HostInputs, budget: number) => {
+		while (budget) {
+			const used = inputs.limitBudget(budget);
+			expect(used).toBeGreaterThan(0);
+			inputs.advance(used);
+			budget -= used;
+		}
+	};
+	it('holds zero-duration taps and separates repeated keys with a release gap', () => {
+		const { inputs, sink } = setup();
+		for (const contact of [1, 1, 2]) {
+			key(inputs, 'host', contact, true);
+			key(inputs, 'host', contact, false);
+		}
+		expect(inputs.typingStatus().pending).toBe(3);
+		expect(sink.mock.calls).toEqual([[1, true]]);
+		advance(inputs, TYPING_HOLD);
+		expect(sink.mock.calls).toEqual([
+			[1, true],
+			[1, false],
+		]);
+		advance(inputs, TYPING_GAP - 1);
+		expect(sink).toHaveBeenCalledTimes(2);
+		advance(inputs, 1);
+		expect(sink.mock.calls.at(-1)).toEqual([1, true]);
+		advance(inputs, TYPING_HOLD + TYPING_GAP + TYPING_HOLD);
+		expect(sink.mock.calls).toEqual([
+			[1, true],
+			[1, false],
+			[1, true],
+			[1, false],
+			[2, true],
+			[2, false],
+		]);
+		expect(inputs.typingStatus().pending).toBe(0);
+	});
+	it('limits catch-up to scan time and stops accelerating a sustained hold', () => {
+		const { inputs } = setup();
+		expect(inputs.typingBoostBudget(200_000)).toBe(0);
+		key(inputs, 'A', 1, true);
+		expect(inputs.typingBoostBudget(200_000)).toBe(TYPING_HOLD);
+		advance(inputs, TYPING_HOLD);
+		key(inputs, 'B', 2, true);
+		key(inputs, 'B', 2, false);
+		expect(inputs.typingBoostBudget(200_000)).toBe(0); // A still held, not turbo-repeat.
+		key(inputs, 'A', 1, false);
+		expect(inputs.typingBoostBudget(200_000)).toBe(TYPING_GAP);
+		advance(inputs, TYPING_GAP + TYPING_HOLD);
+		expect(inputs.typingBoostBudget(200_000)).toBe(0);
+	});
+	it('preserves overlapping key-down order, even when later keys are released first', () => {
+		const { inputs, sink } = setup();
+		key(inputs, 'A', 1, true);
+		key(inputs, 'B', 2, true);
+		key(inputs, 'B', 2, false);
+		advance(inputs, TYPING_HOLD * 2);
+		expect(sink.mock.calls).toEqual([[1, true]]);
+		key(inputs, 'A', 1, false);
+		advance(inputs, TYPING_GAP + TYPING_HOLD);
+		expect(sink.mock.calls).toEqual([
+			[1, true],
+			[1, false],
+			[2, true],
+			[2, false],
+		]);
+	});
+	it('cancels already-released queued taps while paused and preserves other owners', () => {
+		const { inputs, sink, set } = setup();
+		set('virtual', true, 0, 1);
+		key(inputs, 'A', 1, true);
+		key(inputs, 'A', 1, false);
+		key(inputs, 'B', 2, true);
+		key(inputs, 'B', 2, false);
+		inputs.releaseSource('physical');
+		advance(inputs, 1_000_000);
+		expect(sink.mock.calls).toEqual([[1, true]]);
+		expect(inputs.typingStatus().pending).toBe(0);
+		inputs.clear();
+		expect(sink.mock.calls.at(-1)).toEqual([1, false]);
+	});
+	it('does not count time while paused or lose the gap when the queue temporarily empties', () => {
+		const { inputs, sink } = setup();
+		key(inputs, 'A', 1, true);
+		key(inputs, 'A', 1, false);
+		for (let i = 0; i < 10; i++) inputs.advance(0);
+		expect(sink.mock.calls).toEqual([[1, true]]);
+		advance(inputs, TYPING_HOLD);
+		advance(inputs, TYPING_GAP / 2);
+		key(inputs, 'A', 1, true);
+		key(inputs, 'A', 1, false);
+		expect(sink).toHaveBeenCalledTimes(2);
+		advance(inputs, TYPING_GAP / 2);
+		expect(sink.mock.calls.at(-1)).toEqual([1, true]);
+	});
+	it('blocks the rest of an overflowing burst until explicit cleanup', () => {
+		const { inputs, sink } = setup();
+		for (let i = 0; i < 128; i++) {
+			key(inputs, 'A', 1, true);
+			key(inputs, 'A', 1, false);
+		}
+		expect(() => key(inputs, 'A', 1, true)).toThrow(InputBufferOverflow);
+		expect(inputs.typingStatus()).toEqual({ pending: 0, blocked: true, capacity: 128 });
+		expect(sink.mock.calls).toEqual([
+			[1, true],
+			[1, false],
+		]);
+		expect(() => key(inputs, 'B', 2, true)).toThrow(InputBufferOverflow);
+		inputs.clear();
+		key(inputs, 'B', 2, true);
+		expect(sink.mock.calls.at(-1)).toEqual([2, true]);
+	});
+	it('ignores repeat DOWNs, validates before mutation, and refuses buffered ON', () => {
+		const { inputs } = setup();
+		key(inputs, 'A', 1, true);
+		key(inputs, 'A', 1, true);
+		expect(inputs.typingStatus().pending).toBe(1);
+		expect(() => key(inputs, 'A', 2, true)).toThrow('old typing contact');
+		expect(() => inputs.set({ source: 'physical', owner: 'ON', contact: 'on', down: true, buffered: true })).toThrow(
+			'matrix key',
+		);
+		expect(inputs.typingStatus().pending).toBe(1);
 	});
 });

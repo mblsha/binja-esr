@@ -1,5 +1,60 @@
 import { describe, expect, it } from 'vitest';
-import { matrixCodeForKeyEvent, physicalKey, virtualKeysForModel } from './keymap';
+import { contactsForKeyEvent, hostKeyHints, matrixCodeForKeyEvent, physicalKey, virtualKeysForModel } from './keymap';
+
+describe('host letters and symbols', () => {
+	const event = (code: string, key: string, shiftKey = false) => new KeyboardEvent('keydown', { code, key, shiftKey });
+	for (const model of ['pc-e500', 'iq-7000'] as const) {
+		it(`${model}: follows host layout and shifted symbols without guest Shift`, () => {
+			for (const [code, key] of [
+				['KeyQ', 'a'],
+				['KeyY', 'z'],
+				['Digit1', '1'],
+				['Equal', '+'],
+				['Digit8', '*'],
+				['Slash', '/'],
+				['NumpadDecimal', '.'],
+			])
+				expect(contactsForKeyEvent(event(code, key, true), model, 'symbols')).toEqual([
+					physicalKey(model, key.toUpperCase()),
+				]);
+			expect(contactsForKeyEvent(event('ShiftLeft', 'Shift'), model, 'symbols')).toEqual([]);
+			expect(contactsForKeyEvent(event('F9', 'F9'), model, 'symbols')).toEqual([physicalKey(model, 'SHIFT')]);
+			expect(contactsForKeyEvent(event('Digit1', '!'), model, 'symbols')).toEqual([]);
+			expect(contactsForKeyEvent(event('Quote', 'Dead'), model, 'symbols')).toEqual([]);
+			expect(contactsForKeyEvent(event('KeyA', 'é'), model, 'symbols')).toEqual([]);
+		});
+		it(`${model}: retains positional device-key mapping in raw mode`, () => {
+			expect(contactsForKeyEvent(event('ShiftLeft', 'Shift'), model, 'keycaps')).toEqual([physicalKey(model, 'SHIFT')]);
+			expect(contactsForKeyEvent(event('KeyQ', 'a'), model, 'keycaps')).toEqual([physicalKey(model, 'Q')]);
+			expect(contactsForKeyEvent(event('Equal', '+', true), model, 'keycaps')).toEqual([physicalKey(model, '=')]);
+		});
+		it(`${model}: respects keypad navigation with Num Lock off`, () => {
+			expect(contactsForKeyEvent(event('Numpad2', 'ArrowDown'), model, 'symbols')).toEqual([
+				physicalKey(model, 'DOWN'),
+			]);
+			expect(contactsForKeyEvent(event('Numpad0', 'Insert'), model, 'symbols')).toEqual([physicalKey(model, 'INS')]);
+			expect(contactsForKeyEvent(event('NumpadEnter', 'Enter'), model, 'symbols')).toEqual([physicalKey(model, '=')]);
+		});
+	}
+	it('rejects unqualified IQ punctuation and offers laptop newline', () => {
+		expect(contactsForKeyEvent(event('Comma', ','), 'iq-7000', 'symbols')).toEqual([]);
+		expect(contactsForKeyEvent(event('Semicolon', ':', true), 'iq-7000', 'symbols')).toEqual([]);
+		expect(contactsForKeyEvent(event('Enter', 'Enter', true), 'iq-7000', 'symbols')).toEqual([0x3d]);
+		expect(contactsForKeyEvent(event('Enter', 'Enter'), 'iq-7000', 'symbols')).toEqual([0x45]);
+	});
+	it('maps PC parentheses and provides a browser-safe CTRL alias', () => {
+		expect(contactsForKeyEvent(event('Digit9', '(', true), 'pc-e500', 'symbols')).toEqual([0x4b]);
+		expect(contactsForKeyEvent(event('Digit0', ')', true), 'pc-e500', 'symbols')).toEqual([0x48]);
+		expect(contactsForKeyEvent(event('F11', 'F11'), 'pc-e500', 'symbols')).toEqual([0x07]);
+	});
+	it('explains usable host shortcuts without claiming host Control or raw Shift in symbol mode', () => {
+		expect(hostKeyHints(0x06, 'pc-e500', 'symbols')).toBe('F9');
+		expect(hostKeyHints(0x06, 'pc-e500', 'keycaps')).toBe('Shift / F9');
+		expect(hostKeyHints(0x07, 'pc-e500', 'symbols')).toBe('F11');
+		expect(hostKeyHints(0x1f, 'pc-e500', 'symbols')).toBe('ArrowLeft');
+		expect(hostKeyHints('on', 'iq-7000', 'symbols')).toBe('F12');
+	});
+});
 
 describe('matrixCodeForKeyEvent', () => {
 	it('maps PF keys', () => {

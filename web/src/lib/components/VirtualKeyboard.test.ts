@@ -1,9 +1,26 @@
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import VirtualKeyboard from './VirtualKeyboard.svelte';
+import { deviceLayout } from '../device_layout';
 
 describe('VirtualKeyboard', () => {
 	afterEach(() => cleanup());
+
+	it('device geometry retains physical actions and disables unqualified keycaps', async () => {
+		const onPress = vi.fn();
+		const onRelease = vi.fn();
+		const layout = deviceLayout('iq-7000');
+		const { getByTestId, getByRole } = render(VirtualKeyboard, { model: 'iq-7000', layout, onPress, onRelease });
+		await fireEvent.pointerDown(getByTestId('vk-a'));
+		await fireEvent.pointerUp(window);
+		expect(onPress).toHaveBeenCalledWith(0x1c, expect.any(String));
+		expect(onRelease).toHaveBeenCalledWith(0x1c, expect.any(String), false);
+		const off = getByRole('button', { name: 'OFF (unmapped)' }) as HTMLButtonElement;
+		expect(off.disabled).toBe(true);
+		await fireEvent.pointerDown(off);
+		await fireEvent.click(off);
+		expect(onPress).toHaveBeenCalledTimes(1);
+	});
 
 	it('calls onPress/onRelease for PF1', async () => {
 		const onPress = vi.fn();

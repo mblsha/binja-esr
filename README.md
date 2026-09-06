@@ -171,6 +171,18 @@ serialized assisted keycap stream, not a faithful host-key hold/release stream.
 The status line shows all thirteen candidate flags and preserves unknown bits.
 See [Rust input correctness](docs/rust_input_correctness.md) for controls,
 real-ROM acceptance, the PC-E500 BASIC blocker, and remaining limitations.
+In the browser, click **Type on device** above the case, then **Run** for live
+input. **Letters & symbols** follows your keyboard layout and accepts shifted
+operators without a numeric keypad; **Device keycaps** preserves positional
+keys and raw host Shift. F9 always operates device SHIFT; device CAPS owns case.
+Hover a key for its host bindings. Host shortcuts and text fields are excluded.
+Fast typing is buffered in order through real contacts. **Speed up while typing**
+briefly accelerates scan/release work (including emulated RTC time); disable it
+to retain nominal timing. Pausing freezes the queue; **Clear queued keys** cancels
+it. No keys are inserted into the ROM keyboard FIFO.
+The browser now uses reference-based physical case/key layouts for both devices.
+See [device appearance and scan handoff](docs/wasm_device_appearance.md) for the
+visual audit, unmapped-button policy, and the path to measured/photo/3D assets.
 
 `CoreRuntime::set_external_interrupt_level` is currently a neutral API/test
 hook. Its level-sensitive EXI re-latch policy is an explicit emulator model

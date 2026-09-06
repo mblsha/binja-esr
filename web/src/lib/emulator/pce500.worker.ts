@@ -6,7 +6,7 @@ import { automaticHostSlice, type ExecutionMode, type PacingStatus } from './hos
 import { WorkerOperations } from './worker_operations';
 import { callBounded } from './bounded_call';
 import { runIsolatedScript } from './isolated_script';
-import { applyContact, HostInputs, type InputContact } from './host_inputs';
+import { applyContact, HostInputs, InputBufferOverflow, type InputContact } from './host_inputs';
 import { LatestFrame } from './latest_frame';
 
 type DebugOptions = {
@@ -35,7 +35,7 @@ type WorkerRequest =
 	| { id: number; type: 'snapshot' }
 	| { id: number; type: 'lcd_trace' }
 	| { id: number; type: 'eval_js'; source: string }
-	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
+	| { id: number; type: 'set_options'; targetFps?: number; typingCatchUp?: boolean; debug?: Partial<DebugOptions> }
 	| {
 			id: number;
 			type: 'virtual_key' | 'physical_key';
@@ -44,6 +44,7 @@ type WorkerRequest =
 			owner?: string;
 			cancel?: boolean;
 			minimumHold?: number;
+			buffered?: boolean;
 			generation?: number;
 	  }
 	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
@@ -71,6 +72,7 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	typing: ReturnType<HostInputs['typingStatus']>;
 	pacing: PacingStatus;
 	model: RomModel;
 	generation: number;
@@ -114,6 +116,7 @@ let machineGeneration = 0;
 
 let running = false;
 let targetFps = 30;
+let typingCatchUp = true;
 let debugOptions: DebugOptions = {
 	regsOpen: false,
 	callStackOpen: false,
@@ -405,7 +408,7 @@ function replyErr(id: number, error: unknown) {
 }
 
 function stepCore(boundaries: number) {
-	return automaticHostSlice(emulator, boundaries, inputs);
+	return automaticHostSlice(emulator, boundaries, inputs, typingCatchUp);
 }
 
 function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: string } | null {
@@ -500,6 +503,7 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		typing: inputs.typingStatus(),
 		pacing: emulator.pacing_status(),
 		model: romModel,
 		generation: machineGeneration,
@@ -574,6 +578,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				return;
 			}
 			case 'set_options': {
+				if (typeof msg.typingCatchUp === 'boolean') typingCatchUp = msg.typingCatchUp;
 				if (typeof msg.targetFps === 'number') targetFps = msg.targetFps;
 				if (msg.debug) debugOptions = { ...debugOptions, ...msg.debug };
 				replyOk(msg.id);
@@ -709,6 +714,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				await ensureEmulator();
 				if (msg.generation !== undefined && msg.generation !== machineGeneration)
 					throw new Error('Stale input generation');
+				// ON is a priority power contact, never stuck behind a typing backlog.
+				if (msg.code === 'on' && msg.down) inputs.clearTyping();
 				inputs.set({
 					source: msg.type === 'virtual_key' ? 'virtual' : 'physical',
 					owner: msg.owner ?? String(msg.code),
@@ -716,8 +723,20 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					down: msg.down,
 					cancel: msg.cancel,
 					minimumHold: msg.type === 'virtual_key' ? (msg.minimumHold ?? 40_000) : 0,
+					buffered: msg.type === 'physical_key' && (msg.buffered ?? false),
 				});
-				replyOk(msg.id, { generation: machineGeneration, applied: true, contact: msg.code, down: msg.down });
+				(self as any).postMessage({
+					type: 'input_status',
+					generation: machineGeneration,
+					typing: inputs.typingStatus(),
+				});
+				replyOk(msg.id, {
+					generation: machineGeneration,
+					applied: !msg.buffered,
+					queued: Boolean(msg.buffered),
+					contact: msg.code,
+					down: msg.down,
+				});
 				return;
 			}
 			case 'release_inputs': {
@@ -725,6 +744,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					throw new Error('Stale input generation');
 				if (msg.source !== 'physical' && msg.source !== 'virtual') throw new Error('Invalid host input source');
 				inputs.releaseSource(msg.source);
+				(self as any).postMessage({
+					type: 'input_status',
+					generation: machineGeneration,
+					typing: inputs.typingStatus(),
+				});
 				replyOk(msg.id, { generation: machineGeneration, applied: true });
 				return;
 			}
@@ -734,6 +758,14 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			}
 		}
 	} catch (err) {
+		if (err instanceof InputBufferOverflow) {
+			running = false;
+			runLoopId++;
+			await operations.stop();
+			emulator?.rebase_pacing();
+			(self as any).postMessage({ type: 'input_paused', generation: machineGeneration, error: err.message });
+			requestFrame(true);
+		}
 		replyErr(msg.id, err);
 	}
 }

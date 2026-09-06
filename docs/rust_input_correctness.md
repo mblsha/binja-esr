@@ -18,26 +18,84 @@ application selectors. Rust and TypeScript consume this same table.
 | F1–F5 | PF1–PF5 | Calendar, Schedule, TEL, MEMO, Calc |
 | F6–F8 | BASIC, MENU, Clear | Card, World, Home |
 | F9 / F10 | SHIFT / CAPS | SHIFT / CAPS |
-| F11 | Unmapped | Return/newline |
+| F11 | CTRL (browser) | Return/newline |
 | F12 | ON | ON |
 | Page Up/Down | Unmapped | Search up/down |
 | Escape | Clear | C·CE |
 
-The browser additionally accepts the host Shift/Caps Lock keys, numeric keypad
-operators, and model-specific punctuation keycaps. Its on-screen keyboard has
-all basic letters/digits and the available independent operator keys.
+### Browser keyboard
 
-This is **keycap input, not desktop text composition**. Device CAPS controls
-case; host uppercase letters do not automatically imply guest uppercase, and
-host Shift operates the device's shifted legends. For example, IQ SHIFT+A means
-EDIT, not uppercase A. Browser users should use on-screen/numeric-keypad `+`
-instead of expecting a desktop Shift+Equals chord to type it. Native terminal
-characters retain supported assisted shifted-punctuation composition (IQ comma,
-PC punctuation). IQ colon composition is intentionally unmapped: the proposed
-SHIFT+period sequence produces a period in MEMO, including with separate taps.
-Native unsupported characters report `unmapped:` in the status instead of
-silently inserting a different character. Extended characters and IME/paste
-composition are not fully covered.
+Click **Type on device** above the device case to enable physical input and move
+focus to the device. Click **Run** for live typing; paused key events never
+secretly advance the CPU. The adjacent checkbox disables capture. Hover a
+device key for host bindings; cyan outlines show host-held contacts, not proof
+that the ROM has consumed them. Laptop function keys may require **Fn**.
+
+- **Letters & symbols (buffered)** (default): follows `KeyboardEvent.key`, so letters match
+  the host layout rather than QWERTY positions. Host Shift selects punctuation:
+  `+ - * / = .` map to independent device keys, including laptop Shift+Equals
+  and Shift+8. PC also supports `, ; ( )`. IQ comma requires **F9, release, K**:
+  simultaneous raw SHIFT+K contacts produced `K` during live typing, so the
+  browser deliberately does not compose a direct comma key. IQ Shift+Enter maps
+  to Return/newline; unshifted Enter stores. Unsupported punctuation is reported instead of becoming a different
+  unshifted character. Numeric keypad operators work in either mode; Num Lock
+  off uses navigation semantics in Letters & symbols.
+- **Device keycaps**: positional `KeyboardEvent.code` mapping, with both host
+  Shift keys operating guest SHIFT. Shift+Equals means device SHIFT and equals,
+  not plus. Use keypad/on-screen operators in this mode.
+
+In both modes **F9 = device SHIFT**, **F10 or Caps Lock = device CAPS**, and
+**F12 = ON**. This is **contact mapping, not desktop text composition**: device
+CAPS controls case, and typing an uppercase host letter does not automatically
+set guest uppercase. IQ SHIFT+A means EDIT, not uppercase A. Browser F11 maps
+to PC CTRL without stealing host Ctrl/Cmd shortcuts; on IQ it remains newline.
+
+Host Ctrl/Cmd/Alt shortcuts, text fields, and focused host scroll controls are
+excluded. Key-up releases the original contact/chord even if Shift changes in
+between. Separate owners prevent one host Shift from releasing the other.
+Blur, hidden tab, editor focus, composition start, disabling capture,
+changing mapping, and machine replacement clear held host contacts. Host
+auto-repeat does not send repeated DOWNs; the ROM owns key repeat. Raw keycap
+mode preserves immediate down/up, so extremely fast taps can miss firmware
+scanning/debounce. Buffered mode now preserves fast typing as described below.
+Paste/IME and automatic letter-case composition remain unsupported.
+
+### Fast typing and optional catch-up
+
+A zero-delay `AABBCCDDEE1122` burst originally produced only `C` in the IQ MEMO
+editor: raw presses could be released before a ROM scan. Increasing the nominal
+CPU speed alone cannot preserve a DOWN/UP pair delivered between two scans.
+
+The default browser typing path now queues physical keys in DOWN order, including
+repeated letters and overlapping host holds. It presents one contact at a time,
+with a minimum 40,000 scheduler-boundary hold and a 40,000-boundary release gap.
+These are compatibility budgets, not measured hardware timing. A longer host
+hold stays held for the ROM's ordinary repeat behavior. No FIFO/IRQ/record writes
+or translated input events are used. The same queue serves worker and fallback
+frontends and advances only when Rust executes scheduler boundaries.
+
+**Speed up while typing** is enabled by default. In interactive Run it executes
+just the remaining buffered scan/gap work unthrottled, in slices bounded to four
+milliseconds of host work. Every slice still yields to input and Stop. It then
+rebases pacing so the user does not wait for an artificial time debt. A sustained
+hold stops getting this boost after its minimum scan budget; arrow-key repeat
+is not run at turbo speed. Turbo already runs unthrottled. Paused/explicit
+deterministic execution does not get any automatic steps.
+
+This acceleration advances **all emulated time, including RTC/peripherals**.
+Disable it for normal interactive timing; buffering still works, but a burst
+can take longer to drain. The visible counter counts active/pending keys, not
+ROM-consumed characters. Capacity is 128. Overflow cancels pending typing,
+pauses execution, and rejects the remainder of the burst until explicit cleanup;
+it does not reset the machine. **Clear queued keys**, focus/lifecycle cleanup,
+or model replacement cancel pending presses even after all host keys are UP.
+ON bypasses and cancels the typing backlog rather than waiting behind it.
+
+Native terminal characters retain supported assisted shifted-punctuation
+composition (IQ comma, PC punctuation). IQ colon composition is intentionally
+unmapped: the proposed SHIFT+period sequence produces a period in MEMO,
+including with separate taps. Native unsupported characters report `unmapped:`
+in the status instead of silently inserting a different character.
 
 ## Native delivery
 
@@ -74,8 +132,16 @@ jump into app routines, stub calls, or patch framebuffer contents:
   multiline MEMO. Existing CAPS and owner/focus cleanup checks remain covered.
 - PC-E500: initialize both card prompts, choose CAL, enter `2+2`, press ENTER,
   observe `4`. Native uses a single `2+2\r` burst; browser mixes host keys and the
-  on-screen plus key. Browser captures are actual emulated LCD pixels; decoded
+  on-screen controls. The browser follow-up uses host Shift+Equals for plus and
+  Shift+8 for multiply, checking both `2+2=4` and `4*3=12`.
+  Browser captures are actual emulated LCD pixels; decoded
   text is only an assertion aid and can show `?` for unrecognized glyphs.
+- Browser live-run follow-up: boot IQ via a fixed initial budget, then use
+  ordinary paced **Run**, DOM key down/up (150 ms hold, 100 ms release gap), and
+  no per-character stepping. Enter `ABC+2,3`, newline, `DEF` in MEMO; store and
+  reopen it through the normal ROM UI. Uses Shift+Equals, F9 then K for comma,
+  and Shift+Enter for newline. This is a tested human-scale input cadence, not
+  a guarantee that every typing speed or overlapping chord is accepted.
 
 Basic input coverage is not exhaustive application, every-key, repeat/debounce,
 or real-hardware qualification. In particular, **PC-E500 BASIC acceptance is
@@ -84,17 +150,44 @@ invalid-register-pair decoder guard. The guard is not relaxed here. CAL input
 passing must not be described as BASIC passing. Investigate that CPU/decode
 failure next with a minimal ROM-backed repro, separately from keyboard mapping.
 
+An additional calculator-state issue is still unqualified: after the sequence
+`2+2 ENTER`, Clear, `4*3 ENTER`, Clear, a slowly stepped `1` displayed `0.1`.
+The same post-multiplication state made a fast `11+22 ENTER` produce `22.11`.
+Slow raw and buffered `11`/`22` entry in a fresh calculator behaved normally.
+This is not evidence of a dropped host key, and the input patch does not change
+calculator state to hide it. Investigate Clear/decimal-entry semantics against
+ROM and hardware separately; the rapid-input calculator acceptance starts fresh.
+
 ## Reproduce
 
-Final local checks: 571 Rust tests passed (six existing ignored tests and three
-opt-in ROM tests excluded from that count); both new native private-ROM PTY
+Earlier basic-input stage checks: 571 Rust tests passed (six existing ignored
+tests and three opt-in ROM tests excluded from that count); both new native private-ROM PTY
 tests passed separately. Also passed: 26 WASM tests, 112 frontend tests, 36
 bounded Chromium regressions, six selected real-ROM browser checks, Clippy,
 Svelte/TypeScript and formatting. All five changed Rust files passed the
 source-annotation check; this does not claim the pre-existing repository-wide
 annotation failures have been fixed. The previously recorded 18 WASM
-feature-gated dependency warnings remain. Browser proof advances deterministic
-boundary budgets; this is not a live typing latency or hardware-timing benchmark.
+feature-gated dependency warnings remain. That stage's browser proof advances
+deterministic boundary budgets; it is not a hardware-timing benchmark.
+
+Browser keyboard UX follow-up (2026-09-06): 125 frontend tests, 43 bounded
+Chromium regressions (eight opt-in skips), seven selected private-ROM Chromium
+tests (including the live-run MEMO check above),
+Svelte/TypeScript, formatting and production build passed. Rust/WASM core
+sources were unchanged in this follow-up. The bounded public-browser suite
+covers contact ownership, shortcuts, focus, mode changes, unsupported symbols,
+IME exclusion, repeat suppression and pressed-key highlighting. Real-ROM tests
+remain opt-in.
+
+Fast-typing/catch-up follow-up (2026-09-06): 134 frontend tests, 46 bounded
+Chromium regressions (11 opt-in skips), ten selected private-ROM checks,
+Svelte/TypeScript, formatting and build passed. Zero-delay IQ input preserves
+`AABBCCDDEE1122` with acceleration both disabled and enabled; fresh PC CAL
+preserves repeated digits in `11+22 ENTER = 33`. In two local runs with decoded
+LCD text visible, the IQ burst reached the display in approximately 4.9 seconds
+without catch-up and 2.9 seconds with it. These are sample end-to-end timings,
+not a universal latency guarantee or hardware benchmark. No Rust core, ROM
+keyboard FIFO or guest application state was patched for this fix.
 
 Public tests cover table consistency, physical contacts without FIFO mutation,
 bounded serialization/cleanup and browser ownership. Private-ROM checks remain

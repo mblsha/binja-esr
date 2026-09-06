@@ -71,6 +71,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 	test(`${model}: physical, pointer and modifier owners do not release each other`, async ({ page }) => {
 		await open(page, model);
 		await page.getByTestId('assisted-taps-toggle').uncheck();
+		await page.getByTestId('physical-keyboard-mode').selectOption('keycaps');
 		await page.getByTestId('physical-keyboard-toggle').check();
 		await page.getByTestId('emu-status').click();
 		await page.keyboard.down('F1');
@@ -165,6 +166,127 @@ for (const model of ['pc-e500', 'iq-7000']) {
 	});
 }
 
+for (const model of ['pc-e500', 'iq-7000']) {
+	const plus = model === 'pc-e500' ? 0x47 : 0x38;
+	const shift = model === 'pc-e500' ? 0x06 : 0x02;
+	test(`${model}: focus action enables layout-aware laptop operators and highlights contacts`, async ({ page }) => {
+		await open(page, model);
+		await page.getByTestId('keyboard-focus').click();
+		await expect(page.getByTestId('physical-keyboard-toggle')).toBeChecked();
+		await expect(page.getByTestId('keyboard-target')).toBeFocused();
+		await page.keyboard.down('ShiftLeft');
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+		await page.keyboard.down('Equal');
+		await expect.poll(() => contacts(page)).toEqual({ matrix: [plus], on: false });
+		await expect(page.getByTestId('vk-plus')).toHaveClass(/host-held/);
+		await page.keyboard.up('ShiftLeft'); // Key-up now says "=", but must release "+".
+		await page.keyboard.up('Equal');
+		await request(page, 'step', { instructions: 80_000 }); // Drain assisted hold and release gap while paused.
+		await expect.poll(() => contacts(page)).toEqual({ matrix: [], on: false });
+		await expect(page.getByTestId('vk-plus')).not.toHaveClass(/host-held/);
+		await page.keyboard.down('F9');
+		await expect.poll(() => contacts(page)).toEqual({ matrix: [shift], on: false });
+		await page.getByTestId('physical-keyboard-mode').selectOption('keycaps');
+		await expect.poll(() => contacts(page)).toEqual({ matrix: [], on: false });
+		await page.keyboard.up('F9');
+	});
+
+	test(`${model}: shortcuts, IME, repeated keys and unsupported symbols are safe`, async ({ page }) => {
+		await open(page, model);
+		await page.getByTestId('keyboard-focus').click();
+		await page.keyboard.down('F9');
+		await page.keyboard.down('ControlLeft');
+		await page.keyboard.down('KeyA');
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+		await page.keyboard.up('KeyA');
+		await page.keyboard.up('ControlLeft');
+		await page.keyboard.up('F9');
+		await page.getByTestId('keyboard-focus').click();
+		await page.keyboard.press('!');
+		await expect(page.getByTestId('keyboard-notice')).toContainText('No qualified');
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+		await page.keyboard.down('ArrowDown');
+		const prevented = await page.getByTestId('keyboard-target').evaluate((target) => {
+			const repeat = new KeyboardEvent('keydown', {
+				key: 'ArrowDown',
+				code: 'ArrowDown',
+				repeat: true,
+				bubbles: true,
+				cancelable: true,
+			});
+			target.dispatchEvent(repeat);
+			return repeat.defaultPrevented;
+		});
+		expect(prevented).toBe(true);
+		await page.getByTestId('keyboard-target').dispatchEvent('compositionstart');
+		await expect.poll(() => contacts(page)).toEqual({ matrix: [], on: false });
+		await page.keyboard.up('ArrowDown');
+		await page.getByTestId('keyboard-target').dispatchEvent('keydown', { key: 'a', code: 'KeyA', isComposing: true });
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	});
+}
+
+test('IQ direct comma reports the required sequence without sending a bogus contact', async ({ page }) => {
+	await open(page, 'iq-7000');
+	await page.getByTestId('keyboard-focus').click();
+	await page.keyboard.down('F9');
+	await page.keyboard.down('Comma');
+	await expect(page.getByTestId('keyboard-notice')).toContainText('F9, release it, then press K');
+	await expect.poll(() => contacts(page)).toEqual({ matrix: [0x02], on: false });
+	await page.keyboard.up('Comma');
+	await expect.poll(() => contacts(page)).toEqual({ matrix: [0x02], on: false });
+	await page.keyboard.up('F9');
+	await request(page, 'step', { instructions: 80_000 });
+	await expect.poll(() => contacts(page)).toEqual({ matrix: [], on: false });
+});
+
+for (const model of ['pc-e500', 'iq-7000']) {
+	test(`${model}: buffered rollover stays ordered, pauses, and cancels after all host keys are up`, async ({
+		page,
+	}) => {
+		await open(page, model);
+		await page.getByTestId('keyboard-focus').click();
+		await page.keyboard.down('KeyA');
+		await page.keyboard.down('KeyB');
+		await page.keyboard.up('KeyB');
+		await page.keyboard.up('KeyA');
+		const a = model === 'iq-7000' ? 0x1c : 0x03;
+		const b = model === 'iq-7000' ? 0x04 : 0x15;
+		await expect(page.getByTestId('typing-status')).toContainText('2/128');
+		expect(await contacts(page)).toEqual({ matrix: [a], on: false });
+		await request(page, 'step', { instructions: 40_000 });
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+		await request(page, 'step', { instructions: 40_000 });
+		expect(await contacts(page)).toEqual({ matrix: [b], on: false });
+		await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+		await expect(page.getByTestId('typing-status')).toContainText('0/128');
+		await request(page, 'step', { instructions: 200_000 });
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+		await page.getByTestId('keyboard-focus').click();
+		await page.keyboard.type('ABBA', { delay: 0 });
+		expect((await request(page, 'input_state')).typing.pending).toBe(4);
+		await page.keyboard.down('F12'); // ON bypasses and cancels the backlog.
+		expect(await contacts(page)).toEqual({ matrix: [], on: true });
+		expect((await request(page, 'input_state')).typing.pending).toBe(0);
+		await page.keyboard.up('F12');
+	});
+}
+
+test('typing overflow pauses and blocks the remaining burst until clear, without resetting the machine', async ({
+	page,
+}) => {
+	await open(page, 'iq-7000');
+	await page.getByTestId('keyboard-focus').click();
+	await page.keyboard.type('A'.repeat(130), { delay: 0 });
+	await expect(page.getByRole('alert')).toContainText('Typing buffer overflow');
+	expect((await request(page, 'input_state')).typing).toEqual({ pending: 0, blocked: true, capacity: 128 });
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await page.getByTestId('clear-typing').click();
+	await page.getByTestId('keyboard-focus').click();
+	await page.keyboard.press('KeyB');
+	expect((await request(page, 'input_state')).typing.pending).toBe(1);
+});
+
 test('real IQ ROM consumes the browser physical MEMO and CAPS controls', async ({ page }, info) => {
 	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
 	await open(page, 'iq-7000', true);
@@ -192,6 +314,16 @@ async function hostTap(page: Page, key: string) {
 async function virtualTap(page: Page, id: string, settle = 40_000) {
 	await page.getByTestId('vk-' + id).click();
 	await request(page, 'step', { instructions: 40_000 + settle });
+}
+
+async function shiftedHostTap(page: Page, key: string) {
+	await page.getByTestId('keyboard-focus').click();
+	await page.keyboard.down('ShiftLeft');
+	await page.keyboard.down(key);
+	await request(page, 'step', { instructions: 40_000 });
+	await page.keyboard.up(key);
+	await page.keyboard.up('ShiftLeft');
+	await request(page, 'step', { instructions: 40_000 });
 }
 
 test('real IQ ROM: browser letter/digit/editor input stores and reopens edited MEMO', async ({ page }, info) => {
@@ -222,6 +354,7 @@ test('real IQ ROM: browser letter/digit/editor input stores and reopens edited M
 	await expect(page.getByTestId('lcd-text')).toHaveText('XBCD');
 	expect(await contacts(page)).toEqual({ matrix: [], on: false });
 	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-iq-edited-memo.png') });
+	await page.getByTestId('device-shell').screenshot({ path: info.outputPath('real-iq-device-edited-memo.png') });
 });
 
 test('real ROM: PC-E500 browser calculator consumes physical and virtual expression input', async ({ page }, info) => {
@@ -238,12 +371,96 @@ test('real ROM: PC-E500 browser calculator consumes physical and virtual express
 	await expect(page.getByTestId('lcd-text')).toContainText('0.');
 	await hostTap(page, 'Digit2');
 	await expect(page.getByTestId('lcd-text')).toContainText('2.');
-	await virtualTap(page, 'plus');
+	await shiftedHostTap(page, 'Equal');
 	await hostTap(page, 'Digit2');
 	await hostTap(page, 'Enter');
 	await expect(page.getByTestId('lcd-text')).toContainText('4.');
+	await hostTap(page, 'Escape');
+	await hostTap(page, 'Digit4');
+	await shiftedHostTap(page, 'Digit8');
+	await hostTap(page, 'Digit3');
+	await hostTap(page, 'Enter');
+	await expect(page.getByTestId('lcd-text')).toContainText('12.');
 	expect(await contacts(page)).toEqual({ matrix: [], on: false });
-	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-pc-calculator-4.png') });
+	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-pc-calculator-12.png') });
+	await page.getByTestId('device-shell').screenshot({ path: info.outputPath('real-pc-device-calculator-12.png') });
+});
+
+test('real ROM: PC-E500 zero-delay repeated digits reach a fresh calculator through physical contacts', async ({
+	page,
+}) => {
+	test.skip(process.env.PCE500_E2E_REAL_ROM !== '1', 'Requires private PC-E500 ROM');
+	await open(page, 'pc-e500', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await page.getByTestId('keyboard-focus').click();
+	await request(page, 'step', { instructions: 500_000 });
+	await virtualTap(page, 'pf1', 800_000);
+	await virtualTap(page, 'pf1', 800_000);
+	await virtualTap(page, 'pf2', 800_000);
+	await expect(page.getByTestId('lcd-text')).toContainText('0.');
+	await page.getByRole('button', { name: 'Run', exact: true }).click();
+	await page.getByTestId('keyboard-focus').click();
+	await page.keyboard.type('11+22', { delay: 0 });
+	await page.keyboard.press('Enter');
+	await expect(page.getByTestId('lcd-text')).toContainText('33.');
+	await expect.poll(async () => (await request(page, 'input_state')).typing.pending).toBe(0);
+	await page.getByRole('button', { name: 'Stop', exact: true }).click();
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+});
+
+for (const catchUp of [false, true])
+	test(`real IQ ROM: zero-delay typing preserves order and repeated letters in live MEMO (catch-up ${catchUp})`, async ({
+		page,
+	}) => {
+		test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
+		await open(page, 'iq-7000', true);
+		await page.getByText('LCD (decoded text)', { exact: true }).click();
+		await page.getByTestId('keyboard-focus').click();
+		await request(page, 'step', { instructions: 500_000 });
+		await hostTap(page, 'F4');
+		await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+		await page.getByTestId('typing-catch-up').setChecked(catchUp);
+		await page.getByRole('button', { name: 'Run', exact: true }).click();
+		await page.getByTestId('keyboard-focus').click();
+		const started = Date.now();
+		await page.keyboard.type('AABBCCDDEE1122', { delay: 0 });
+		await expect(page.getByTestId('lcd-text')).toContainText('AABBCCDDEE1122');
+		await expect.poll(async () => (await request(page, 'input_state')).typing.pending).toBe(0);
+		console.log(JSON.stringify({ model: 'iq-7000', catchUp, burstToLcdMs: Date.now() - started }));
+		await page.getByRole('button', { name: 'Stop', exact: true }).click();
+		expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	});
+
+test('real IQ ROM: live keyboard typing, symbols and laptop newline reach MEMO through ROM', async ({ page }, info) => {
+	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
+	await open(page, 'iq-7000', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await request(page, 'step', { instructions: 500_000 });
+	await page.getByRole('button', { name: 'Run', exact: true }).click();
+	await page.getByTestId('keyboard-focus').click();
+	// Actual paced Run, not step RPCs between characters. Human-scale contacts
+	// intentionally leave a release gap for the firmware scanner/debounce.
+	const liveTap = async (key: string) => {
+		await page.keyboard.press(key, { delay: 150 });
+		await page.waitForTimeout(100);
+	};
+	await liveTap('F4');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	for (const key of ['KeyA', 'KeyB', 'KeyC', 'Shift+Equal', 'Digit2', 'F9', 'KeyK', 'Digit3']) await liveTap(key);
+	await expect(page.getByTestId('lcd-text')).toContainText('ABC+2,3');
+	await liveTap('Shift+Enter');
+	for (const key of ['KeyD', 'KeyE', 'KeyF']) await liveTap(key);
+	await expect(page.getByTestId('lcd-text')).toContainText('DEF');
+	await liveTap('Enter');
+	await liveTap('F4');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	await liveTap('PageDown');
+	await expect(page.getByTestId('lcd-text')).toContainText('ABC+2,3');
+	await expect(page.getByTestId('lcd-text')).toContainText('DEF');
+	await page.getByRole('button', { name: 'Stop', exact: true }).click();
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await expect(page.getByRole('alert')).toHaveCount(0);
+	await page.getByTestId('keyboard-target').screenshot({ path: info.outputPath('real-iq-live-keyboard-memo.png') });
 });
 
 test('real IQ ROM: cursor directions and Insert/Delete have distinct editor effects', async ({ page }) => {

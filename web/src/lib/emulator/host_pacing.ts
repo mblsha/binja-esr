@@ -1,4 +1,10 @@
-import { checkBoundaryBudget, limitedBudget, type SliceResult } from './bounded_step';
+import {
+	checkBoundaryBudget,
+	limitedBudget,
+	runHostSlice,
+	type SliceResult,
+	type SlicedEmulator,
+} from './bounded_step';
 
 export type ExecutionMode = 'interactive' | 'turbo' | 'deterministic';
 export type PacingStatus = {
@@ -18,14 +24,40 @@ export type AutomaticResult = {
 
 /** Rust owns pacing. JS only services input deadlines and yields to the host. */
 export function automaticHostSlice(
-	emulator: { automatic_slice(boundaries: number): AutomaticResult },
+	emulator: {
+		automatic_slice(boundaries: number): AutomaticResult;
+		pacing_status?: () => PacingStatus;
+		rebase_pacing?: () => void;
+		run_slice?: SlicedEmulator['run_slice'];
+	},
 	boundaries: number,
-	inputs: { limitBudget: (requested: number) => number; advance: (used: number) => void },
+	inputs: {
+		limitBudget: (requested: number) => number;
+		advance: (used: number) => void;
+		typingBoostBudget?: (requested: number) => number;
+	},
+	typingCatchUp = false,
 ): number {
 	checkBoundaryBudget(boundaries);
 	if (typeof emulator.automatic_slice !== 'function')
 		throw new Error('Pacing requires updated Rust/WASM; rebuild and reload');
 	const budget = limitedBudget(boundaries, inputs.limitBudget);
+	if (typingCatchUp && emulator.pacing_status?.().mode === 'interactive') {
+		const boost = inputs.typingBoostBudget?.(budget) ?? 0;
+		if (!Number.isSafeInteger(boost) || boost < 0 || boost > budget) throw new Error('Invalid typing boost budget');
+		if (boost > 0) {
+			if (!emulator.run_slice || !emulator.rebase_pacing)
+				throw new Error('Typing catch-up requires bounded Rust execution');
+			// Same four-millisecond host deadline as Step. No change to machine
+			// timing: RTC/peripherals advance too. Rebase prevents a pacing debt
+			// after this explicitly faster-than-real-time burst.
+			const used = runHostSlice(emulator as SlicedEmulator, boost);
+			if (used === 0) throw new Error('Typing catch-up made no scheduler progress');
+			inputs.advance(used);
+			emulator.rebase_pacing();
+			return 0; // Caller still yields to input/Stop before another slice.
+		}
+	}
 	const result = emulator.automatic_slice(budget);
 	if (result.plan.action === 'explicit_budget_required')
 		throw new Error('Deterministic mode requires explicit Step or Function Runner budgets');

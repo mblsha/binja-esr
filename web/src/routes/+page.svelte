@@ -2,8 +2,8 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
-	import VirtualKeyboard from '$lib/components/VirtualKeyboard.svelte';
-	import { matrixCodeForKeyEvent } from '$lib/keymap';
+	import DeviceShell from '$lib/components/DeviceShell.svelte';
+	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
 	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import FunctionRunnerExamplesPanel from '$lib/components/FunctionRunnerExamplesPanel.svelte';
@@ -14,7 +14,7 @@
 	import { stepBounded } from '$lib/emulator/bounded_step';
 	import { automaticHostSlice, type ExecutionMode, type PacingStatus } from '$lib/emulator/host_pacing';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
-	import { HostInputs, applyContact, type InputContact } from '$lib/emulator/host_inputs';
+	import { HostInputs, InputBufferOverflow, applyContact, type InputContact } from '$lib/emulator/host_inputs';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -74,7 +74,10 @@
 	let functionRunnerBusy = false;
 	let functionProgress: string | null = null;
 	const pressedCodes = new Set<number>();
-	const physicalHeldCodes = new Map<string, InputContact>();
+	const physicalHeldCodes = new Map<string, InputContact[]>();
+	let physicalHighlights = new Set<InputContact>();
+	let typingStatus = { pending: 0, blocked: false, capacity: 128 };
+	let typingCatchUp = true;
 	const pendingVirtualRelease = new Map<number, number>();
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
 	let assistedTaps = true;
@@ -82,6 +85,10 @@
 	const IMEM_BASE = 0x100000;
 	const debugLog: string[] = [];
 	let physicalKeyboardEnabled = false;
+	let hostKeyboardMode: HostKeyboardMode = 'symbols';
+	let activeHostKeyboardMode: HostKeyboardMode = hostKeyboardMode;
+	let keyboardTarget: HTMLDivElement;
+	let keyboardNotice = '';
 	let keyboardDebugOpen = false;
 	let regsOpen = false;
 	let callStackOpen = false;
@@ -118,6 +125,7 @@
 
 	function applyWorkerFrame(frame: any) {
 		if (typeof frame?.generation === 'number' && frame.generation !== romLoadGeneration) return;
+		if (frame.typing) typingStatus = frame.typing;
 		if (frame?.model && frame.model !== romModel) return;
 		try {
 			if (frame?.lcdPixels instanceof ArrayBuffer) {
@@ -190,6 +198,7 @@
 			id,
 			type: 'set_options',
 			targetFps,
+			typingCatchUp,
 			debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen },
 		});
 	}
@@ -231,6 +240,11 @@
 			if (data.type === 'fatal') {
 				failWorker(`Worker error: ${data.error ?? 'unknown error'}`);
 			}
+			if (data.type === 'input_paused' && data.generation === romLoadGeneration) {
+				running = false;
+				lastError = data.error;
+			}
+			if (data.type === 'input_status' && data.generation === romLoadGeneration) typingStatus = data.typing;
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
 		};
 		worker.onerror = (event) => {
@@ -391,25 +405,30 @@
 	) {
 		const generation = romLoadGeneration;
 		const minimumHold = source === 'virtual' && assistedTaps ? 40_000 : 0;
+		const buffered = source === 'physical' && hostKeyboardMode === 'symbols' && code !== 'on';
 		const label = code === 'on' ? 'ON' : hex(code, 2);
 		if (down && (!romLoaded || workerHealth !== 'ready')) return;
 		const recordAck = () => {
 			if (generation !== romLoadGeneration) return;
-			lastInputAck = `${label} ${down ? 'down' : cancel ? 'cancelled' : 'up'} applied to input controller; ROM consumption not confirmed`;
+			lastInputAck = `${label} ${down ? 'down' : cancel ? 'cancelled' : 'up'} ${buffered ? 'accepted by typing buffer' : 'applied to input controller'}; ROM consumption not confirmed`;
 			logDebug(lastInputAck);
 		};
 		if (worker) {
-			void workerCall(`${source}_key`, { code, down, owner, cancel, minimumHold, generation })
+			void workerCall(`${source}_key`, { code, down, owner, cancel, minimumHold, buffered, generation })
 				.then(recordAck)
 				.catch((error) => {
 					if (generation === romLoadGeneration) lastError = `Input not acknowledged: ${String(error)}`;
 				});
 		} else if (emulator) {
 			try {
-				fallbackInputs.set({ source, owner, contact: code, down, cancel, minimumHold });
+				if (code === 'on' && down) fallbackInputs.clearTyping();
+				fallbackInputs.set({ source, owner, contact: code, down, cancel, minimumHold, buffered });
 				recordAck();
 			} catch (error) {
 				lastError = `Input failed: ${String(error)}`;
+				if (error instanceof InputBufferOverflow) void stop();
+			} finally {
+				typingStatus = fallbackInputs.typingStatus();
 			}
 		}
 	}
@@ -427,13 +446,25 @@
 			void workerCall('release_inputs', { source, generation }).catch((error) => {
 				if (generation === romLoadGeneration) lastError = `Input cleanup not acknowledged: ${String(error)}`;
 			});
-		else if (emulator) fallbackInputs.releaseSource(source);
+		else if (emulator) {
+			fallbackInputs.releaseSource(source);
+			typingStatus = fallbackInputs.typingStatus();
+		}
 	}
 
 	function releaseAllPhysicalHeldCodes() {
-		if (physicalHeldCodes.size === 0) return;
+		// Released host keys can still be waiting for their turn in the buffer.
 		releaseInputSource('physical');
 		physicalHeldCodes.clear();
+		physicalHighlights = new Set();
+		if (lastError?.includes('Typing buffer overflow')) lastError = null;
+	}
+
+	async function focusDeviceKeyboard() {
+		physicalKeyboardEnabled = true;
+		keyboardNotice = '';
+		await tick();
+		keyboardTarget?.focus({ preventScroll: true });
 	}
 
 	function installPhysicalKeyboardHook() {
@@ -443,6 +474,7 @@
 		window.addEventListener('blur', releaseAllPhysicalHeldCodes);
 		document.addEventListener('visibilitychange', onVisibilityChange);
 		document.addEventListener('focusin', onFocusIn);
+		document.addEventListener('compositionstart', releaseAllPhysicalHeldCodes);
 		physicalKeyboardHookInstalled = true;
 	}
 
@@ -453,6 +485,7 @@
 		window.removeEventListener('blur', releaseAllPhysicalHeldCodes);
 		document.removeEventListener('visibilitychange', onVisibilityChange);
 		document.removeEventListener('focusin', onFocusIn);
+		document.removeEventListener('compositionstart', releaseAllPhysicalHeldCodes);
 		physicalKeyboardHookInstalled = false;
 	}
 
@@ -574,6 +607,7 @@
 	function refreshFast() {
 		if (worker) return;
 		if (!emulator) return;
+		typingStatus = fallbackInputs.typingStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
 			const geometry = emulator.lcd_capture();
@@ -834,7 +868,7 @@
 	}
 
 	function stepCore(count: number) {
-		return automaticHostSlice(emulator, count, fallbackInputs);
+		return automaticHostSlice(emulator, count, fallbackInputs, typingCatchUp);
 	}
 
 	function pumpEmulator(id: number) {
@@ -950,13 +984,17 @@
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
+		// Host shortcuts must not leave a guest modifier held when the browser
+		// consumes the matching key-up (e.g. opening a new tab with Cmd/Ctrl).
+		if (event.metaKey || event.ctrlKey || event.altKey) {
+			releaseAllPhysicalHeldCodes();
+			return;
+		}
 		if (
-			event.repeat ||
+			event.defaultPrevented ||
 			!romLoaded ||
+			workerHealth !== 'ready' ||
 			event.isComposing ||
-			event.metaKey ||
-			event.ctrlKey ||
-			event.altKey ||
 			isHostControl(event.target)
 		)
 			return;
@@ -966,28 +1004,43 @@
 			(event.key === 'Enter' || event.key === ' ')
 		)
 			return;
-		const code = matrixCodeForKeyEvent(event, romModel);
-		if (code === null) return;
-		if (physicalHeldCodes.has(event.code)) return;
-		physicalHeldCodes.set(event.code, code);
-		setPhysicalMatrixCode(code, true, event.code);
+		if (physicalHeldCodes.has(event.code)) {
+			event.preventDefault(); // ROM owns repeat; don't scroll the host page.
+			return;
+		}
+		if (event.repeat) return;
+		const contacts = contactsForKeyEvent(event, romModel, hostKeyboardMode);
+		if (contacts.length === 0) {
+			if (event.key.length === 1)
+				keyboardNotice = `No qualified ${romModel} key mapping for “${event.key}”.${romModel === 'iq-7000' && event.key === ',' ? ' For comma, press F9, release it, then press K.' : ''}`;
+			return;
+		}
+		keyboardNotice = '';
+		physicalHeldCodes.set(event.code, contacts);
+		contacts.forEach((code, index) => setPhysicalMatrixCode(code, true, `${event.code}:${index}`));
+		physicalHighlights = new Set([...physicalHeldCodes.values()].flat());
 		event.preventDefault();
 	}
 
 	function onKeyUp(event: KeyboardEvent) {
-		const code = physicalHeldCodes.get(event.code);
-		if (code === undefined) return;
+		const contacts = physicalHeldCodes.get(event.code);
+		if (contacts === undefined) return;
 		physicalHeldCodes.delete(event.code);
-		setPhysicalMatrixCode(code, false, event.code);
+		// Release the original chord, not a fresh mapping of event.key: Shift or
+		// the host layout may have changed since key-down. Release modifier last.
+		for (let index = contacts.length - 1; index >= 0; index--)
+			setPhysicalMatrixCode(contacts[index], false, `${event.code}:${index}`);
+		physicalHighlights = new Set([...physicalHeldCodes.values()].flat());
 		event.preventDefault();
 	}
 
 	function isHostControl(target: EventTarget | null): boolean {
 		return (
 			target instanceof Element &&
-			Boolean(
-				target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'),
-			)
+			(target.matches('[data-host-scroll]') ||
+				Boolean(
+					target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'),
+				))
 		);
 	}
 	function onVisibilityChange() {
@@ -1017,6 +1070,11 @@
 			releaseAllPhysicalHeldCodes();
 		}
 	}
+	$: if (hostKeyboardMode !== activeHostKeyboardMode) {
+		releaseAllPhysicalHeldCodes();
+		keyboardNotice = '';
+		activeHostKeyboardMode = hostKeyboardMode;
+	}
 
 	onDestroy(() => {
 		uninstallPhysicalKeyboardHook();
@@ -1034,31 +1092,33 @@
 </script>
 
 <main>
-	<h1>SC62015 Web Emulator (LLAMA/WASM)</h1>
+	<header class="page-header">
+		<div>
+			<p class="eyebrow">SC62015 / RUST + WASM</p>
+			<h1>Pocket device bench</h1>
+		</div>
+		<div class="source-controls">
+			<label>
+				ROM preset:
+				<select
+					bind:value={$romModelStore}
+					on:change={() => {
+						romModelWasPersisted = true;
+						void tryAutoLoadRom(true);
+					}}
+					data-testid="rom-model"
+				>
+					<option value="iq-7000">IQ-7000</option>
+					<option value="pc-e500">PC-E500</option>
+				</select>
+			</label>
 
-	<label>
-		ROM preset:
-		<select
-			bind:value={$romModelStore}
-			on:change={() => {
-				romModelWasPersisted = true;
-				void tryAutoLoadRom(true);
-			}}
-			data-testid="rom-model"
-		>
-			<option value="iq-7000">IQ-7000</option>
-			<option value="pc-e500">PC-E500</option>
-		</select>
-	</label>
-
-	<label>
-		Load ROM file:
-		<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
-	</label>
-
-	{#if romSource}
-		<p class="hint">Loaded ROM ({romModel}) via {romSource}</p>
-	{/if}
+			<label>
+				Load ROM file:
+				<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
+			</label>
+		</div>
+	</header>
 
 	<div class="controls">
 		<label>
@@ -1090,6 +1150,7 @@
 			>Step 20k</button
 		>
 		<button
+			class="run-button"
 			on:click={start}
 			disabled={!romLoaded ||
 				executionMode === 'deterministic' ||
@@ -1113,13 +1174,6 @@
 	</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
-	<p class="hint" data-testid="pacing-status">
-		{executionMode}: Interactive pacing uses {pacingStatus?.nominal_timebase_hz ?? '—'} compatibility timing units/s, not
-		hardware-calibrated MHz. IQ-7000 currently uses the PC-E500 fallback timebase. The RTC follows emulated elapsed time;
-		paused wall time is not simulated. Catch-up is capped at 50 ms; dropped host backlog: {(
-			Number(pacingStatus?.dropped_host_ns ?? 0) / 1e6
-		).toFixed(1)} ms. Step and Function Runner use explicit, unthrottled budgets in every mode.
-	</p>
 	{#if executionMode === 'deterministic'}
 		<p class="hint">
 			Automatic Run is disabled. Repeatable results require the same ROM/state, a fixed RTC seed (the default seed comes
@@ -1130,15 +1184,108 @@
 	{#if functionRunnerBusy && functionProgress}
 		<p class="hint" data-testid="execution-progress">{functionProgress}</p>
 	{/if}
-	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
-
-	{#if romLoaded}
-		<p class="hint">LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows})</p>
-	{/if}
-
-	<div class="lcd-display" aria-label="Emulated LCD including fixed segments">
-		<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} scale={4 / lcdPixelScale} pixelFormat="gray8" />
+	{#if lastError}<p class="error" role="alert">{lastError}</p>{/if}
+	<div class="keyboard-controls">
+		<button data-testid="keyboard-focus" on:click={focusDeviceKeyboard} disabled={!romLoaded}>Type on device</button>
+		<label
+			><input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
+			Physical keyboard {physicalKeyboardEnabled ? 'enabled' : 'off'}</label
+		>
+		<label
+			>Mapping:
+			<select data-testid="physical-keyboard-mode" bind:value={hostKeyboardMode}>
+				<option value="symbols">Letters & symbols (buffered)</option>
+				<option value="keycaps">Device keycaps (raw Shift)</option>
+			</select></label
+		>
+		<button data-testid="clear-typing" on:click={releaseAllPhysicalHeldCodes}>Clear queued keys</button>
+		<label
+			><input
+				type="checkbox"
+				data-testid="typing-catch-up"
+				bind:checked={typingCatchUp}
+				on:change={pushWorkerOptions}
+			/>
+			Speed up while typing</label
+		>
 	</div>
+	<p class="hint" data-testid="typing-status">
+		Typing buffer: {typingStatus.pending}/{typingStatus.capacity}{typingStatus.blocked
+			? ' — blocked; clear queued keys to recover'
+			: ''}.
+		{hostKeyboardMode === 'symbols'
+			? 'Fast presses are delivered in order with a scan hold and release gap.'
+			: 'Raw keycaps: exact holds; short presses can miss ROM scanning.'}
+		{#if typingCatchUp}Catch-up advances emulated time/RTC faster during buffered input; paused and deterministic
+			execution are unchanged.{/if}
+	</p>
+	<p class="hint" id="keyboard-help">
+		Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT · F10
+		= CAPS · F12 = ON (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the browser.
+		Hover a device key for its host bindings.
+	</p>
+	<details class="keyboard-help">
+		<summary>Keyboard mappings & letter case</summary>
+		<p class="hint">
+			{#if romModel === 'iq-7000'}
+				F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
+				Store; F11 = newline (also Shift+Enter in Letters & symbols).
+			{:else}
+				F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
+			{/if}
+			Both: letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
+		</p>
+		<p class="hint">
+			Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
+			operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9 for
+			device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is not
+			mapped. Unsupported punctuation is reported, not substituted. IME, paste and automatic case conversion are not
+			supported.
+		</p>
+		<p class="hint">
+			Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
+			belong to the organizer, not your desktop keyboard. Use the numeric keypad or on-screen keys for operators.
+		</p>
+	</details>
+	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
+	<div
+		class="keyboard-target"
+		role="group"
+		tabindex="-1"
+		aria-label="Device keyboard input"
+		aria-describedby="keyboard-help"
+		data-testid="keyboard-target"
+		bind:this={keyboardTarget}
+	>
+		<DeviceShell
+			model={romModel}
+			disabled={!romLoaded || workerHealth !== 'ready'}
+			{hostKeyboardMode}
+			{physicalHighlights}
+			onPress={virtualPress}
+			onRelease={virtualRelease}
+			onCancelAll={() => releaseInputSource('virtual')}
+		>
+			<div class="lcd-display" aria-label="Emulated LCD including fixed segments">
+				<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} scale={4 / lcdPixelScale} pixelFormat="gray8" fit />
+			</div>
+		</DeviceShell>
+	</div>
+	{#if romLoaded}<p class="hint lcd-meta">
+			LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows}) · Case proportions, materials and key legends are provisional.
+		</p>{/if}
+	<details class="session-details">
+		<summary>Session & timing details</summary>
+		{#if romSource}<p class="hint">Loaded ROM ({romModel}) via {romSource}</p>{/if}
+		<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
+		<p class="hint" data-testid="pacing-status">
+			{executionMode}: Interactive pacing uses {pacingStatus?.nominal_timebase_hz ?? '—'} compatibility timing units/s, not
+			hardware-calibrated MHz. IQ-7000 currently uses the PC-E500 fallback timebase. The RTC follows emulated elapsed time;
+			paused wall time is not simulated. Catch-up is capped at 50 ms; dropped host backlog: {(
+				Number(pacingStatus?.dropped_host_ns ?? 0) / 1e6
+			).toFixed(1)} ms. Step and Function Runner use explicit, unthrottled budgets in every mode.
+		</p>
+	</details>
 	{#if lcdKind === 'iq7000-vram'}
 		<p class="hint">
 			Fixed segments: ROM-derived mapping; BATT/CARD/beep/alarm/arrows remain provisional. LCD bytes: {Array.from(
@@ -1165,13 +1312,6 @@
 		</details>
 	{/if}
 
-	<VirtualKeyboard
-		disabled={!romLoaded || workerHealth !== 'ready'}
-		model={romModel}
-		onPress={virtualPress}
-		onRelease={virtualRelease}
-		onCancelAll={() => releaseInputSource('virtual')}
-	/>
 	<label>
 		<input
 			type="checkbox"
@@ -1184,23 +1324,7 @@
 	<p class="hint">
 		Disable assistance for immediate raw contact releases. ON uses the power-key input, not a forced interrupt.
 	</p>
-	<p class="hint">
-		{#if romModel === 'iq-7000'}
-			IQ controls: F1–F5 = Calendar/Schedule/TEL/MEMO/Calc; F6–F8 = Card/World/Home; Page Up/Down = Search; Enter =
-			Store; F11 = newline.
-		{:else}
-			PC-E500 controls: F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear.
-		{/if}
-		Both: A–Z, 0–9, arrows, Enter, Backspace, Delete, Insert, Space; F9 = SHIFT; F10 = CAPS; F12 = ON. Device CAPS controls
-		letter case. Host Shift operates device legends, not desktop text composition; use the on-screen operator keys or numeric
-		keypad for arithmetic.
-	</p>
 	{#if lastInputAck}<p class="hint" data-testid="input-ack">{lastInputAck}</p>{/if}
-
-	<label>
-		<input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
-		Enable physical keyboard input (model-specific keys; F12 = ON; ignored in text fields and controls)
-	</label>
 
 	{#if romLoaded}
 		<details bind:open={keyboardDebugOpen}>
@@ -1334,10 +1458,6 @@
 		</details>
 	{/if}
 
-	{#if lastError}
-		<p class="error">{lastError}</p>
-	{/if}
-
 	{#if romLoaded}
 		<details
 			bind:open={debugStateOpen}
@@ -1368,12 +1488,126 @@
 </main>
 
 <style>
+	.keyboard-controls {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 12px 22px;
+		padding: 12px 0 0;
+	}
+	.keyboard-controls button {
+		background: #275a59;
+		border-color: #73a9a0;
+	}
+	.keyboard-help {
+		margin-bottom: 14px;
+	}
+	.keyboard-target:focus {
+		outline: 2px solid #73a9a0;
+		outline-offset: 4px;
+		border-radius: 16px;
+	}
+	:global(body) {
+		margin: 0;
+		background: #10191f;
+		color: #e5eae9;
+		color-scheme: dark;
+	}
 	main {
 		display: flex;
 		flex-direction: column;
-		gap: 16px;
-		padding: 16px;
+		gap: 14px;
+		padding: 25px 28px 60px;
+		max-width: 1200px;
+		margin: 0 auto;
+		min-width: 0;
 		font-family: system-ui, sans-serif;
+	}
+	.page-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 20px;
+		padding-bottom: 8px;
+	}
+	h1 {
+		font-size: 25px;
+		margin: 5px 0 0;
+		font-weight: 550;
+		letter-spacing: -0.8px;
+	}
+	.eyebrow {
+		color: #91b8b2;
+		font:
+			10px/1.4 ui-monospace,
+			monospace;
+		letter-spacing: 2px;
+		margin: 0;
+	}
+	.source-controls {
+		display: flex;
+		gap: 18px;
+		flex-wrap: wrap;
+		font-size: 11px;
+		color: #a9bbbf;
+	}
+	.source-controls input {
+		max-width: 215px;
+		font-size: 11px;
+	}
+	.controls {
+		background: #1a282f;
+		padding: 12px 14px;
+		border: 1px solid #314047;
+		border-radius: 9px;
+		font-size: 12px;
+	}
+	.controls input[type='number'] {
+		width: 54px;
+	}
+	.controls .run-button {
+		background: #b6d2bd;
+		color: #13241e;
+		border-color: #b6d2bd;
+		font-weight: 650;
+		min-width: 70px;
+	}
+	main > .hint {
+		margin: 0;
+		font-size: 12px;
+	}
+	.lcd-meta {
+		font-size: 11px;
+	}
+	:global(summary) {
+		cursor: pointer;
+		color: #a7bec5;
+		padding: 8px 0;
+		font-size: 13px;
+	}
+	:global(button),
+	:global(select),
+	:global(input) {
+		font: inherit;
+	}
+	:global(button:focus-visible),
+	:global(select:focus-visible),
+	:global(input:focus-visible),
+	:global(summary:focus-visible) {
+		outline: 2px solid #b8dfd4;
+		outline-offset: 3px;
+	}
+	@media (max-width: 700px) {
+		main {
+			padding: 18px 12px 40px;
+		}
+		h1 {
+			font-size: 23px;
+		}
+		.source-controls {
+			gap: 10px;
+		}
 	}
 
 	.controls {
@@ -1395,7 +1629,7 @@
 	}
 
 	.hint {
-		color: #9aa4b2;
+		color: #a6b6bd;
 	}
 
 	pre {
@@ -1407,7 +1641,23 @@
 		border-radius: 8px;
 	}
 	button {
-		padding: 6px 10px;
+		padding: 7px 11px;
+		border: 1px solid #526169;
+		background: #283940;
+		color: #e5eeed;
+		border-radius: 5px;
+	}
+	button:disabled {
+		opacity: 0.4;
+	}
+	select,
+	input {
+		accent-color: #b6d2bd;
+	}
+	select {
+		padding: 6px;
+		border: 1px solid #526169;
+		border-radius: 5px;
 	}
 	input[type='number'] {
 		width: 140px;
@@ -1427,8 +1677,8 @@
 
 	.lcd-display {
 		display: flex;
-		align-items: flex-start;
-		gap: 8px;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.lcd-chip {
