@@ -2799,37 +2799,35 @@ impl LlamaCpu {
         self.sync_temps_from_state();
         let trace_result = if opcode == 0xFE {
             // IR: interrupt entry
-            self.read_irq_registers(py, &mut bus)
-                .and_then(|(imr, isr)| {
-                    self.emit_irq_trace(
-                        py,
-                        "IRQ_Enter",
-                        HashMap::from([
-                            ("pc", entry_pc & ADDRESS_MASK),
-                            (
-                                "vector",
-                                self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
-                            ),
-                            ("imr", imr as u32),
-                            ("isr", isr as u32),
-                        ]),
-                    )
-                })
+            self.peek_irq_registers(&mut bus).and_then(|(imr, isr)| {
+                self.emit_irq_trace(
+                    py,
+                    "IRQ_Enter",
+                    HashMap::from([
+                        ("pc", entry_pc & ADDRESS_MASK),
+                        (
+                            "vector",
+                            self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK,
+                        ),
+                        ("imr", imr as u32),
+                        ("isr", isr as u32),
+                    ]),
+                )
+            })
         } else if opcode == 0x01 {
             // RETI: interrupt exit
-            self.read_irq_registers(py, &mut bus)
-                .and_then(|(imr, isr)| {
-                    self.emit_irq_trace(
-                        py,
-                        "IRQ_Return",
-                        HashMap::from([
-                            ("pc", entry_pc & ADDRESS_MASK),
-                            ("ret", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
-                            ("imr", imr as u32),
-                            ("isr", isr as u32),
-                        ]),
-                    )
-                })
+            self.peek_irq_registers(&mut bus).and_then(|(imr, isr)| {
+                self.emit_irq_trace(
+                    py,
+                    "IRQ_Return",
+                    HashMap::from([
+                        ("pc", entry_pc & ADDRESS_MASK),
+                        ("ret", self.state.get_reg(LlamaRegName::PC) & ADDRESS_MASK),
+                        ("imr", imr as u32),
+                        ("isr", isr as u32),
+                    ]),
+                )
+            })
         } else {
             Ok(())
         };
@@ -3593,13 +3591,17 @@ impl LlamaCpu {
         Ok(())
     }
 
-    fn read_irq_registers(&self, py: Python<'_>, bus: &mut LlamaPyBus) -> PyResult<(u8, u8)> {
-        let imr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
-        let isr = bus.read_byte_with_gil(py, INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
+    fn peek_irq_registers(&self, bus: &mut LlamaPyBus) -> PyResult<(u8, u8)> {
+        // IRQ notification is an observer, not another architectural SFR read.
+        // Use the host-authoritative silent path, including after IMR writes;
+        // neither consume callbacks nor invent zero values for unavailable data.
+        let imr = bus.peek_byte_for_preflight(INTERNAL_MEMORY_START + IMEM_IMR_OFFSET);
+        let isr = bus.peek_byte_for_preflight(INTERNAL_MEMORY_START + IMEM_ISR_OFFSET);
         if let Some(err) = bus.take_callback_error() {
             Err(err)
         } else {
-            Ok((imr, isr))
+            imr.zip(isr)
+                .ok_or_else(|| PyRuntimeError::new_err("IRQ trace requires silent IMR/ISR samples"))
         }
     }
 }
