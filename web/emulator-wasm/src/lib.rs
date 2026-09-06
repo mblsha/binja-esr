@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
+mod function_call;
+
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
@@ -169,6 +171,7 @@ struct MemoryWriteByte {
 struct CallReport {
     reason: String,
     steps: u32,
+    scheduler_boundaries: u32,
     pc: u32,
     sp: u32,
     halted: bool,
@@ -300,6 +303,8 @@ pub struct Sc62015Emulator {
     model: DeviceModel,
     text_decoder: Option<DeviceTextDecoder>,
     iq7000_rtc_seed: Option<String>,
+    call_session: Option<function_call::FunctionCallSession>,
+    next_call_id: u32,
 }
 
 impl Default for Sc62015Emulator {
@@ -318,6 +323,8 @@ impl Sc62015Emulator {
             model: DeviceModel::DEFAULT,
             text_decoder: None,
             iq7000_rtc_seed: None,
+            call_session: None,
+            next_call_id: 0,
         }
     }
 
@@ -353,6 +360,7 @@ impl Sc62015Emulator {
     ///
     /// Nested tracing is not supported: returns an error if a trace is already active.
     pub fn perfetto_start(&mut self, name: &str) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         let mut guard = sc62015_core::PERFETTO_TRACER.enter();
         if let Some(existing) = guard.take() {
             guard.replace(Some(existing));
@@ -369,6 +377,7 @@ impl Sc62015Emulator {
 
     /// Stops the active long-running Perfetto trace and returns it as base64.
     pub fn perfetto_stop_b64(&mut self) -> Result<String, JsValue> {
+        self.require_no_active_call()?;
         let mut guard = sc62015_core::PERFETTO_TRACER.enter();
         let tracer = guard
             .take()
@@ -380,6 +389,7 @@ impl Sc62015Emulator {
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         if rom.is_empty() {
             return Err(JsValue::from_str("ROM is empty"));
         }
@@ -389,6 +399,7 @@ impl Sc62015Emulator {
     }
 
     pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         self.model = DeviceModel::parse(model).ok_or_else(|| {
             JsValue::from_str(&format!(
                 "unknown model '{model}' (expected: iq-7000|pc-e500)"
@@ -422,6 +433,7 @@ impl Sc62015Emulator {
     }
 
     pub fn reset(&mut self) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         if self.rom_image.is_empty() {
             return Err(JsValue::from_str("ROM not loaded"));
         }
@@ -445,6 +457,7 @@ impl Sc62015Emulator {
     }
 
     pub fn step_scheduler_boundaries(&mut self, boundaries: u32) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         self.runtime
             .step_scheduler_boundaries(boundaries as usize)
             .map_err(|e| JsValue::from_str(&e.to_string()))
@@ -464,6 +477,7 @@ impl Sc62015Emulator {
         scheduler_boundaries: u32,
         max_host_ms: f64,
     ) -> Result<JsValue, JsValue> {
+        self.require_no_active_call()?;
         if !max_host_ms.is_finite() || !(0.0..=16.0).contains(&max_host_ms) {
             return Err(JsValue::from_str(
                 "host slice target must be finite and in 0..=16 ms",
@@ -506,8 +520,10 @@ impl Sc62015Emulator {
         self.runtime.get_reg(name)
     }
 
-    pub fn set_reg(&mut self, name: &str, value: u32) {
+    pub fn set_reg(&mut self, name: &str, value: u32) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         self.runtime.set_reg(name, value);
+        Ok(())
     }
 
     /// Side-effect-free debugger peek. This intentionally does not perform an
@@ -521,8 +537,10 @@ impl Sc62015Emulator {
 
     /// Host/debugger memory patch. Device behavior is exercised only by CPU
     /// execution; this API updates the emulated memory image directly.
-    pub fn write_u8(&mut self, addr: u32, value: u8) {
+    pub fn write_u8(&mut self, addr: u32, value: u8) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         let _ = self.runtime.memory.store(addr, 8, value as u32);
+        Ok(())
     }
 
     pub fn memory_external_ptr(&self) -> u32 {
@@ -636,6 +654,7 @@ impl Sc62015Emulator {
     }
 
     pub fn sio_bridge_pump(&mut self, options: JsValue) -> Result<JsValue, JsValue> {
+        self.require_no_active_call()?;
         let opts: SioBridgePumpOptions = if options.is_undefined() || options.is_null() {
             SioBridgePumpOptions::default()
         } else {
@@ -710,355 +729,18 @@ impl Sc62015Emulator {
         serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    pub fn configure_timer(&mut self, enabled: bool, mti_period: u64, sti_period: u64) {
+    pub fn configure_timer(
+        &mut self,
+        enabled: bool,
+        mti_period: u64,
+        sti_period: u64,
+    ) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
         self.runtime.timer.enabled = enabled;
         self.runtime.timer.mti_period = mti_period;
         self.runtime.timer.sti_period = sti_period;
         self.runtime.timer.reset(self.runtime.cycle_count());
-    }
-
-    /// Run a ROM function at `addr` with a bounded instruction budget, capturing last-value
-    /// memory writes and display-mapped LCD writes performed during the run.
-    ///
-    /// Notes:
-    /// - This is a debugging helper for the web UI; it restores PC/SP/call-metrics on exit so
-    ///   the harness does not perturb subsequent execution.
-    /// - The function is entered by setting `PC=addr` and pushing a sentinel return address
-    ///   onto the S stack; the loop stops when execution returns to that sentinel PC.
-    pub fn call_function(&mut self, addr: u32, max_instructions: u32) -> Result<JsValue, JsValue> {
-        self.call_function_ex(addr, max_instructions, JsValue::UNDEFINED)
-    }
-
-    /// Like `call_function`, but allows optional capture controls via `options`:
-    /// - `{ trace: true }` captures a Perfetto trace for the duration of the call.
-    /// - `{ probe_pc: 0x00F123, probe_max_samples: 100 }` records register snapshots whenever `PC == probe_pc`.
-    #[wasm_bindgen]
-    pub fn call_function_ex(
-        &mut self,
-        addr: u32,
-        max_instructions: u32,
-        options: JsValue,
-    ) -> Result<JsValue, JsValue> {
-        let addr = addr & 0x000f_ffff;
-        let max_instructions = max_instructions.max(1);
-        let mut opts: CallOptions = serde_wasm_bindgen::from_value(options).unwrap_or_default();
-        if opts.probe_max_samples == 0 {
-            opts.probe_max_samples = 256;
-        }
-        let mut stub_map = HashMap::with_capacity(opts.stubs.len());
-        for stub in &opts.stubs {
-            let pc = stub.pc & 0x000f_ffff;
-            if stub_map.insert(pc, stub.id).is_some() {
-                return Err(JsValue::from_str(&format!(
-                    "duplicate stub address after 20-bit masking: 0x{pc:05X}"
-                )));
-            }
-        }
-
-        if opts.trace {
-            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
-            if let Some(existing) = guard.take() {
-                guard.replace(Some(existing));
-                return Err(JsValue::from_str(
-                    "Perfetto trace already recording (nested tracing is unsupported)",
-                ));
-            }
-        }
-
-        let before_pc = self.runtime.state.pc();
-        let before_sp = self.runtime.state.get_reg(RegName::S);
-        let before_call_metrics = self.runtime.state.snapshot_call_metrics();
-        let before_regs = sc62015_core::collect_registers(&self.runtime.state);
-
-        let sentinel_low16: u32 = 0xD00D;
-        let sentinel_pc = ((addr & 0x0f_0000) | sentinel_low16) & 0x000f_ffff;
-
-        // Push a 20-bit sentinel return address (little-endian) onto the S stack.
-        // Preserve the overwritten bytes so this debugger helper does not
-        // perturb later machine execution.
-        let stack_mask = mask_for(RegName::S);
-        let new_sp = before_sp.wrapping_sub(3) & stack_mask;
-        let mut saved_stack = Vec::with_capacity(3);
-        for i in 0..3u32 {
-            let stack_addr = new_sp.wrapping_add(i) & stack_mask;
-            if self.runtime.memory.is_read_only_range(stack_addr, 1)
-                || !self.runtime.memory.instruction_byte_is_stable(stack_addr)
-            {
-                return Err(JsValue::from_str(&format!(
-                    "call sentinel stack byte 0x{stack_addr:05X} is not writable static RAM"
-                )));
-            }
-            let previous = self
-                .runtime
-                .memory
-                .read_byte_for_preflight(stack_addr, None)
-                .ok_or_else(|| {
-                    JsValue::from_str(&format!(
-                        "call sentinel stack byte 0x{stack_addr:05X} is unavailable"
-                    ))
-                })?;
-            saved_stack.push((stack_addr, previous));
-        }
-        for (i, (stack_addr, _)) in saved_stack.iter().enumerate() {
-            let byte = (sentinel_pc >> (8 * i)) & 0xff;
-            let _ = self.runtime.memory.store(*stack_addr, 8, byte);
-        }
-        self.runtime.state.set_reg(RegName::S, new_sp);
-        // Bookkeeping for call-stack tracing; RET/RETF will unwind this.
-        self.runtime.state.push_call_stack(addr);
-        self.runtime.state.call_depth_inc();
-
-        // Enable last-value write capture.
-        self.runtime.memory.begin_write_capture();
-        if let Some(lcd) = self.runtime.lcd.as_mut() {
-            lcd.begin_display_write_capture();
-        }
-
-        // Optional perfetto capture for this call (serialized on wasm32).
-        let mut previous_tracer: Option<sc62015_core::PerfettoTracer> = None;
-        if opts.trace {
-            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
-            previous_tracer = guard.replace(Some(sc62015_core::PerfettoTracer::new(
-                std::path::PathBuf::from("call.perfetto-trace"),
-            )));
-        }
-
-        // Enter the function.
-        self.runtime.state.set_pc(addr);
-
-        let mut steps: u32 = 0;
-        let mut reason = "timeout".to_string();
-        let mut fault: Option<CallFault> = None;
-        let mut probe_samples: Vec<ProbeSample> = Vec::new();
-        let mut probe_hits: u32 = 0;
-        let mut stub_hits: HashMap<(u32, u32), u32> = HashMap::new();
-        let mut forced_writes: HashMap<u32, u8> = HashMap::new();
-        while steps < max_instructions {
-            let current_pc = self.runtime.state.pc() & 0x000f_ffff;
-            if self.runtime.state.is_halted() && !self.runtime.timer.irq_pending {
-                reason = "halted".to_string();
-                break;
-            }
-            if let Some(probe_pc) = opts.probe_pc {
-                if current_pc == (probe_pc & 0x000f_ffff)
-                    && (probe_samples.len() as u32) < opts.probe_max_samples
-                {
-                    probe_hits = probe_hits.saturating_add(1);
-                    probe_samples.push(ProbeSample {
-                        pc: current_pc,
-                        count: probe_hits,
-                        regs: sc62015_core::collect_registers(&self.runtime.state),
-                    });
-                }
-            }
-            if let Some(stub_id) = stub_map.get(&current_pc).copied() {
-                let hits = stub_hits.entry((stub_id, current_pc)).or_default();
-                *hits = hits.saturating_add(1);
-                let stub_result: Result<StubPatch, String> = (|| {
-                    let regs_snapshot = sc62015_core::collect_registers(&self.runtime.state);
-                    let regs_entries: Vec<StubRegEntry> = regs_snapshot
-                        .into_iter()
-                        .map(|(name, value)| StubRegEntry { name, value })
-                        .collect();
-                    let flags_entries = vec![
-                        StubRegEntry {
-                            name: "C".to_string(),
-                            value: self.runtime.state.get_reg(RegName::FC) & 1,
-                        },
-                        StubRegEntry {
-                            name: "Z".to_string(),
-                            value: self.runtime.state.get_reg(RegName::FZ) & 1,
-                        },
-                    ];
-                    let regs_js = serde_wasm_bindgen::to_value(&regs_entries)
-                        .map_err(|e| format!("stub regs encode failed: {e}"))?;
-                    let flags_js = serde_wasm_bindgen::to_value(&flags_entries)
-                        .map_err(|e| format!("stub flags encode failed: {e}"))?;
-                    let patch_js = js_stub_dispatch(stub_id, regs_js, flags_js)
-                        .map_err(|e| format!("stub dispatch failed: {}", js_error_to_string(e)))?;
-                    if patch_js.is_null() || patch_js.is_undefined() {
-                        return Ok(StubPatch::default());
-                    }
-                    serde_wasm_bindgen::from_value(patch_js)
-                        .map_err(|e| format!("stub patch decode failed: {e}"))
-                })();
-                let patch = match stub_result {
-                    Ok(patch) => patch,
-                    Err(message) => {
-                        reason = "fault".to_string();
-                        fault = Some(CallFault {
-                            kind: "StubError".to_string(),
-                            message,
-                        });
-                        break;
-                    }
-                };
-                for write in patch.mem_writes {
-                    let size = match write.size {
-                        2 | 3 => write.size,
-                        _ => 1,
-                    };
-                    let bits = size * 8;
-                    let addr = write.addr & 0x000f_ffff;
-                    let _ = self.runtime.memory.store_with_pc(
-                        addr,
-                        bits,
-                        write.value,
-                        Some(current_pc),
-                    );
-                    for offset in 0..size {
-                        let byte = ((write.value >> (8 * offset)) & 0xFF) as u8;
-                        forced_writes.insert(addr.wrapping_add(offset as u32), byte);
-                    }
-                }
-                for entry in patch.regs {
-                    if let Some(reg) = reg_from_name(&entry.name) {
-                        self.runtime.state.set_reg(reg, entry.value);
-                    }
-                }
-                for entry in patch.flags {
-                    match entry.name.to_ascii_uppercase().as_str() {
-                        "C" | "FC" => self.runtime.state.set_reg(RegName::FC, entry.value & 1),
-                        "Z" | "FZ" => self.runtime.state.set_reg(RegName::FZ, entry.value & 1),
-                        _ => {}
-                    }
-                }
-                let ret = patch.ret.unwrap_or(StubReturn::Ret { pc: None });
-                match ret {
-                    StubReturn::Ret { pc } => {
-                        let ret_addr =
-                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 16);
-                        let _ = self.runtime.state.pop_call_page();
-                        let page = current_pc & 0xFF0000;
-                        let mut dest = (page | (ret_addr & 0xFFFF)) & 0xFFFFF;
-                        if let Some(override_pc) = pc {
-                            dest = override_pc & 0x000f_ffff;
-                        }
-                        self.runtime.state.set_pc(dest);
-                        self.runtime.state.call_depth_dec();
-                        let _ = self.runtime.state.pop_call_stack();
-                    }
-                    StubReturn::Retf { pc } => {
-                        let mut dest =
-                            pop_stack(&mut self.runtime.state, &mut self.runtime.memory, 24)
-                                & 0xFFFFF;
-                        if let Some(override_pc) = pc {
-                            dest = override_pc & 0x000f_ffff;
-                        }
-                        self.runtime.state.set_pc(dest);
-                        self.runtime.state.call_depth_dec();
-                        let _ = self.runtime.state.pop_call_stack();
-                    }
-                    StubReturn::Jump { pc } => {
-                        self.runtime.state.set_pc(pc & 0x000f_ffff);
-                    }
-                    StubReturn::Stay => {}
-                }
-                steps += 1;
-                if self.runtime.state.pc() == sentinel_pc {
-                    reason = "returned".to_string();
-                    break;
-                }
-                continue;
-            }
-            if let Err(err) = self.runtime.step(1) {
-                reason = "fault".to_string();
-                fault = Some(CallFault {
-                    kind: "CoreError".to_string(),
-                    message: err.to_string(),
-                });
-                break;
-            }
-            steps += 1;
-            if self.runtime.state.pc() == sentinel_pc {
-                reason = "returned".to_string();
-                break;
-            }
-        }
-
-        let after_pc = self.runtime.state.pc();
-        let after_sp = self.runtime.state.get_reg(RegName::S);
-        let mut memory_writes_map: HashMap<u32, u8> = self
-            .runtime
-            .memory
-            .take_write_capture()
-            .into_iter()
-            .collect();
-        if !forced_writes.is_empty() {
-            memory_writes_map.extend(forced_writes);
-        }
-        let mut memory_writes: Vec<MemoryWriteByte> = memory_writes_map
-            .into_iter()
-            .map(|(addr, value)| MemoryWriteByte { addr, value })
-            .collect();
-        memory_writes.sort_by_key(|entry| entry.addr);
-        let lcd_writes = self
-            .runtime
-            .lcd
-            .as_mut()
-            .map(|lcd| lcd.take_display_write_capture())
-            .unwrap_or_default();
-
-        for (stack_addr, previous) in saved_stack {
-            let _ = self
-                .runtime
-                .memory
-                .store(stack_addr, 8, u32::from(previous));
-        }
-
-        let perfetto_trace_b64 = if opts.trace {
-            let mut guard = sc62015_core::PERFETTO_TRACER.enter();
-            let trace_bytes = guard
-                .take()
-                .map(|tracer| tracer.serialize())
-                .transpose()
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            guard.replace(previous_tracer.take());
-            trace_bytes.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
-        } else {
-            None
-        };
-
-        // Restore state so the harness does not leave a sentinel PC/SP or call metrics behind.
-        self.runtime.state.set_pc(before_pc);
-        self.runtime.state.set_reg(RegName::S, before_sp);
-        self.runtime.state.restore_call_metrics(before_call_metrics);
-
-        let after_regs = sc62015_core::collect_registers(&self.runtime.state);
-        let mut stubs_used: Vec<StubUse> = stub_hits
-            .into_iter()
-            .map(|((id, pc), hits)| StubUse { id, pc, hits })
-            .collect();
-        stubs_used.sort_by_key(|stub| (stub.pc, stub.id));
-
-        let report = CallReport {
-            reason,
-            steps,
-            pc: after_pc,
-            sp: after_sp,
-            halted: self.runtime.state.is_halted(),
-            fault,
-        };
-        let artifacts = CallArtifacts {
-            address: addr,
-            before_pc,
-            after_pc,
-            before_sp,
-            after_sp,
-            before_regs,
-            after_regs,
-            memory_writes,
-            lcd_writes,
-            probe_samples,
-            stubs_used,
-            perfetto_trace_b64,
-            report,
-        };
-        // Return JSON to avoid browser-specific structured-object aliasing errors observed with
-        // `serde_wasm_bindgen` + `HashMap` (wasm-bindgen re-entrancy guard).
-        let json =
-            serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(JsValue::from_str(&json))
+        Ok(())
     }
 
     pub fn lcd_pixels(&self) -> Uint8Array {
@@ -1237,7 +919,7 @@ mod tests {
         let rom: &[u8] = include_bytes!("../testdata/pf1_demo_rom_window.rom");
         let mut emulator = Pce500Emulator::new();
         emulator.load_rom(rom).expect("load");
-        emulator.set_reg("S", 0xB9003);
+        emulator.set_reg("S", 0xB9003).unwrap();
         emulator
     }
 
@@ -1539,9 +1221,9 @@ mod tests {
         clear_stub_state();
         let mut emulator = function_test_emulator();
         let pc = emulator.get_reg("PC");
-        emulator.set_reg("S", 0xB9003);
+        emulator.set_reg("S", 0xB9003).unwrap();
         for (offset, byte) in [0xA1, 0xB2, 0xC3].into_iter().enumerate() {
-            emulator.write_u8(0xB9000 + offset as u32, byte);
+            emulator.write_u8(0xB9000 + offset as u32, byte).unwrap();
         }
         set_stub_patch(
             serde_wasm_bindgen::to_value(&StubPatch {
@@ -1569,7 +1251,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn call_function_rejects_20bit_stack_wrap_into_rom() {
         let mut emulator = function_test_emulator();
-        emulator.set_reg("S", 1);
+        emulator.set_reg("S", 1).unwrap();
 
         let error = emulator
             .call_function(emulator.get_reg("PC"), 1)
