@@ -45,11 +45,16 @@ The CI workflow uploads coverage results to Codecov on each commit.
 The Rust LLAMA CLI is the primary emulator core. Run it with a terminal-rendered LCD view:
 
 ```bash
-cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500
+cargo run --release --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500
 ```
 
 Notes:
+
 - Use `--model iq-7000` to switch ROM/profile.
+- The default `--mode interactive` uses nominal compatibility pacing, not hardware-calibrated speed.
+  Use `--mode turbo` for unthrottled bounded execution. `--mode deterministic --steps 1000000`
+  requires an explicit finite budget and a fixed IQ RTC seed (or `off`); live guest keys are
+  disabled in that mode, but Ctrl+C still exits. The headless `pce500` runner remains unpaced.
 - IQ-7000 date/time screens seed the CLOCK workspace from the host clock by default; use
   `--iq7000-rtc YYYYMMDDHHMM` (UTC) for deterministic captures or `--iq7000-rtc off` for
   raw ROM behavior. The RTC peripheral converts UTC to the ROM's UTC+13 hardware basis before
@@ -57,7 +62,8 @@ Notes:
   The RTC ticks across RUN/HALT/OFF, implements the ROM's F0/F1/F2/F4/F5/F6/F8 alarm protocol,
   and models due schedule/daily alarms as a held ON/power-wake level acknowledged by FA/FF.
   The physical wiring, exact timing, F7/FC/FD fields, and F9/FB effects remain provisional.
-- Use `--refresh-steps 20000` to control redraw cadence.
+- Use `--target-fps 30` for normal LCD refresh cadence. `--refresh-steps 20000` is a maximum
+  boundary budget between loop checks, independent of the host display clock.
 - Use `--input-steps 1000` to poll for key presses more frequently.
 - Terminal execution also checks a 4 ms host-yield target between small Rust
   scheduler batches; long individual instructions can exceed that target.
@@ -66,7 +72,8 @@ Notes:
 - Use `--force-tty` when running detached.
 - Use `--pf-numbers` to map digits 1–5 to PF1–PF5 (disables typing those digits).
 - Use `--bnida PATH` to show function names in the status line (defaults to `rom-analysis/.../bnida.json` if present).
-- Use `--force-key-irq` if the ROM stays halted at the boot menu (forces KEY interrupts on key press).
+- `--force-key-irq` is a diagnostic override that forces KEY interrupts; do not use it as
+  evidence that ordinary keyboard input or HALT wake is correct.
 - Use `--card auto|present|absent` to control memory card slot state. `auto`
   selects a blank writable PC-E500 card and an absent IQ-7000 card.
 - Keys: Ctrl+1..5 or F1..F5 → PF1..PF5, Enter → `=`, Backspace → `BS`, Ctrl+C exits.

@@ -39,8 +39,9 @@ pacing is not proof of physically calibrated instruction timing.
 4. **Pacing and presentation:** explicit interactive/turbo/deterministic modes,
    bounded catch-up policy, latest-frame delivery, and cheap normal-play status.
    Browser latest-only delivery and shared Rust pacing/mode controls are
-   implemented. Native pacing adoption, cheap-default diagnostics and
-   per-capture cost qualification remain unfinished.
+   implemented, including native terminal pacing adoption. Cheap-default
+   diagnostics, native I/O isolation and per-capture cost qualification remain
+   unfinished.
 5. **Qualification:** actual browser input against both ROMs; HALT/OFF/wake,
    long counted instructions, busy loops, slow execution, script cancellation,
    tab focus/background and reload stress; architectural chunking/bus-order
@@ -537,3 +538,59 @@ Chromium 143. These short samples are not a sustained p99, hardware-speed proof
 or input-to-firmware latency guarantee. Native input/render isolation, complete
 model key maps, expensive artifact processing and broader qualification remain
 active goal work.
+
+## Native terminal pacing (2026-09-06)
+
+The release `sc62015-lcd` frontend now supports `--mode interactive` (default),
+`--mode turbo`, and `--mode deterministic`. Interactive/turbo use the same
+`CoreRuntime::run_automatic_slice` policy as the browser. Deterministic runs a
+finite explicit `--steps` budget, rejects host-derived IQ RTC seeds, and ignores
+live guest keyboard input while still accepting Ctrl+C. Use a fixed
+`--iq7000-rtc YYYYMMDDHHMM` or explicitly `off` for IQ deterministic runs.
+The separate headless `pce500` CLI retains its existing explicit, unpaced path.
+
+Normal LCD checks have a host-time cadence (`--target-fps`, default 30),
+independent of execution speed. Dirty/final updates may force an earlier check.
+The old `--refresh-steps` is still a maximum boundary budget between loop checks,
+not the only occasion for rendering. Pacing waits service input between sleeps
+of at most 4 ms. Legacy `--sleep-ms` now delays execution through a deadline;
+it no longer makes one blocking multi-second sleep or postpones process exit
+after an exhausted boundary budget. These bounds apply to **sleep and sliced
+execution**, not synchronous terminal output, decoding or debug formatting.
+
+Pending press/release, assisted ON, and automated-input deadlines clamp each
+native slice exactly. ON assistance is explicitly 20,000 submitted boundaries,
+not the CPU counter that freezes in OFF. No interrupt is forced by normal ON
+input. Status accounting no longer adds a requested chunk to the HALT diagnostic
+when a pacing wait executed nothing. Mode/timebase warnings and final counters
+make the timing contract visible; no hardware calibration is claimed.
+
+Validation included a fresh full 560-test Rust run, including two bounded CLI
+subprocess regressions, plus Clippy. The CLI tests use a public
+synthetic ROM, cover all modes and both model profiles, reject missing explicit
+budgets/host RTC seeds, compare final counters, and check that a final
+one-boundary run does not incur a requested 60-second post-refresh delay. Each
+subprocess has a five-second kill/reap deadline, not an unbounded CI wait.
+
+Separate actual-ROM release smoke runs completed one million boundaries per
+model with matching retired/CPU/elapsed counters in all three modes. On this
+M1 Ultra host with piped output, observed process durations were:
+
+| Model | Interactive | Turbo | Explicit deterministic |
+| --- | ---: | ---: | ---: |
+| PC-E500 | 1,586 ms | 21.5 ms | 21.8 ms |
+| IQ-7000 | 2,171 ms | 328.8 ms | 328.2 ms |
+
+PC-E500 retired only 12,280 instructions in that mostly-HALT run; IQ-7000
+retired 451,776. Their elapsed timing was 1,208,846 and 2,208,962 compatibility
+units respectively. These are workload-specific host observations, not general
+instruction throughput, physical realtime calibration, or terminal latency.
+A separate live PTY smoke accepted Ctrl+C during `--sleep-ms 5000` and exited
+cleanly without waiting for the remaining delay. This is a control smoke, not a
+statistical latency benchmark.
+
+Remaining native work is substantial: separate blocking terminal I/O from
+machine ownership, cheap/opt-in diagnostics, model-correct source-owned keys,
+explicit pause/progress/fault controls and broader input/long-instruction
+qualification. The legacy IQ translated-event injection path is still present
+in this stage and is not reclassified as physical keyboard evidence.

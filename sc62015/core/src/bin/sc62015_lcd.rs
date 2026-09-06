@@ -10,6 +10,7 @@ use crossterm::{
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
+use sc62015_core::pacing::{ExecutionMode, Pacer, HOST_SLICE_TARGET_US};
 use sc62015_core::{
     iq7000_annunciators::Iq7000Annunciators, pce500::ROM_WINDOW_START, CoreRuntime,
     DeviceMemoryCardProfile, DeviceModel, LoopDetectorConfig,
@@ -28,7 +29,7 @@ const STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 const PF_KEY_HOLD_STEPS: u64 = 40_000;
 const CHAR_KEY_HOLD_STEPS: u64 = 10_000;
 const SHIFTED_CHORD_LEAD_STEPS: u64 = 8_000;
-const ON_AUTO_HOLD_CYCLES: u64 = 20_000;
+const ON_AUTO_HOLD_BOUNDARIES: u64 = 20_000;
 const BASIC_REPL_HUB_PC: u32 = 0x00FFE09;
 const BASIC_WARM_START_PC: u32 = 0x00F9C94;
 const AUTO_TYPE_START_DELAY_STEPS: u64 = 20_000;
@@ -83,6 +84,15 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     steps: u64,
 
+    /// Host execution mode. Interactive uses an uncalibrated nominal timebase.
+    /// Deterministic requires finite --steps and a fixed IQ RTC seed; live guest keys are disabled.
+    #[arg(long, value_enum, default_value_t = ExecutionMode::Interactive)]
+    mode: ExecutionMode,
+
+    /// Maximum normal LCD refresh cadence, independent of CPU speed (1..=60).
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=60))]
+    target_fps: u64,
+
     /// Scheduler-boundary budget between LCD refresh checks.
     #[arg(long, default_value_t = 20_000)]
     refresh_steps: u64,
@@ -96,7 +106,7 @@ struct Args {
     #[arg(long, default_value_t = false)]
     loop_diagnostics: bool,
 
-    /// Sleep this many milliseconds after each refresh check (0 = no sleep).
+    /// Legacy extra delay after LCD checks. Sleep is split into <=4 ms waits to service controls.
     #[arg(long, default_value_t = 0)]
     sleep_ms: u64,
 
@@ -286,6 +296,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_modes_require_explicit_reproducibility_inputs() {
+        for model in ["pc-e500", "iq-7000"] {
+            let defaults = Args::try_parse_from(["sc62015-lcd", "--model", model]).unwrap();
+            assert_eq!(defaults.mode, ExecutionMode::Interactive);
+            validate_execution_args(&defaults).unwrap();
+            let mut deterministic =
+                Args::try_parse_from(["sc62015-lcd", "--model", model, "--mode", "deterministic"])
+                    .unwrap();
+            assert!(validate_execution_args(&deterministic).is_err());
+            deterministic.steps = 1000;
+            if model == "iq-7000" {
+                assert!(validate_execution_args(&deterministic).is_err());
+            }
+            deterministic.iq7000_rtc = "202609060000".into();
+            validate_execution_args(&deterministic).unwrap();
+        }
+        assert!(Args::try_parse_from(["sc62015-lcd", "--target-fps", "0"]).is_err());
+        assert!(Args::try_parse_from(["sc62015-lcd", "--target-fps", "61"]).is_err());
+    }
+
+    #[test]
+    fn native_deadlines_are_exact_across_large_small_and_overdue_budgets() {
+        let presses = [PendingPress {
+            code: 3,
+            due_step: 120,
+            hold_steps: 10,
+            force_key_irq: false,
+        }];
+        let releases = [PendingRelease {
+            code: 4,
+            due_step: 130,
+        }];
+        assert_eq!(
+            limit_input_deadline(1000, 100, &presses, &releases, [Some(115)]),
+            15
+        );
+        assert_eq!(
+            limit_input_deadline(2, 100, &presses, &releases, [Some(115)]),
+            2
+        );
+        assert_eq!(
+            limit_input_deadline(1000, 121, &presses, &releases, [None]),
+            0
+        );
+        assert_eq!(limit_input_deadline(1000, 121, &[], &releases, [None]), 9);
+        assert_eq!(limit_input_deadline(1000, 121, &[], &[], [None]), 1000);
+    }
+
+    #[test]
+    fn native_on_tap_deadline_uses_executed_boundaries_not_frozen_cpu_clock() {
+        let mut runtime = CoreRuntime::new();
+        runtime.state.power_off();
+        let mut deadline = None;
+        let feedback = handle_key_event(
+            &mut runtime,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            false,
+            1000,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            KeyEventOptions {
+                pending_on_release: &mut deadline,
+                force_key_irq: false,
+                model: DeviceModel::PcE500,
+            },
+        );
+        assert_eq!(feedback.label.as_deref(), Some("ON"));
+        assert!(runtime.physical_on_key_pressed());
+        assert_eq!(runtime.cycle_count(), 0);
+        assert_eq!(deadline, Some(1000 + ON_AUTO_HOLD_BOUNDARIES));
+    }
+
+    #[test]
     fn loop_diagnostics_are_opt_in_for_both_models() {
         for model in ["pc-e500", "iq-7000"] {
             let normal = Args::try_parse_from(["sc62015-lcd", "--model", model]).unwrap();
@@ -446,6 +529,7 @@ fn format_status(
     last_key: &Option<String>,
     last_key_step: u64,
     symbols: Option<&SymbolMap>,
+    pacer: &Pacer,
 ) -> String {
     let pc = runtime.state.pc() & 0x000f_ffff;
     let power_state = if runtime.state.is_off() {
@@ -462,9 +546,7 @@ fn format_status(
         .map(|label| format!(" last_key={label}@{last_key_step}"))
         .unwrap_or_default();
     let iq_status = format_iq7000_annunciator_status(runtime);
-    format!(
-        "{pc_display} steps={executed} state={power_state}{key_status}{iq_status} (Ctrl+C to exit)"
-    )
+    format!("[{} uncalibrated] {pc_display} boundaries={executed} state={power_state}{key_status}{iq_status} dropped_host_ms={} (Ctrl+C to exit)", pacer.mode().label(), pacer.dropped_host_ns() / 1_000_000)
 }
 
 fn format_iq7000_annunciator_status(runtime: &CoreRuntime) -> String {
@@ -1052,6 +1134,23 @@ struct PendingPress {
     force_key_irq: bool,
 }
 
+fn limit_input_deadline(
+    requested: u64,
+    executed: u64,
+    presses: &[PendingPress],
+    releases: &[PendingRelease],
+    other: impl IntoIterator<Item = Option<u64>>,
+) -> u64 {
+    presses
+        .iter()
+        .map(|entry| entry.due_step)
+        .chain(releases.iter().map(|entry| entry.due_step))
+        .chain(other.into_iter().flatten())
+        .fold(requested, |budget, deadline| {
+            budget.min(deadline.saturating_sub(executed))
+        })
+}
+
 struct KeyEventOptions<'a> {
     pending_on_release: &'a mut Option<u64>,
     force_key_irq: bool,
@@ -1381,7 +1480,7 @@ fn handle_key_event(
             if ch == 'o' || ch == 'O' {
                 runtime.press_on_key();
                 *options.pending_on_release =
-                    Some(runtime.cycle_count().saturating_add(ON_AUTO_HOLD_CYCLES));
+                    Some(executed.saturating_add(ON_AUTO_HOLD_BOUNDARIES));
                 return KeyFeedback {
                     label: Some("ON".to_string()),
                     quit: false,
@@ -1638,10 +1737,39 @@ fn apply_iq7000_rtc_arg(
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
+fn validate_execution_args(args: &Args) -> Result<(), Box<dyn Error>> {
     if args.refresh_steps == 0 {
         return Err("refresh_steps must be > 0".into());
+    }
+    if Instant::now()
+        .checked_add(Duration::from_millis(args.sleep_ms))
+        .is_none()
+    {
+        return Err("sleep_ms exceeds the host clock range".into());
+    }
+    if args.mode == ExecutionMode::Deterministic {
+        if args.steps == 0 {
+            return Err("deterministic mode requires a finite --steps budget".into());
+        }
+        if args.model == DeviceModel::Iq7000
+            && (args.iq7000_rtc.trim().is_empty()
+                || args.iq7000_rtc.trim().eq_ignore_ascii_case("host"))
+        {
+            return Err("deterministic IQ-7000 execution requires --iq7000-rtc YYYYMMDDHHMM (or off), not a host-time seed".into());
+        }
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+    validate_execution_args(&args)?;
+    let mut pacer = Pacer::for_model(args.model, args.mode);
+    eprintln!("[execution] {}: {} compatibility timing units/s, not hardware calibrated; IQ uses the PC fallback. RTC follows guest elapsed time, not paused host time.", args.mode.label(), pacer.timebase_hz());
+    if args.mode == ExecutionMode::Deterministic {
+        eprintln!(
+            "[execution] explicit --steps budget; live guest keys disabled (Ctrl+C still exits)"
+        );
     }
     let rom_path = args.rom.unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = fs::read(&rom_path)?;
@@ -1711,7 +1839,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let stack_row = status_row.saturating_add(1);
     if use_tty {
         let blank_lines = normalize_lines(Vec::new(), line_count, width);
-        let status = format_status(&runtime, 0, &last_key, last_key_step, symbols.as_ref());
+        let status = format_status(
+            &runtime,
+            0,
+            &last_key,
+            last_key_step,
+            symbols.as_ref(),
+            &pacer,
+        );
         let extra_lines = format_extra_lines(
             &runtime,
             symbols.as_ref(),
@@ -1730,6 +1865,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut executed: u64 = 0;
     let mut running = true;
+    let host_epoch = Instant::now();
+    let host_target = Duration::from_micros(HOST_SLICE_TARGET_US);
+    let display_interval = Duration::from_secs_f64(1.0 / args.target_fps as f64);
+    let mut last_display_check = Instant::now();
+    let mut legacy_delay_until: Option<Instant> = None;
     while running {
         if args.steps > 0 && executed >= args.steps {
             break;
@@ -1744,19 +1884,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
         while remaining > 0 {
+            let previously_executed = executed;
+            let now = Instant::now();
+            let delayed = legacy_delay_until.is_some_and(|deadline| now < deadline);
+            if !delayed && legacy_delay_until.take().is_some() {
+                pacer.rebase();
+            }
+            let mut host_wait = if delayed { host_target } else { Duration::ZERO };
             let mut did_stub = false;
-            if apply_stub_returns(
-                &mut runtime,
-                &mut fast_init_cleared,
-                StubReturnConfig {
-                    symbols: symbols.as_ref(),
-                    stub_iocs: args.stub_iocs,
-                    fast_delay: args.fast_delay,
-                    stub_sio: args.stub_sio,
-                    fast_init: args.fast_init,
-                    ram_zero_buf: fast_init_buf.as_deref(),
-                },
-            ) {
+            if !delayed
+                && apply_stub_returns(
+                    &mut runtime,
+                    &mut fast_init_cleared,
+                    StubReturnConfig {
+                        symbols: symbols.as_ref(),
+                        stub_iocs: args.stub_iocs,
+                        fast_delay: args.fast_delay,
+                        stub_sio: args.stub_sio,
+                        fast_init: args.fast_init,
+                        ram_zero_buf: fast_init_buf.as_deref(),
+                    },
+                )
+            {
                 executed = executed.saturating_add(1);
                 remaining = remaining.saturating_sub(1);
                 dirty = true;
@@ -1767,13 +1916,42 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 remaining.min(args.input_steps)
             };
-            if !did_stub {
+            let chunk = limit_input_deadline(
+                chunk,
+                executed,
+                &pending_presses,
+                &pending_releases,
+                [
+                    pending_on_release,
+                    auto_basic_step,
+                    auto_type_next_step,
+                    ((auto_basic_pending
+                        || jump_basic_pending
+                        || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
+                        && auto_basic_step.is_none())
+                    .then_some(last_lcd_check.saturating_add(lcd_check_interval)),
+                ],
+            );
+            if !did_stub && !delayed {
                 let slice_start = Instant::now();
-                let result = runtime
-                    .run_slice(usize::try_from(chunk).unwrap_or(usize::MAX), |_| {
-                        slice_start.elapsed() >= Duration::from_millis(4)
-                    })?;
-                let used = result.progress.boundary_budget_used as u64;
+                let limit = usize::try_from(chunk).unwrap_or(usize::MAX);
+                let used = if args.mode == ExecutionMode::Deterministic {
+                    runtime
+                        .run_slice(limit, |_| slice_start.elapsed() >= host_target)?
+                        .progress
+                        .boundary_budget_used
+                } else {
+                    let result = runtime.run_automatic_slice(
+                        &mut pacer,
+                        u64::try_from(host_epoch.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                        limit,
+                        |_| slice_start.elapsed() >= host_target,
+                    )?;
+                    host_wait = Duration::from_nanos(result.plan.wait_ns);
+                    result
+                        .slice
+                        .map_or(0, |slice| slice.progress.boundary_budget_used)
+                } as u64;
                 executed = executed.saturating_add(used);
                 remaining = remaining.saturating_sub(used);
             }
@@ -1786,8 +1964,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 dirty = true;
             }
             apply_pending_releases(&mut runtime, &mut pending_releases, executed);
-            if let Some(release_cycle) = pending_on_release {
-                if runtime.cycle_count() >= release_cycle {
+            if let Some(release_boundary) = pending_on_release {
+                if executed >= release_boundary {
                     runtime.release_on_key();
                     pending_on_release = None;
                 }
@@ -1854,7 +2032,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
             if runtime.state.is_halted() {
-                halted_steps = halted_steps.saturating_add(chunk);
+                halted_steps =
+                    halted_steps.saturating_add(executed.saturating_sub(previously_executed));
             } else {
                 halted_steps = 0;
             }
@@ -1891,6 +2070,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             if use_tty {
                 while event::poll(Duration::from_millis(0))? {
                     if let Event::Key(key) = event::read()? {
+                        if args.mode == ExecutionMode::Deterministic {
+                            if matches!(key.code, KeyCode::Char('c' | 'C'))
+                                && key.modifiers.contains(KeyModifiers::CONTROL)
+                            {
+                                running = false;
+                                break;
+                            }
+                            continue;
+                        }
                         let feedback = handle_key_event(
                             &mut runtime,
                             key,
@@ -1923,6 +2111,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &last_key,
                     last_key_step,
                     symbols.as_ref(),
+                    &pacer,
                 );
                 let extra_lines = format_extra_lines(
                     &runtime,
@@ -1943,10 +2132,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             if dirty {
                 break;
             }
+            if last_display_check.elapsed() >= display_interval {
+                break;
+            }
             if args.steps > 0 && executed >= args.steps {
                 break;
             }
+            if !host_wait.is_zero() {
+                // Rounding tiny waits up avoids a sub-millisecond busy wake
+                // loop. Any resulting host credit is accounted by Rust next time.
+                sleep(host_wait.max(Duration::from_millis(1)).min(host_target));
+            }
         }
+
+        if !first_draw
+            && !dirty
+            && running
+            && (args.steps == 0 || executed < args.steps)
+            && last_display_check.elapsed() < display_interval
+        {
+            continue;
+        }
+        last_display_check = Instant::now();
 
         let lines = match (&text_decoder, runtime.lcd.as_deref()) {
             (Some(decoder), Some(lcd)) => decoder.decode_display_text(lcd),
@@ -1960,6 +2167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &last_key,
                 last_key_step,
                 symbols.as_ref(),
+                &pacer,
             );
             let extra_lines = format_extra_lines(
                 &runtime,
@@ -1977,11 +2185,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             last_status_draw = Instant::now();
         }
 
-        if args.sleep_ms > 0 {
-            sleep(Duration::from_millis(args.sleep_ms));
+        if args.sleep_ms > 0 && legacy_delay_until.is_none() {
+            legacy_delay_until = Instant::now().checked_add(Duration::from_millis(args.sleep_ms));
         }
     }
 
+    eprintln!("[execution] finished boundaries={executed} retired={} cpu_timing={} elapsed_timing={} dropped_host_ns={}",
+        runtime.instruction_count(), runtime.cycle_count(), runtime.elapsed_timing_units(), pacer.dropped_host_ns());
     if let Some(detector) = runtime.loop_detector() {
         if let Some(report) = detector.last_report() {
             let path = args
