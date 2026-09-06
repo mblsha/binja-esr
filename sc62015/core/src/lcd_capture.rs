@@ -115,7 +115,9 @@ mod tests {
         memory.store(0x6160, 8, 0).unwrap();
         let cleared = LcdCapture::read(Some(lcd.as_ref()), &memory);
         assert_ne!(cleared.pixels, capture.pixels); // capture owns its arrays
-        for row in cleared.pixels.chunks_exact(488) {
+        let (rows, remainder) = cleared.pixels.as_chunks::<488>();
+        assert!(remainder.is_empty());
+        for row in rows {
             assert!(row[384..].iter().all(|&shade| shade == 192));
         }
     }
