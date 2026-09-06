@@ -5,6 +5,7 @@ import type { StubRegistration } from '../debug/sc62015_stub_types';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 import { ExecutionCancelled, runHostSlice, stepBounded } from './bounded_step';
 import { WorkerOperations } from './worker_operations';
+import { callBounded } from './bounded_call';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -131,13 +132,9 @@ function isWasmBindgenBorrowError(message: string): boolean {
 
 function initStubDispatcher() {
 	if (stubDispatcher || !emulator || !wasm) return;
-	if (typeof emulator.memory_external_ptr !== 'function') return;
+	if (typeof emulator.read_u8 !== 'function') return;
 	stubDispatcher = createStubDispatcher({
-		wasmMemory: wasm.memory,
-		externalPtr: emulator.memory_external_ptr(),
-		externalLen: emulator.memory_external_len(),
-		internalPtr: emulator.memory_internal_ptr(),
-		internalLen: emulator.memory_internal_len(),
+		read8: (addr) => emulator.read_u8(addr),
 	});
 }
 
@@ -201,15 +198,36 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
 				if (options?.trace) await ensurePerfettoSymbols();
-				const raw =
-					emulator.call_function_ex?.(address, maxInstructions, {
+				let lastProgress = -Infinity;
+				return callBounded(
+					emulator,
+					address,
+					maxInstructions,
+					{
 						trace: Boolean(options?.trace),
 						probe_pc: options?.probe ? options.probe.pc : null,
 						probe_max_samples: options?.probe?.maxSamples ?? 256,
 						stubs: options?.stubs ?? [],
-					}) ?? emulator.call_function(address, maxInstructions);
-				if (typeof raw === 'string') return JSON.parse(raw);
-				return raw;
+					},
+					{
+						signal,
+						onProgress: (used, slice) => {
+							applyVirtualReleaseBudget(used);
+							const now = performance.now();
+							if (now - lastProgress >= 100 || slice.state === 'complete') {
+								lastProgress = now;
+								(self as any).postMessage({
+									type: 'execution_progress',
+									generation: machineGeneration,
+									address,
+									steps: slice.steps,
+									schedulerBoundaries: slice.scheduler_boundaries,
+								});
+							}
+						},
+						dispatchStub: (request) => requireStubDispatcher().dispatch(request.id, request.regs, request.flags),
+					},
+				);
 			}),
 		startPerfettoTrace: async (name: string) =>
 			runWithErrorAsync(`perfetto.start(${name})`, async () => {
@@ -576,7 +594,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					if (typeof res?.error === 'string' && !res.error.toLowerCase().includes('reload')) {
 						res.error = `${res.error}\n(postFrame skipped: emulator may need reload after a WASM trap)`;
 					}
-				} else {
+				} else if (!signal?.aborted) {
 					try {
 						postFrame(captureFrame(true));
 					} catch (err) {

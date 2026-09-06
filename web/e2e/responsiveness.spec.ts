@@ -140,6 +140,70 @@ test('Stop cancels a huge Function Runner step and the machine remains usable', 
 	await expect(page.getByTestId('emu-status')).not.toContainText(/FAULTED|UNRESPONSIVE/);
 });
 
+for (const model of ['pc-e500', 'iq-7000']) {
+	test(`${model}: Stop cancels an executing function call and restores its debugger frame`, async ({ page }) => {
+		// A deliberate busy-loop fixture in real writable model RAM, not app evidence.
+		const rom = await readFile(resolve(process.cwd(), 'emulator-wasm/testdata/pf1_demo_rom_window.rom'));
+		await page.route(`**/api/rom?model=${model}`, (route) => route.fulfill({ status: 200, body: rom }));
+		await page.addInitScript((model) => localStorage.setItem('sc62015:rom-model', model), model);
+		await page.goto('/');
+		await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
+		await page.getByTestId('fnr-panel').evaluate((panel: HTMLDetailsElement) => {
+			panel.open = true;
+		});
+		await page.getByTestId('fnr-editor').fill(`
+await e.memory.write(0xB8000, 3, 0x800002); // JP 8000 in page B (self-loop)
+await e.memory.write(0xB9000, 3, 0xC3B2A1);
+await e.call(0xB8000, { S: 0xB9003, IMR: 0 }, { maxInstructions: 4_000_000_000 });
+`);
+		await page.getByTestId('fnr-run').click();
+		// Wait for actual Rust call progress, not just the UI's script-busy label.
+		await expect(page.getByTestId('execution-progress')).toContainText('scheduler boundaries');
+		await page.getByRole('button', { name: 'Stop', exact: true }).click();
+		await expect(page.getByTestId('emu-status')).toContainText(/STOPPED|HALTED/);
+		await expect(page.getByTestId('fnr-error')).toContainText('Function call cancelled');
+		await expect(page.getByTestId('fnr-call')).toHaveCount(1);
+		await page.getByTestId('fnr-editor').fill(`
+e.assert(e.reg(Reg.S) === 0xB9003, 'S must be restored');
+e.assert(await e.memory.read(0xB9000, 3) === 0xC3B2A1, 'sentinel bytes must be restored');
+await e.step(1);
+`);
+		await page.getByTestId('fnr-run').click();
+		await expect(page.getByTestId('fnr-run')).toBeEnabled();
+		await expect(page.getByTestId('fnr-error')).toHaveCount(0);
+	});
+
+	test(`${model}: stub callbacks read the current WASM machine across reset`, async ({ page }) => {
+		const rom = await readFile(resolve(process.cwd(), 'emulator-wasm/testdata/pf1_demo_rom_window.rom'));
+		await page.route(`**/api/rom?model=${model}`, (route) => route.fulfill({ status: 200, body: rom }));
+		await page.addInitScript((model) => localStorage.setItem('sc62015:rom-model', model), model);
+		await page.goto('/');
+		await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
+		await page.getByTestId('fnr-panel').evaluate((panel: HTMLDetailsElement) => {
+			panel.open = true;
+		});
+		await page.getByTestId('fnr-editor').fill(`
+let expected = 0xA1;
+e.stub(0xB8000, 'current-memory', (mem) => {
+  e.assert(mem.read8(0xB8100) === expected, 'stub must read the current RAM allocation');
+  return { regs: { A: expected }, ret: { kind: 'retf' } };
+});
+for (const value of [0xA1, 0xB2]) {
+  expected = value;
+  await e.reset({ fresh: false, warmupTicks: 0 });
+  await e.memory.write(0xB8100, 1, value);
+  const call = await e.call(0xB8000, { S: 0xB9003 }, { maxInstructions: 100, trace: true });
+  e.assert(call.artifacts.result.reason === 'returned', 'stub call must return');
+  e.assert(e.reg(Reg.A) === expected, 'stub result must be applied');
+}
+`);
+		await page.getByTestId('fnr-run').click();
+		await expect(page.getByTestId('fnr-run')).toBeEnabled();
+		await expect(page.getByTestId('fnr-error')).toHaveCount(0);
+		await expect(page.getByTestId('fnr-call')).toHaveCount(2);
+	});
+}
+
 test('a delayed previous ROM fetch cannot replace the newly selected model', async ({ page }) => {
 	const rom = await readFile(resolve(process.cwd(), 'emulator-wasm/testdata/pf1_demo_rom_window.rom'));
 	let releaseOld!: () => void;

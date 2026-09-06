@@ -15,6 +15,27 @@ function makeMemory() {
 }
 
 describe('createStubDispatcher', () => {
+	it('does not silently turn an asynchronous handler into a default return', () => {
+		const dispatcher = createStubDispatcher({ read8: () => 0 });
+		dispatcher.registerStub({ id: 1, pc: 0xb8000, handler: (async () => ({ ret: { kind: 'retf' } })) as any });
+		expect(() => dispatcher.dispatch(1, [], [])).toThrow('not a Promise');
+	});
+	it('reads through the current machine after reset/load without retaining raw pointers', () => {
+		let current = new Uint8Array([0x11]);
+		const dispatcher = createStubDispatcher({ read8: (addr) => current[addr] });
+		const observed: number[] = [];
+		dispatcher.registerStub({
+			id: 1,
+			pc: 0x10000,
+			handler: (mem) => {
+				observed.push(mem.read8(0));
+			},
+		});
+		dispatcher.dispatch(1, [], []);
+		current = new Uint8Array([0x22]);
+		dispatcher.dispatch(1, [], []);
+		expect(observed).toEqual([0x11, 0x22]);
+	});
 	it('dispatches handler and normalizes patch output', () => {
 		const memory = makeMemory();
 		const dispatcher = createStubDispatcher(memory);

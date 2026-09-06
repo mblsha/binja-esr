@@ -18,6 +18,8 @@ import { runUserJs } from '../src/lib/debug/run_user_js';
 import { normalizeRomModel, romBasename, type RomModel } from '../src/lib/rom_model';
 import { createStubDispatcher, type StubDispatcher } from '../src/lib/debug/sc62015_stub_dispatch';
 import type { StubRegistration } from '../src/lib/debug/sc62015_stub_types';
+import { callBounded } from '../src/lib/emulator/bounded_call';
+import { stepBounded } from '../src/lib/emulator/bounded_step';
 
 import initWasm, * as wasm from '../src/lib/wasm/pce500_wasm/pce500_wasm.js';
 
@@ -146,14 +148,10 @@ const DEFAULT_PCLINK_YIELD_EVERY_INSTRUCTIONS = 1_000;
 let stubDispatcher: StubDispatcher | null = null;
 
 function initStubDispatcher(emulator: any) {
-	if (stubDispatcher || !emulator || !wasm?.memory) return;
-	if (typeof emulator.memory_external_ptr !== 'function') return;
+	if (stubDispatcher || !emulator) return;
+	if (typeof emulator.read_u8 !== 'function') return;
 	stubDispatcher = createStubDispatcher({
-		wasmMemory: wasm.memory,
-		externalPtr: emulator.memory_external_ptr(),
-		externalLen: emulator.memory_external_len(),
-		internalPtr: emulator.memory_internal_ptr(),
-		internalLen: emulator.memory_internal_len(),
+		read8: (addr) => emulator.read_u8(addr),
 	});
 }
 
@@ -656,15 +654,21 @@ async function main() {
 			} | null,
 		) =>
 			runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
-				const raw =
-					emulator.call_function_ex?.(address, maxInstructions, {
+				return callBounded(
+					emulator,
+					address,
+					maxInstructions,
+					{
 						trace: Boolean(options?.trace),
 						probe_pc: options?.probe ? options.probe.pc : null,
 						probe_max_samples: options?.probe?.maxSamples ?? 256,
 						stubs: options?.stubs ?? [],
-					}) ?? emulator.call_function(address, maxInstructions);
-				if (typeof raw === 'string') return JSON.parse(raw);
-				return raw;
+					},
+					{
+						yieldHost: yieldImmediate,
+						dispatchStub: (request) => requireStubDispatcher().dispatch(request.id, request.regs, request.flags),
+					},
+				);
 			}),
 		startPerfettoTrace: (name: string) =>
 			runWithError(`perfetto.start(${name})`, () => {
@@ -686,7 +690,9 @@ async function main() {
 			}),
 		reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
 		step: async (instructions: number) =>
-			runWithErrorAsync(`step(${instructions})`, () => Promise.resolve(emulator.step?.(instructions))),
+			runWithErrorAsync(`step(${instructions})`, async () => {
+				await stepBounded(emulator, instructions, { yieldHost: yieldImmediate });
+			}),
 		getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
 		setReg: (name: string, value: number) =>
 			runWithError(`setReg(${name}=${value})`, () => emulator.set_reg?.(name, value)),

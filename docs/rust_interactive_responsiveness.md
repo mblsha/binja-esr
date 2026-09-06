@@ -25,9 +25,11 @@ proof of physically calibrated instruction timing.
 2. **Browser control lifecycle:** bounded normal/explicit/script execution,
    acknowledged Pause, finite request lifetimes, startup/load serialization,
    failure handling, and isolation of user JavaScript from machine ownership.
-   Normal running, explicit stepping and Function Runner `e.step()` are bounded;
+   Normal running, explicit stepping and Function Runner `e.step()`/`e.call()` use
+   bounded Rust execution;
    control acknowledgements, request failure handling and ROM-load generation
-   checks are implemented. Function calls and JavaScript isolation remain pending.
+   checks are implemented. Arbitrary JavaScript isolation and bounded artifact
+   processing remain pending.
 3. **Reliable input:** correct release/repress/focus-loss behavior, complete
    model-specific controls, and distinct raw-contact versus timed synthetic-tap
    contracts. Never conflate scheduler boundaries with retired instructions.
@@ -150,7 +152,7 @@ Local validation:
   The observations do **not** consistently meet the initial sub-50 ms target.
   Test attachments include the sample list and host/browser identification.
 
-The public PR workflow runs only three short synthetic browser-control
+The public PR workflow runs only seven short synthetic browser-control
 regressions, excluding the repeated latency measurements; the full browser
 suite runs on pushes. Both reuse CI's explicitly built app. Private ROM and
 hardware runs are not new mandatory CI requirements.
@@ -169,12 +171,74 @@ CI=1 PCE500_E2E_PORT=4197 PCE500_E2E_REAL_ROM=1 \
 The real-ROM invocation requires both licensed files through the usual `data/`
 links. A missing ROM is a failure, not permission to substitute a fixture.
 
+## Resumable Function Runner calls (2026-09-06)
+
+The WASM debugger-call helper now has explicit begin, advance, stub-response,
+finish and cancel operations. Each invocation has an ownership ID; stale replies,
+overlapping calls, reset/load and conflicting register/memory/step operations
+are rejected while it is active. Browser and Node Function Runners use these
+operations with the same 4 ms cooperative host target and real event-loop
+yields. The old synchronous helper remains an explicitly offline compatibility
+API; the interactive worker no longer calls it.
+
+The browser reports actual call progress, and Stop can cancel an executing
+four-billion-step busy-loop request. Cancellation retains a partial call result
+and reports an error to the script instead of pretending it returned normally.
+`report.steps` preserves the historical call budget (scheduler boundaries plus
+explicit debugger stub actions); `report.scheduler_boundaries` excludes stubs.
+Neither is an oscillator-cycle count.
+
+Stubs are handed to JavaScript only after Rust releases its mutable WASM borrow.
+Their memory readers use current-machine debugger peeks, not pointers captured
+before reset. Promise-returning stub handlers and Map/array call options are
+rejected rather than silently becoming empty patches/options. The callback API
+still requires a synchronous patch; isolation of arbitrary callback code is not
+yet implemented.
+
+This remains an **invasive debugger invocation**, not transparent foreground
+execution. Finish/cancel restores the original PC, S, three sentinel stack
+bytes and call bookkeeping. Other registers, guest writes, power/interrupt
+state, timers, RTC and peripheral effects remain changed. A cancelled or timed
+out stateful routine may therefore require a deliberate reset; do not treat
+that result as a resumable application snapshot or automatically reset away
+unsaved data. Restoration now precedes fallible trace/artifact encoding, so an
+encoding failure cannot strand the debugger sentinel.
+
+Validation of this stage:
+
+- 24 WASM tests passed. New cases compare synchronous versus sliced calls for
+  both models, four chunk sizes, timeout and actual RET/RETF instructions;
+  compare registers, RAM, bus-access counters, timers and RTC status; and cover
+  cancellation cleanup, trace ownership, stale call IDs and per-stub response
+  sequences, invalid inputs, distinct
+  fault/HALT outcomes and non-executing stub handoffs.
+- 79 frontend tests passed, including cancellation artifacts, late stub replies,
+  failure cleanup, overlapping script calls, and reset-safe memory readers.
+- The full Chromium suite passed 13 tests with three opt-in ROM tests skipped.
+  Both models' busy-loop tests wait for actual Rust call progress before Stop,
+  then verify restored stack bytes and subsequent execution. Separate tests
+  perform traced stub calls across reset in both models. These deliberately
+  synthetic fixtures are not app or hardware evidence.
+- Svelte checks, formatting and WASM-crate Clippy passed. Existing dependency
+  feature-gating warnings remain as recorded above.
+- Explicit Node Function Runner runs loaded both local licensed ROMs and invoked
+  their reset-entry code through the resumable API with a diagnostic RAM stack.
+  PC-E500 executed 12,116 call-budget steps before HALT; IQ-7000 exhausted the
+  100,000-step budget without a fault. Both produced nonblank ROM-driven LCD
+  captures. This is bounded ROM-execution evidence, not proof of a completed
+  IQ-7000 startup or application-safe continuation after an invasive call.
+- A repeated normal-run latency smoke on Apple M1 Ultra / Darwin 25.6.0 /
+  Chromium 143.0.7499.4 measured maxima of 24 ms (PC-E500) and 22 ms (IQ-7000),
+  twenty synthetic-ROM samples each. This does not supersede the earlier
+  slower observations or qualify function-call/trace-finalization latency.
+
 ### Remaining limitations
 
-- Function Runner `e.call()` still invokes synchronous `call_function_ex`;
-  arbitrary user JavaScript still runs in the machine worker. Either can block
-  message delivery. Timeouts now describe that truthfully, but do not preempt
-  them. Isolated scripts and resumable function calls are required next.
+- Arbitrary user JavaScript and stub handlers still run in the machine worker.
+  An infinite JavaScript loop can block message delivery despite bounded Rust
+  slices. Timeouts describe that truthfully but do not preempt it; script
+  isolation is required next. Trace serialization and large result processing
+  are also not host-time bounded yet.
 - The no-Worker fallback has bounded stepping but is not a qualified isolated
   production frontend; arbitrary scripts can still freeze its UI.
 - Virtual-key release timing, repress/focus-loss handling and model-specific

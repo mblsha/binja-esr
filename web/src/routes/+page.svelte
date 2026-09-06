@@ -16,6 +16,7 @@
 	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
 	import { runHostSlice, stepBounded } from '$lib/emulator/bounded_step';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
+	import { callBounded } from '$lib/emulator/bounded_call';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -71,6 +72,7 @@
 	let targetFps = 30;
 
 	let functionRunnerBusy = false;
+	let functionProgress: string | null = null;
 	const pressedCodes = new Set<number>();
 	const physicalHeldCodes = new Set<number>();
 	const pendingVirtualRelease = new Map<number, number>();
@@ -206,6 +208,10 @@
 				applyWorkerFrame(data.frame);
 				return;
 			}
+			if (data.type === 'execution_progress' && data.generation === romLoadGeneration && functionRunnerBusy) {
+				functionProgress = `Call ${hex(data.address)}: ${data.steps} call-budget steps, ${data.schedulerBoundaries} scheduler boundaries`;
+				return;
+			}
 			if (data.type === 'fatal') {
 				failWorker(`Worker error: ${data.error ?? 'unknown error'}`);
 			}
@@ -282,6 +288,7 @@
 
 	async function runFunctionRunner(source: string): Promise<FunctionRunnerOutput> {
 		functionRunnerBusy = true;
+		functionProgress = null;
 		try {
 			if (running && !(await stop())) throw new Error('Pause was not acknowledged');
 			await ensureWorker();
@@ -297,14 +304,17 @@
 					options?: { trace?: boolean; probe?: { pc: number; maxSamples?: number } } | null,
 				) => {
 					if (options?.trace) await ensurePerfettoSymbols();
-					const raw =
-						emu.call_function_ex?.(address, maxInstructions, {
+					return callBounded(
+						emu,
+						address,
+						maxInstructions,
+						{
 							trace: Boolean(options?.trace),
 							probe_pc: options?.probe ? options.probe.pc : null,
 							probe_max_samples: options?.probe?.maxSamples ?? 256,
-						}) ?? emu.call_function(address, maxInstructions);
-					if (typeof raw === 'string') return JSON.parse(raw);
-					return raw;
+						},
+						{ onProgress: applyVirtualReleaseBudget },
+					);
 				},
 				startPerfettoTrace: async (name: string) => {
 					await ensurePerfettoSymbols();
@@ -1080,6 +1090,9 @@
 	</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
+	{#if functionRunnerBusy && functionProgress}
+		<p class="hint" data-testid="execution-progress">{functionProgress}</p>
+	{/if}
 	<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
 
 	{#if romLoaded}

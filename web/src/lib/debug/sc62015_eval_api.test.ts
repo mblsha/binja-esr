@@ -3,6 +3,49 @@ import { describe, expect, it } from 'vitest';
 import { createEvalApi } from './sc62015_eval_api';
 
 describe('createEvalApi', () => {
+	it('rejects overlapping calls before register assignment and releases the guard after failure', async () => {
+		const writes: number[] = [];
+		let rejectCall!: (error: Error) => void;
+		const api = createEvalApi({
+			callFunction: () =>
+				new Promise((_resolve, reject) => {
+					rejectCall = reject;
+				}),
+			setReg: (_name: string, value: number) => writes.push(value),
+			step: () => {},
+			reset: () => {},
+		} as any);
+		const first = api.call(0xb8000, { A: 1 }).catch((error) => error);
+		await expect(api.call(0xb8000, { A: 2 })).rejects.toThrow('Await the active function call');
+		await expect(api.step(1)).rejects.toThrow('Await the active function call');
+		await expect(api.reset()).rejects.toThrow('Await the active function call');
+		await expect(api.memory.write(0xb8100, 1, 42)).rejects.toThrow('Await the active function call');
+		expect(writes).toEqual([1]);
+		rejectCall(new Error('call failed'));
+		await expect(first).resolves.toMatchObject({ message: 'call failed' });
+		await api.reset({ warmupTicks: 0 });
+	});
+	it('retains partial call artifacts before reporting cancellation', async () => {
+		const api = createEvalApi({
+			callFunction: async () => ({
+				address: 0x10000,
+				before_pc: 0,
+				after_pc: 1,
+				before_sp: 10,
+				after_sp: 7,
+				before_regs: { A: 0 },
+				after_regs: { A: 1 },
+				memory_writes: [{ addr: 0x12000, value: 42 }],
+				lcd_writes: [],
+				report: { reason: 'cancelled', steps: 64, pc: 1, sp: 7, halted: false, fault: null },
+			}),
+		} as any);
+		await expect(api.call(0x10000)).rejects.toThrow('cancelled after 64');
+		expect(api.calls).toHaveLength(1);
+		expect(api.calls[0].artifacts.result.reason).toBe('cancelled');
+		expect(api.calls[0].artifacts.memoryBlocks[0].start).toBe(0x12000);
+		expect(api.events[0].kind).toBe('call');
+	});
 	it('releases scripted event, physical, and ON taps when stepping is cancelled or faults', async () => {
 		for (const asynchronous of [false, true]) {
 			const transitions: string[] = [];

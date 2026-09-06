@@ -46,6 +46,8 @@ export type CallArtifacts = {
 	report: {
 		reason: string;
 		steps: number;
+		/** Successful scheduler boundaries, excluding synthetic debugger stub actions. */
+		scheduler_boundaries?: number;
 		pc: number;
 		sp: number;
 		halted: boolean;
@@ -602,6 +604,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	let callIndex = 0;
 	let traceIndex = 0;
 	let perfettoActive = false;
+	let callBusy = false;
+	const requireNoCall = () => {
+		if (callBusy) throw new Error('Await the active function call before starting another machine operation');
+	};
 	const probeStack: Array<{ pc: number; handler: ProbeHandler; maxSamples: number }> = [];
 	const stubs: StubRegistration[] = [];
 	let stubId = 1;
@@ -632,6 +638,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	}
 
 	async function writeIocsImemArgs(args: EvalIocsImemArgs | undefined) {
+		requireNoCall();
 		if (!args) return;
 		if (args.bl !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd4, 1, args.bl);
 		if (args.bh !== undefined) await api.memory.write(IMEM_BASE_ADDR + 0xd5, 1, args.bh);
@@ -685,6 +692,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		last: () => (calls.length ? calls[calls.length - 1] : null),
 		reset: async (options?: EvalResetOptions) => {
 			const fresh = options?.fresh ?? true;
+			requireNoCall();
 			const warmupTicks = options?.warmupTicks ?? DEFAULT_WARMUP_TICKS;
 			if (fresh) {
 				calls.length = 0;
@@ -700,98 +708,110 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			events.push({ kind: 'reset', sequence: sequence++, fresh, warmupTicks });
 		},
 		step: async (instructions: number) => {
+			requireNoCall();
 			if (typeof adapter.step !== 'function') throw new Error('EmulatorAdapter.step is not available.');
 			await Promise.resolve(adapter.step(instructions));
 		},
 		call: async (reference, registers, options) => {
-			const { address, name } = resolveReference(reference);
-			const maxInstructions = options?.maxInstructions ?? DEFAULT_MAX_INSTRUCTIONS;
-			const zeroMissing = options?.zeroMissing ?? false;
-			const trace = options?.trace ?? false;
-			if (trace && perfettoActive) {
-				throw new Error(
-					'Nested tracing is unsupported: disable per-call trace when using e.perfetto.trace(name, ...).',
+			requireNoCall();
+			callBusy = true;
+			try {
+				const { address, name } = resolveReference(reference);
+				const maxInstructions = options?.maxInstructions ?? DEFAULT_MAX_INSTRUCTIONS;
+				const zeroMissing = options?.zeroMissing ?? false;
+				const trace = options?.trace ?? false;
+				if (trace && perfettoActive) {
+					throw new Error(
+						'Nested tracing is unsupported: disable per-call trace when using e.perfetto.trace(name, ...).',
+					);
+				}
+				const assignments = buildAssignments(registers, zeroMissing);
+				for (const [regName, value] of assignments.entries()) {
+					adapter.setReg(regName, value);
+				}
+
+				const activeProbe = probeStack.length ? probeStack[probeStack.length - 1] : null;
+				const stubSpecs = stubs.map((stub) => ({ id: stub.id, pc: stub.pc }));
+				const artifacts = await adapter.callFunction(
+					address,
+					maxInstructions,
+					activeProbe
+						? {
+								trace,
+								probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples },
+								stubs: stubSpecs,
+							}
+						: { trace, stubs: stubSpecs },
 				);
-			}
-			const assignments = buildAssignments(registers, zeroMissing);
-			for (const [regName, value] of assignments.entries()) {
-				adapter.setReg(regName, value);
-			}
 
-			const activeProbe = probeStack.length ? probeStack[probeStack.length - 1] : null;
-			const stubSpecs = stubs.map((stub) => ({ id: stub.id, pc: stub.pc }));
-			const artifacts = await adapter.callFunction(
-				address,
-				maxInstructions,
-				activeProbe
-					? {
-							trace,
-							probe: { pc: activeProbe.pc, maxSamples: activeProbe.maxSamples },
-							stubs: stubSpecs,
+				if (activeProbe && artifacts.probe_samples?.length) {
+					for (const sample of artifacts.probe_samples) {
+						try {
+							activeProbe.handler(sample);
+						} catch {
+							/* ignore probe handler errors */
 						}
-					: { trace, stubs: stubSpecs },
-			);
-
-			if (activeProbe && artifacts.probe_samples?.length) {
-				for (const sample of artifacts.probe_samples) {
-					try {
-						activeProbe.handler(sample);
-					} catch {
-						/* ignore probe handler errors */
 					}
 				}
+
+				const memoryEvents: MemoryWriteEvent[] = artifacts.memory_writes.map((e) => ({
+					addr: e.addr >>> 0,
+					value: e.value & 0xff,
+					size: 1,
+				}));
+				const memoryBlocks = buildMemoryWriteBlocks(memoryEvents);
+				const before = artifacts.before_regs;
+				const after = artifacts.after_regs;
+				const changed = diffRegisters(before, after);
+
+				const fault = artifacts.report.fault;
+				const infoLog: string[] = [
+					`Execution reason: ${artifacts.report.reason}`,
+					fault ? `Fault: ${fault.kind}: ${fault.message}` : '',
+					memoryEvents.length
+						? `Captured ${memoryEvents.length} memory write byte(s) (${memoryBlocks.length} block(s)).`
+						: 'No memory writes captured.',
+					artifacts.lcd_writes.length
+						? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
+						: 'No LCD writes captured.',
+					artifacts.stubs_used?.length
+						? `Used ${artifacts.stubs_used.length} stub(s): ${artifacts.stubs_used
+								.map((stub) => `#${stub.id}@0x${stub.pc.toString(16).toUpperCase()}×${stub.hits}`)
+								.join(', ')}.`
+						: '',
+					artifacts.perfetto_trace_b64
+						? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).`
+						: '',
+				].filter(Boolean);
+
+				const handle: CallHandle = {
+					index: callIndex++,
+					address,
+					name,
+					artifacts: {
+						before,
+						after,
+						changed,
+						memoryBlocks,
+						lcdWrites: artifacts.lcd_writes,
+						probeSamples: artifacts.probe_samples ?? [],
+						stubsUsed: artifacts.stubs_used ?? [],
+						perfettoTraceB64: artifacts.perfetto_trace_b64 ?? null,
+						result: artifacts.report,
+						infoLog,
+					},
+				};
+				calls.push(handle);
+				events.push({ kind: 'call', sequence: sequence++, handle });
+				if (artifacts.report.reason === 'cancelled') {
+					throw new Error(
+						`Function call cancelled after ${artifacts.report.steps} call-budget steps; partial artifacts retained`,
+					);
+				}
+				return handle;
+			} finally {
+				callBusy = false;
 			}
-
-			const memoryEvents: MemoryWriteEvent[] = artifacts.memory_writes.map((e) => ({
-				addr: e.addr >>> 0,
-				value: e.value & 0xff,
-				size: 1,
-			}));
-			const memoryBlocks = buildMemoryWriteBlocks(memoryEvents);
-			const before = artifacts.before_regs;
-			const after = artifacts.after_regs;
-			const changed = diffRegisters(before, after);
-
-			const fault = artifacts.report.fault;
-			const infoLog: string[] = [
-				`Execution reason: ${artifacts.report.reason}`,
-				fault ? `Fault: ${fault.kind}: ${fault.message}` : '',
-				memoryEvents.length
-					? `Captured ${memoryEvents.length} memory write byte(s) (${memoryBlocks.length} block(s)).`
-					: 'No memory writes captured.',
-				artifacts.lcd_writes.length
-					? `Captured ${artifacts.lcd_writes.length} LCD addressing-unit write(s).`
-					: 'No LCD writes captured.',
-				artifacts.stubs_used?.length
-					? `Used ${artifacts.stubs_used.length} stub(s): ${artifacts.stubs_used
-							.map((stub) => `#${stub.id}@0x${stub.pc.toString(16).toUpperCase()}×${stub.hits}`)
-							.join(', ')}.`
-					: '',
-				artifacts.perfetto_trace_b64
-					? `Perfetto trace captured (${artifacts.perfetto_trace_b64.length} b64 chars).`
-					: '',
-			].filter(Boolean);
-
-			const handle: CallHandle = {
-				index: callIndex++,
-				address,
-				name,
-				artifacts: {
-					before,
-					after,
-					changed,
-					memoryBlocks,
-					lcdWrites: artifacts.lcd_writes,
-					probeSamples: artifacts.probe_samples ?? [],
-					stubsUsed: artifacts.stubs_used ?? [],
-					perfettoTraceB64: artifacts.perfetto_trace_b64 ?? null,
-					result: artifacts.report,
-					infoLog,
-				},
-			};
-			calls.push(handle);
-			events.push({ kind: 'call', sequence: sequence++, handle });
-			return handle;
 		},
 		reg: (name) => adapter.getReg(name),
 		flag: (flag) => {
@@ -854,6 +874,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				throw new Error(`Unsupported read size ${size}`);
 			},
 			write: async (address, size, value) => {
+				requireNoCall();
 				const addr = normalizeAddress(address);
 				if (size === 1) {
 					adapter.write8(addr, value & 0xff);

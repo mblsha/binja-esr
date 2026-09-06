@@ -14,6 +14,7 @@ type StubDispatcherOptions = {
 export type StubDispatcher = {
 	registerStub(stub: StubRegistration): void;
 	clearStubs(): void;
+	dispatch(id: number, regs: unknown, flags: unknown): unknown;
 };
 
 const ADDRESS_MASK = 0x00ff_ffff;
@@ -106,13 +107,14 @@ function makeMemReader(getViews: () => { external: Uint8Array; internal: Uint8Ar
 	};
 }
 
-export function createStubDispatcher(options: StubDispatcherOptions): StubDispatcher {
+export function createStubDispatcher(options: StubDispatcherOptions | { read8(addr: number): number }): StubDispatcher {
 	const registry = new Map<number, StubRegistration>();
 	let cachedBuffer: ArrayBuffer | null = null;
 	let externalView: Uint8Array | null = null;
 	let internalView: Uint8Array | null = null;
 
 	const getViews = () => {
+		if ('read8' in options) throw new Error('This dispatcher uses debugger peeks, not raw memory pointers');
 		const buffer = options.wasmMemory.buffer;
 		if (!buffer || buffer.byteLength === 0) {
 			throw new Error('stub memory is unavailable (missing wasm buffer)');
@@ -128,7 +130,22 @@ export function createStubDispatcher(options: StubDispatcherOptions): StubDispat
 		return { external: externalView, internal: internalView };
 	};
 
-	const mem = makeMemReader(getViews);
+	// Resumable calls invoke handlers outside a WASM borrow. Read through the
+	// current machine's side-effect-free peek, so reset/load cannot stale a pointer.
+	const peek = (addr: number) => {
+		const masked = (addr >>> 0) & ADDRESS_MASK;
+		if (masked >= INTERNAL_BASE + 0x100) throw new Error(`stub memory read out of range: 0x${masked.toString(16)}`);
+		if (!('read8' in options)) throw new Error('No debugger peek supplied');
+		return options.read8(masked);
+	};
+	const mem: StubMemory =
+		'read8' in options
+			? {
+					read8: peek,
+					read16: (addr) => peek(addr) | (peek(addr + 1) << 8),
+					read24: (addr) => peek(addr) | (peek(addr + 1) << 8) | (peek(addr + 2) << 16),
+				}
+			: makeMemReader(getViews);
 
 	const dispatch = (stubId: number, regsEntries: unknown, flagEntries: unknown) => {
 		const stub = registry.get(stubId);
@@ -145,6 +162,9 @@ export function createStubDispatcher(options: StubDispatcherOptions): StubDispat
 			const msg = err instanceof Error ? err.message : String(err);
 			throw new Error(`stub ${stub.name ?? stub.id} failed: ${msg}`);
 		}
+		if (patch && typeof (patch as any).then === 'function') {
+			throw new Error('Stub handlers must return a patch synchronously, not a Promise');
+		}
 		const normalizedRegs = normalizeEntryList(patch && isRecord(patch) ? patch.regs : null);
 		const normalizedFlags = normalizeEntryList(patch && isRecord(patch) ? patch.flags : null);
 		const normalizedWrites = normalizeWrites(patch && isRecord(patch) ? patch.mem_writes : null);
@@ -160,6 +180,7 @@ export function createStubDispatcher(options: StubDispatcherOptions): StubDispat
 	(globalThis as any).__sc62015_stub_dispatch = dispatch;
 
 	return {
+		dispatch,
 		registerStub: (stub) => {
 			registry.set(stub.id, stub);
 		},
