@@ -22,6 +22,9 @@ use sc62015_core::{DeviceModel, DeviceTextDecoder};
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = globalThis, js_name = __sc62015_stub_dispatch)]
     fn js_stub_dispatch(stub_id: u32, regs: JsValue, flags: JsValue) -> Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(catch, js_namespace = performance, js_name = now)]
+    fn host_monotonic_now() -> Result<f64, JsValue>;
 }
 
 #[wasm_bindgen]
@@ -299,6 +302,12 @@ pub struct Sc62015Emulator {
     iq7000_rtc_seed: Option<String>,
 }
 
+impl Default for Sc62015Emulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl Sc62015Emulator {
     #[wasm_bindgen(constructor)]
@@ -445,6 +454,40 @@ impl Sc62015Emulator {
     /// retired instructions, timing units, or real-time cycles.
     pub fn step(&mut self, scheduler_boundaries: u32) -> Result<(), JsValue> {
         self.step_scheduler_boundaries(scheduler_boundaries)
+    }
+
+    /// Cooperatively execute a host-time-bounded slice. The caller must yield
+    /// to the browser event loop between slices to receive input/cancellation.
+    /// Neither this clock nor its deadline advances emulated time.
+    pub fn run_slice(
+        &mut self,
+        scheduler_boundaries: u32,
+        max_host_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        if !max_host_ms.is_finite() || !(0.0..=16.0).contains(&max_host_ms) {
+            return Err(JsValue::from_str(
+                "host slice target must be finite and in 0..=16 ms",
+            ));
+        }
+        let started = host_monotonic_now()?;
+        let mut clock_error = None;
+        let result = self
+            .runtime
+            .run_slice(
+                scheduler_boundaries as usize,
+                |_| match host_monotonic_now() {
+                    Ok(now) => now - started >= max_host_ms,
+                    Err(error) => {
+                        clock_error = Some(error);
+                        true
+                    }
+                },
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        if let Some(error) = clock_error {
+            return Err(error);
+        }
+        serde_wasm_bindgen::to_value(&result).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn instruction_count(&self) -> u64 {
@@ -757,7 +800,7 @@ impl Sc62015Emulator {
             saved_stack.push((stack_addr, previous));
         }
         for (i, (stack_addr, _)) in saved_stack.iter().enumerate() {
-            let byte = ((sentinel_pc >> (8 * i)) & 0xff) as u32;
+            let byte = (sentinel_pc >> (8 * i)) & 0xff;
             let _ = self.runtime.memory.store(*stack_addr, 8, byte);
         }
         self.runtime.state.set_reg(RegName::S, new_sp);
@@ -1082,8 +1125,8 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_chip_pixels(&self) -> Uint8Array {
-        let rows = LCD_CHIP_ROWS as usize;
-        let cols = LCD_CHIP_COLS as usize;
+        let rows = LCD_CHIP_ROWS;
+        let cols = LCD_CHIP_COLS;
         let mut flat = vec![0u8; rows * cols * 2];
         if let Some(lcd) = self.runtime.lcd.as_deref() {
             for chip_index in 0..2 {
@@ -1196,6 +1239,49 @@ mod tests {
         emulator.load_rom(rom).expect("load");
         emulator.set_reg("S", 0xB9003);
         emulator
+    }
+
+    #[wasm_bindgen_test]
+    fn bounded_run_validates_host_budget_and_can_yield_without_execution() {
+        let mut emulator = function_test_emulator();
+        let pc = emulator.get_reg("PC");
+        let count = emulator.instruction_count();
+        for bad in [-1.0, 17.0, f64::NAN, f64::INFINITY] {
+            assert!(emulator.run_slice(100, bad).is_err());
+        }
+        let stopped: serde_json::Value =
+            serde_wasm_bindgen::from_value(emulator.run_slice(100_000, 0.0).unwrap()).unwrap();
+        assert_eq!(stopped["reason"], "host_yield");
+        assert_eq!(stopped["progress"]["boundary_budget_used"], 0);
+        assert_eq!(emulator.get_reg("PC"), pc);
+        assert_eq!(emulator.instruction_count(), count);
+    }
+
+    #[wasm_bindgen_test]
+    fn bounded_run_resumes_the_same_machine_state_as_direct_steps() {
+        let mut direct = function_test_emulator();
+        let mut sliced = function_test_emulator();
+        direct.step(2000).unwrap();
+        let mut remaining = 2000;
+        while remaining > 0 {
+            let result: serde_json::Value =
+                serde_wasm_bindgen::from_value(sliced.run_slice(remaining, 4.0).unwrap()).unwrap();
+            remaining -= result["progress"]["boundary_budget_used"].as_u64().unwrap() as u32;
+        }
+        assert_eq!(sliced.instruction_count(), direct.instruction_count());
+        assert_eq!(sliced.cycle_count(), direct.cycle_count());
+        assert_eq!(
+            sc62015_core::collect_registers(&sliced.runtime.state),
+            sc62015_core::collect_registers(&direct.runtime.state)
+        );
+        assert_eq!(
+            sliced.runtime.memory.internal_slice(),
+            direct.runtime.memory.internal_slice()
+        );
+        assert_eq!(
+            sliced.runtime.memory.external_slice(),
+            direct.runtime.memory.external_slice()
+        );
     }
 
     #[wasm_bindgen_test]
@@ -1645,7 +1731,7 @@ mod tests {
             .ok()
             .and_then(|v| serde_wasm_bindgen::from_value::<Vec<String>>(v).ok())
             .unwrap_or_default();
-        assert_eq!(before.get(0).map(|s| s.as_str()), Some("BOOT"));
+        assert_eq!(before.first().map(|s| s.as_str()), Some("BOOT"));
 
         emulator.press_matrix_code(PF1_CODE);
         emulator.step(50_000).expect("poll PF1");
@@ -1655,6 +1741,6 @@ mod tests {
             .ok()
             .and_then(|v| serde_wasm_bindgen::from_value::<Vec<String>>(v).ok())
             .unwrap_or_default();
-        assert_eq!(after.get(0).map(|s| s.as_str()), Some("MENU"));
+        assert_eq!(after.first().map(|s| s.as_str()), Some("MENU"));
     }
 }
