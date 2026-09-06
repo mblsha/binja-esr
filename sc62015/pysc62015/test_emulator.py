@@ -1646,7 +1646,11 @@ def test_hw002_zero_counted_instruction_executes_full_16bit_ring(
     expected_fz: int,
     write_multiplier: int,
 ) -> None:
-    """Hardware says I=0 is 65,536 do-while iterations for all families."""
+    """HW-002 backs the count; expected_fz is the provisional model policy.
+
+    This flat all-zero bus does not establish the live SFR inputs in the
+    original hardware probe. HW-023 rechecks addition/shift Z special cases.
+    """
     cpu, raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
     cpu.regs.set(RegisterName.I, 0)
     cpu.regs.set(RegisterName.FC, 0)
@@ -1706,7 +1710,7 @@ def test_hw002_wait_direct_llil_intrinsic_uses_16bit_do_while_count(
     il = MockLowLevelILFunction()
     instr.lift(il, 0)
 
-    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT"]
+    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT", None]
     for node in il.ils:
         cpu.evaluate(node)
 
@@ -1752,6 +1756,52 @@ def test_wait_direct_intrinsic_without_timing_hook_preserves_i_and_flags() -> No
     assert cpu.regs.get(RegisterName.I) == 7
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == 1
+    assert writes == []
+
+
+@pytest.mark.parametrize("initial_i", [0, 3])
+def test_wait_explicit_input_is_used_without_hidden_register_clear(
+    initial_i: int,
+) -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
+    )
+    cpu.regs.set(RegisterName.I, 0x1234)
+    cpu.regs.set(RegisterName.F, 3)
+    calls: List[int] = []
+    setattr(cpu.memory, "wait_cycles", calls.append)
+    il = MockLowLevelILFunction()
+    il.append(il.intrinsic([], "WAIT", [il.const(2, initial_i)]))
+
+    cpu.evaluate(il.ils[0])
+
+    assert calls == [initial_i or 0x10000]
+    # New LLIL publishes the I clear as a separate SET_REG. The intrinsic
+    # consumes its parameter, not an incidental value in the register bank.
+    assert cpu.regs.get(RegisterName.I) == 0x1234
+    assert cpu.regs.get(RegisterName.F) == 3
+    assert writes == []
+
+
+def test_wait_timing_failure_prevents_explicit_i_clear() -> None:
+    cpu, _raw, _reads, writes = _make_cpu_and_mem(
+        ADDRESS_SPACE_SIZE, {}, bytes.fromhex("EF")
+    )
+    cpu.regs.set(RegisterName.I, 7)
+    cpu.regs.set(RegisterName.F, 3)
+
+    def fail(_cycles: int) -> None:
+        raise RuntimeError("timing hook failed")
+
+    setattr(cpu.memory, "wait_cycles", fail)
+    instruction = cpu.decode_instruction(0)
+    il = MockLowLevelILFunction()
+    instruction.lift(il, 0)
+    with pytest.raises(RuntimeError, match="timing hook failed"):
+        for node in il.ils:
+            cpu.evaluate(node)
+    assert cpu.regs.get(RegisterName.I) == 7
+    assert cpu.regs.get(RegisterName.F) == 3
     assert writes == []
 
 
@@ -2782,7 +2832,7 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_FZ_after=0,
     ),
     AdclDadlTestCase(
-        test_id="ADCL_(m)_(n)_I1_WithCarryIn_NoCarryOut",
+        test_id="ADCL_(m)_(n)_I1_IgnoresInitialCarry",
         instr_bytes=bytes([0x54, 0x10, 0x20]),
         init_memory_state={
             INTERNAL_MEMORY_START + 0x10: 0x12,
@@ -2791,25 +2841,28 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         init_register_state={RegisterName.I: 1, RegisterName.FC: 1},
         expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-        expected_m_values_after=[0x47],  # 0x12 + 0x34 + 1 = 0x47
+        expected_m_values_after=[0x46],  # Initial C is ignored (HW-024).
         expected_I_after=0,
         expected_FC_after=0,
         expected_FZ_after=0,
     ),
     AdclDadlTestCase(
-        test_id="ADCL_(m)_(n)_I2_RhsPlusCarryWrapPropagates",
+        test_id="ADCL_(m)_(n)_I3_RhsPlusGeneratedCarryWrapPropagates",
         instr_bytes=bytes([0x54, 0x10, 0x20]),
         init_memory_state={
-            INTERNAL_MEMORY_START + 0x10: 0x00,
+            INTERNAL_MEMORY_START + 0x10: 0xFF,
             INTERNAL_MEMORY_START + 0x11: 0x00,
-            INTERNAL_MEMORY_START + 0x20: 0xFF,
-            INTERNAL_MEMORY_START + 0x21: 0x00,
+            INTERNAL_MEMORY_START + 0x12: 0x00,
+            INTERNAL_MEMORY_START + 0x20: 0x01,
+            INTERNAL_MEMORY_START + 0x21: 0xFF,
+            INTERNAL_MEMORY_START + 0x22: 0x00,
         },
-        init_register_state={RegisterName.I: 2, RegisterName.FC: 1},
+        init_register_state={RegisterName.I: 3, RegisterName.FC: 1},
         expected_asm_str="ADCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-        # 00 + FF + 1 -> 00/C=1, then 00 + 00 + 1 -> 01/C=0.
-        expected_m_values_after=[0x00, 0x01],
+        # Generate carry in byte 0 (initial C is ignored), then verify that
+        # FF + generated carry is not truncated before carrying to byte 2.
+        expected_m_values_after=[0x00, 0x00, 0x01],
         expected_I_after=0,
         expected_FC_after=0,
         expected_FZ_after=0,
@@ -2914,11 +2967,11 @@ adcl_test_cases: List[AdclDadlTestCase] = [
         expected_asm_str="ADCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0: mem[0x10]=0xFF, A=0x01. 0xFF + 0x01 + 0 = 0x100 -> mem[0x10]=0x00, FC=1
-        # Byte 1: mem[0x11]=0x01, A=0x01. 0x01 + 0x01 + 1 = 0x03  -> mem[0x11]=0x03, FC=0
-        expected_m_values_after=[0x00, 0x03],
+        # Byte 1: A is no longer consumed. 0x01 + 0 + 1 = 0x02, FC=0.
+        expected_m_values_after=[0x00, 0x02],
         expected_I_after=0,
         expected_FC_after=0,
-        expected_FZ_after=0,  # Overall: (0x00 | 0x03) != 0
+        expected_FZ_after=0,  # Overall: (0x00 | 0x02) != 0
     ),
 ]
 
@@ -3201,7 +3254,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
         expected_FZ_after=0,
     ),
     SbclDsblTestCase(
-        test_id="SBCL_(m)_(n)_I1_WithBorrowIn_NoBorrowOut",
+        test_id="SBCL_(m)_(n)_I1_IgnoresInitialBorrow",
         instr_bytes=bytes([0x5C, 0x10, 0x20]),
         init_memory_state={
             INTERNAL_MEMORY_START + 0x10: 0x55,
@@ -3210,7 +3263,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
         init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
         expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-        expected_m_values_after=[0x32],  # 0x55 - 0x22 - 1 = 0x32
+        expected_m_values_after=[0x33],  # Initial C is ignored (HW-024).
         expected_I_after=0,
         expected_FC_after=0,  # No borrow
         expected_FZ_after=0,
@@ -3268,7 +3321,7 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
         expected_FZ_after=0,  # Overall: (0xFF | 0x2F) != 0
     ),
     SbclDsblTestCase(
-        test_id="SBCL_(m)_(n)_I2_OverallZero_WithBorrowOut",
+        test_id="SBCL_(m)_(n)_I2_OverallZero_IgnoresInitialBorrow",
         instr_bytes=bytes([0x5C, 0x10, 0x20]),
         init_memory_state={
             INTERNAL_MEMORY_START + 0x10: 0x00,  # LSB of (m)
@@ -3279,15 +3332,13 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
         init_register_state={
             RegisterName.I: 2,
             RegisterName.FC: 1,
-        },  # Initial Borrow In (e.g. from 0 - 0 - 1)
+        },  # Initial C is ignored; neither byte generates a borrow.
         expected_asm_str="SBCL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-        # Byte 0: 0x00 - 0x00 - 1 = 0xFF. mem[0x10]=0xFF, FC=1
-        # Byte 1: 0x00 - 0x00 - 1 = 0xFF. mem[0x11]=0xFF, FC=1
-        expected_m_values_after=[0xFF, 0xFF],
+        expected_m_values_after=[0x00, 0x00],
         expected_I_after=0,
-        expected_FC_after=1,  # Borrow from last op
-        expected_FZ_after=0,  # Overall is 0xFFFF, not zero
+        expected_FC_after=0,
+        expected_FZ_after=1,
     ),
     # --- SBCL (m), A ---
     SbclDsblTestCase(
@@ -3314,15 +3365,15 @@ sbcl_test_cases: List[SbclDsblTestCase] = [
             INTERNAL_MEMORY_START + 0x11: 0x30,  # MSB m -> m=0x3000
         },
         init_register_state={
-            RegisterName.A: 0x01,  # A will be source for each byte
+            RegisterName.A: 0x01,  # A contributes to the first byte only.
             RegisterName.I: 2,
             RegisterName.FC: 0,
         },
         expected_asm_str="SBCL  (BP+10), A",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
         # Byte 0 (LSB, m_addr 0x10): m[0x10]=0x00, A=0x01. 0x00 - 0x01 - 0 = 0xFF. mem[0x10]=0xFF, FC=1
-        # Byte 1 (MSB, m_addr 0x11): m[0x11]=0x30, A=0x01. 0x30 - 0x01 - 1 = 0x2E. mem[0x11]=0x2E, FC=0
-        expected_m_values_after=[0xFF, 0x2E],
+        # Byte 1: subtract only the generated borrow: 0x30 - 0 - 1 = 0x2F.
+        expected_m_values_after=[0xFF, 0x2F],
         expected_I_after=0,
         expected_FC_after=0,
         expected_FZ_after=0,
@@ -3410,16 +3461,16 @@ dsbl_test_cases: List[SbclDsblTestCase] = [
         expected_FZ_after=0,
     ),
     SbclDsblTestCase(
-        test_id="DSBL_(m)_(n)_I1_WithBorrowIn_SimpleBCD",
+        test_id="DSBL_(m)_(n)_I1_IgnoresIncomingCarry_SimpleBCD",
         instr_bytes=bytes([0xD4, 0x10, 0x20]),
         init_memory_state={
             INTERNAL_MEMORY_START + 0x10: 0x55,
             INTERNAL_MEMORY_START + 0x20: 0x22,
         },
-        init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Borrow In
+        init_register_state={RegisterName.I: 1, RegisterName.FC: 1},  # Ignored
         expected_asm_str="DSBL  (BP+10), (BP+20)",
         expected_m_addr_start=INTERNAL_MEMORY_START + 0x10,
-        expected_m_values_after=[0x32],  # BCD 55 - BCD 22 - 1 = BCD 32
+        expected_m_values_after=[0x33],  # BCD 55 - BCD 22; initial C is ignored
         expected_I_after=0,
         expected_FC_after=0,  # No borrow out
         expected_FZ_after=0,

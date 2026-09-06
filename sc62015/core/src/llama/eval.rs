@@ -579,24 +579,45 @@ fn validate_imem_selector(mode: AddressingMode, raw: u8) -> Result<(), &'static 
 }
 
 fn imem_offset_for_mode<B: LlamaBus>(bus: &mut B, mode: AddressingMode, raw: u8) -> u32 {
-    let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
-    let px = read_imem_byte(bus, IMEM_PX_OFFSET) as u32;
-    let py = read_imem_byte(bus, IMEM_PY_OFFSET) as u32;
-    let base = match mode {
-        AddressingMode::N => raw as u32,
-        AddressingMode::BpN => bp.wrapping_add(raw as u32),
-        AddressingMode::PxN => px.wrapping_add(raw as u32),
-        AddressingMode::PyN => py.wrapping_add(raw as u32),
-        AddressingMode::BpPx => bp.wrapping_add(px),
-        AddressingMode::BpPy => bp.wrapping_add(py),
+    // Only sample operands actually used by this mode. Reading unused bases
+    // for diagnostics is observable on callback-backed buses.
+    let (base, bp, px, py) = match mode {
+        AddressingMode::N => (raw as u32, None, None, None),
+        AddressingMode::BpN => {
+            let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
+            (bp + raw as u32, Some(bp), None, None)
+        }
+        AddressingMode::PxN => {
+            let px = read_imem_byte(bus, IMEM_PX_OFFSET) as u32;
+            (px + raw as u32, None, Some(px), None)
+        }
+        AddressingMode::PyN => {
+            let py = read_imem_byte(bus, IMEM_PY_OFFSET) as u32;
+            (py + raw as u32, None, None, Some(py))
+        }
+        AddressingMode::BpPx => {
+            let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
+            let px = read_imem_byte(bus, IMEM_PX_OFFSET) as u32;
+            (bp + px, Some(bp), Some(px), None)
+        }
+        AddressingMode::BpPy => {
+            let bp = read_imem_byte(bus, IMEM_BP_OFFSET) as u32;
+            let py = read_imem_byte(bus, IMEM_PY_OFFSET) as u32;
+            (bp + py, Some(bp), None, Some(py))
+        }
     };
     trace_imem_addr(mode, base, bp, px, py);
     base & 0xFF
 }
 
-/// Emit the effective IMEM address and the raw registers used for BpPx/BpPy modes.
-/// Fires when perfetto is active or TRACE_IMEM_ADDR=1 is set.
-fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
+/// Emit the effective IMEM address and only the base registers actually sampled.
+fn trace_imem_addr(
+    mode: AddressingMode,
+    base: u32,
+    bp: Option<u32>,
+    px: Option<u32>,
+    py: Option<u32>,
+) {
     if PREFLIGHT_DEPTH.with(|depth| depth.get() != 0) {
         return;
     }
@@ -611,15 +632,7 @@ fn trace_imem_addr(mode: AddressingMode, base: u32, bp: u32, px: u32, py: u32) {
             Some(op_idx)
         };
         let pc_val = if pc == u32::MAX { None } else { Some(pc) };
-        tracer.record_imem_addr(
-            &format!("{mode:?}"),
-            base & 0xFF,
-            bp & 0xFF,
-            px & 0xFF,
-            py & 0xFF,
-            op,
-            pc_val,
-        );
+        tracer.record_imem_addr(&format!("{mode:?}"), base & 0xFF, bp, px, py, op, pc_val);
     });
 }
 
@@ -1429,7 +1442,10 @@ impl LlamaExecutor {
             .wrapping_add(carry_in as u8);
         let low_adjust = if low_sum > 9 { 6 } else { 0 };
         low_sum = low_sum.wrapping_add(low_adjust);
-        let carry_to_high = (low_sum & 0x10) != 0;
+        // PC-E500 invalid-BCD captures (2026-09-05): 0F+0F=14 and
+        // FF+FF=54/C=1. Adjusted sums may exceed 0x1F: carry is boolean
+        // overflow, not just bit 4 and not a multi-valued high nibble.
+        let carry_to_high = low_sum > 0x0F;
         let res_low = low_sum & 0x0F;
 
         let mut high_sum = ((a >> 4) & 0x0F)
@@ -1437,7 +1453,7 @@ impl LlamaExecutor {
             .wrapping_add(carry_to_high as u8);
         let high_adjust = if high_sum > 9 { 6 } else { 0 };
         high_sum = high_sum.wrapping_add(high_adjust);
-        let carry_out = (high_sum & 0x10) != 0;
+        let carry_out = high_sum > 0x0F;
         let res_high = high_sum & 0x0F;
 
         (((res_high << 4) | res_low), carry_out)
@@ -1446,7 +1462,10 @@ impl LlamaExecutor {
     fn bcd_sub_byte(a: u8, b: u8, borrow_in: bool) -> (u8, bool) {
         let sub_low = (b & 0x0F).wrapping_add(borrow_in as u8);
         let mut low_res = (a & 0x0F).wrapping_sub(sub_low);
-        let borrow_low = (a & 0x0F) < sub_low;
+        // PC-E500 byte sweeps / isolated D4+D5 (2026-09-05): a wrapped
+        // difference >9 corrects and borrows, including positive 10..15.
+        // 0A-00=94/C=1, A0-00=40/C=1, FF-00=89/C=1.
+        let borrow_low = low_res > 9;
         if borrow_low {
             low_res = low_res.wrapping_sub(6);
         }
@@ -1454,7 +1473,7 @@ impl LlamaExecutor {
 
         let sub_high = ((b >> 4) & 0x0F).wrapping_add(borrow_low as u8);
         let mut high_res = ((a >> 4) & 0x0F).wrapping_sub(sub_high);
-        let borrow_out = ((a >> 4) & 0x0F) < sub_high;
+        let borrow_out = high_res > 9;
         if borrow_out {
             high_res = high_res.wrapping_sub(6);
         }
@@ -2692,15 +2711,18 @@ impl LlamaExecutor {
             })
             .unwrap_or_else(|| mem_dst.bits.div_ceil(8) as i32);
         let mut overall_zero: u32 = 0;
-        let mut carry = (state.get_reg(RegName::FC) & 1) != 0;
+        // HW-024 PC-E500 captures: initial C is ignored; register A is a
+        // first-byte source, with only generated carry/borrow used thereafter.
+        let mut carry = false;
 
-        for _ in 0..length {
+        for index in 0..length {
             let lhs = Self::load_wrapped(bus, dst_addr, mem_dst.bits) & mask_dst;
             let rhs = match src_addr {
                 Some(addr) => Self::load_wrapped(bus, addr, src_bits) & mask_src,
-                None => src_reg
+                None if index == 0 => src_reg
                     .map(|r| Self::read_reg(state, bus, r) & mask_src)
                     .ok_or("missing source")?,
+                None => 0,
             };
             let (res, new_carry) = if subtract {
                 let borrow = (lhs as u64) < (rhs as u64 + carry as u64);
@@ -2736,8 +2758,9 @@ impl LlamaExecutor {
         state.set_reg(
             RegName::FZ,
             if !subtract && initial_i_zero {
-                // HW-002 measured Z=0 for all-zero ADCL with I=0. SBCL
-                // retains the ordinary aggregate-zero result.
+                // Provisional compatibility rule: HW-002 captured Z=0, but
+                // did not establish all-zero live SFR inputs. HW-023 must
+                // distinguish aggregate Z from a zero-count special case.
                 0
             } else if (overall_zero & mask_dst) == 0 {
                 1
@@ -3286,14 +3309,10 @@ impl LlamaExecutor {
                 };
                 let initial_i_zero = state.get_reg(RegName::I) & mask_for(RegName::I) == 0;
                 let length = effective_i_count(state);
-                let mut carry = match entry.kind {
-                    InstrKind::Dadl => {
-                        state.set_reg(RegName::FC, 0);
-                        false
-                    }
-                    InstrKind::Dsbl => (state.get_reg(RegName::FC) & 1) != 0,
-                    _ => false,
-                };
+                // D4/D5 silicon captures establish that DSBL also ignores
+                // incoming C. Carry/borrow propagates between bytes only.
+                state.set_reg(RegName::FC, 0);
+                let mut carry = false;
                 let dst_step = mem_dst.bits.div_ceil(8) as u32;
                 let src_step = src_bits.map_or(0, |b| b.div_ceil(8) as u32);
                 let mut overall_zero: u32 = 0;
@@ -3330,8 +3349,9 @@ impl LlamaExecutor {
                 state.set_reg(
                     RegName::FZ,
                     if entry.kind == InstrKind::Dadl && initial_i_zero {
-                        // HW-002 measured Z=0 for all-zero DADL with I=0;
-                        // DSBL retains the ordinary aggregate-zero result.
+                        // Provisional compatibility rule, not all-zero-input
+                        // silicon proof. HW-023 rechecks the unobserved live
+                        // SFR inputs in the HW-002 zero-count capture.
                         0
                     } else if (overall_zero & zero_mask) == 0 {
                         1
@@ -3463,7 +3483,8 @@ impl LlamaExecutor {
                 state.set_reg(
                     RegName::FZ,
                     if initial_i_zero {
-                        // HW-002 measured Z=0 for an all-zero full-ring shift.
+                        // Provisional: HW-002 captured Z=0 but did not prove
+                        // all-zero live SFR inputs; see the HW-023 question.
                         0
                     } else if overall_zero == 0 {
                         1
@@ -4356,6 +4377,26 @@ mod tests {
     use crate::llama::opcodes::OPCODES;
     use std::collections::{HashMap, HashSet};
 
+    #[test]
+    fn bcd_sub_invalid_positive_digits_follow_silicon_correction() {
+        // Exact byte results from isolated PC-E500 D4/D5 readbacks.
+        for (left, right, expected) in [
+            (0x0A, 0x00, 0x94),
+            (0xA0, 0x00, 0x40),
+            (0xFF, 0x00, 0x89),
+            (0x0F, 0x05, 0x94),
+            (0x00, 0x0F, 0x9B),
+        ] {
+            assert_eq!(
+                LlamaExecutor::bcd_sub_byte(left, right, false),
+                (expected, true)
+            );
+        }
+        // The second byte of the measured 000A-0000 two-byte operation.
+        assert_eq!(LlamaExecutor::bcd_sub_byte(0, 0, true), (0x99, true));
+        assert_eq!(LlamaExecutor::bcd_sub_byte(0, 0, false), (0, false));
+    }
+
     struct NullBus;
     impl LlamaBus for NullBus {
         fn load(&mut self, _addr: u32, _bits: u8) -> u32 {
@@ -4366,6 +4407,49 @@ mod tests {
             Some(0)
         }
         fn wait_cycles(&mut self, _cycles: u32) {}
+    }
+
+    #[test]
+    fn imem_address_reads_only_the_bases_used_by_its_mode() {
+        struct BaseReadBus {
+            reads: Vec<u32>,
+        }
+        impl LlamaBus for BaseReadBus {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                assert_eq!(bits, 8);
+                let offset = addr - INTERNAL_MEMORY_START;
+                self.reads.push(offset);
+                match offset {
+                    IMEM_BP_OFFSET => 0xF0,
+                    IMEM_PX_OFFSET => 0x21,
+                    IMEM_PY_OFFSET => 0x32,
+                    _ => panic!("unexpected read {addr:X}"),
+                }
+            }
+            fn store(&mut self, addr: u32, _bits: u8, _value: u32) {
+                panic!("unexpected write {addr:X}");
+            }
+        }
+        for (mode, expected, reads) in [
+            (AddressingMode::N, 0xF0, vec![]),
+            (AddressingMode::BpN, 0xE0, vec![IMEM_BP_OFFSET]),
+            (AddressingMode::PxN, 0x11, vec![IMEM_PX_OFFSET]),
+            (AddressingMode::PyN, 0x22, vec![IMEM_PY_OFFSET]),
+            (
+                AddressingMode::BpPx,
+                0x11,
+                vec![IMEM_BP_OFFSET, IMEM_PX_OFFSET],
+            ),
+            (
+                AddressingMode::BpPy,
+                0x22,
+                vec![IMEM_BP_OFFSET, IMEM_PY_OFFSET],
+            ),
+        ] {
+            let mut bus = BaseReadBus { reads: vec![] };
+            assert_eq!(imem_offset_for_mode(&mut bus, mode, 0xF0), expected);
+            assert_eq!(bus.reads, reads, "mode {mode:?}");
+        }
     }
 
     struct ResetBus {
@@ -6341,7 +6425,43 @@ mod tests {
     }
 
     #[test]
-    fn adcl_multibyte_uses_incoming_carry() {
+    fn hw024_binary_arithmetic_captured_inputs() {
+        // Exact twelve PC-E500 inputs, not a Cartesian extension of captures.
+        type Case<'a> = (&'a [u8], &'a [u8], u32, u32, &'a [u8], u32);
+        let cases: &[Case<'_>] = &[
+            (&[0x54, 0x20, 0x30], &[0], 0, 0, &[0], 2),
+            (&[0x54, 0x20, 0x30], &[0], 0, 1, &[0], 2),
+            (&[0x55, 0x20], &[0], 0, 0, &[0], 2),
+            (&[0x55, 0x20], &[0], 0, 1, &[0], 2),
+            (&[0x55, 0x20], &[0, 0], 1, 0, &[1, 0], 0),
+            (&[0x55, 0x20], &[0xFF, 2], 1, 0, &[0, 3], 0),
+            (&[0x5C, 0x20, 0x30], &[0], 0, 0, &[0], 2),
+            (&[0x5C, 0x20, 0x30], &[0], 0, 1, &[0], 2),
+            (&[0x5D, 0x20], &[0], 0, 0, &[0], 2),
+            (&[0x5D, 0x20], &[0], 0, 1, &[0], 2),
+            (&[0x5D, 0x20], &[2, 2], 1, 0, &[1, 2], 0),
+            (&[0x5D, 0x20], &[0, 2], 1, 0, &[0xFF, 1], 0),
+        ];
+        for &(code, initial, a, carry, expected, flags) in cases {
+            let mut bus = MemBus::with_size(0x200);
+            bus.mem[..code.len()].copy_from_slice(code);
+            bus.mem[0x20..0x20 + initial.len()].copy_from_slice(initial);
+            let mut state = LlamaState::new();
+            state.set_reg(RegName::I, initial.len() as u32);
+            state.set_reg(RegName::A, a);
+            state.set_reg(RegName::FC, carry);
+            let mut exec = LlamaExecutor::new();
+            exec.execute(code[0], &mut state, &mut bus).unwrap();
+            assert_eq!(&bus.mem[0x20..0x20 + expected.len()], expected);
+            assert_eq!(state.get_reg(RegName::FC), flags & 1);
+            assert_eq!(state.get_reg(RegName::FZ), flags >> 1);
+            assert_eq!(state.get_reg(RegName::I), 0);
+            assert_eq!(state.pc(), code.len() as u32);
+        }
+    }
+
+    #[test]
+    fn adcl_multibyte_ignores_initial_carry_and_propagates_generated_carry() {
         // Program: 0x54 (ADCL (m),(n)) with I=2, carry propagates across bytes
         let mut bus = MemBus::with_size(0x200);
         bus.mem[0] = 0x54;
@@ -6357,7 +6477,7 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0x54, &mut state, &mut bus).unwrap();
         assert_eq!(len, 3);
-        assert_eq!(bus.mem[0x10], 0x01);
+        assert_eq!(bus.mem[0x10], 0x00);
         assert_eq!(bus.mem[0x11], 0x03);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 0);
@@ -6499,7 +6619,7 @@ mod tests {
         let mut exec = LlamaExecutor::new();
         let len = exec.execute(0x5C, &mut state, &mut bus).unwrap();
         assert_eq!(len, 3);
-        assert_eq!(bus.mem[0x10], 0xFE);
+        assert_eq!(bus.mem[0x10], 0xFF);
         assert_eq!(bus.mem[0x11], 0x00);
         assert_eq!(state.get_reg(RegName::FC), 0);
         assert_eq!(state.get_reg(RegName::FZ), 0);
@@ -7523,7 +7643,10 @@ mod tests {
     }
 
     #[test]
-    fn hw002_i_zero_counted_instruction_matrix_matches_hardware() {
+    fn zero_count_matrix_hardware_count_and_provisional_flag_policy() {
+        // Iteration count is HW-002 evidence. The flat all-zero bus cannot
+        // reproduce live SFRs: expected_fz is the current model policy, with
+        // addition/shift zero-count special cases still open under HW-023.
         let cases: &[(&str, &[u8], u32, usize)] = &[
             ("ADCL", &[0x54, 0x10, 0x20], 0, 1),
             ("SBCL", &[0x5C, 0x10, 0x20], 1, 1),

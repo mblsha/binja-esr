@@ -648,8 +648,8 @@ def test_reg_imem_offset_imem_selector_uses_pre1(backend: str) -> None:
     assert memory._raw[0x000100] == 0xAA
 
 
-# This hardware-backed parity case executes the complete 65,536-iteration ring;
-# the Python LLIL backend can legitimately exceed the global 60s guard in CI.
+# HW-002 backs the 65,536 count, not the flat-bus flag policy below (HW-023).
+# The Python LLIL backend can legitimately exceed the global 60s guard in CI.
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("backend", ["python", "llama"])
 @pytest.mark.parametrize(
@@ -666,9 +666,15 @@ def test_reg_imem_offset_imem_selector_uses_pre1(backend: str) -> None:
         ("DSRL", bytes.fromhex("FC10"), 0),
     ],
 )
-def test_hw002_i_zero_counted_instructions_match_hardware_across_backends(
+def test_hw002_i_zero_counted_model_contract_across_backends(
     backend: str, mnemonic: str, program: bytes, expected_fz: int
 ) -> None:
+    """Keep both cores aligned without claiming measured all-zero SFR inputs.
+
+    Addition/shift expected_fz values retain the explicitly provisional I=0
+    compatibility rule. This is a model regression, not an exact raw-capture
+    replay or new evidence that silicon has a count-specific Z exception.
+    """
     if backend == "llama":
         assert "llama" in available_backends(), "LLAMA backend not available"
 

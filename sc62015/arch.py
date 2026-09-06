@@ -14,7 +14,6 @@ from .pysc62015.instr import (
     PRE,
     UnknownInstruction,
     decode,
-    encode,
 )
 from .pysc62015.instr.opcodes import InvalidInstruction
 from binja_test_mocks.tokens import asm
@@ -66,11 +65,11 @@ class SC62015(Architecture):
     }
 
     intrinsics = {
-        "WAIT": IntrinsicInfo(inputs=[], outputs=[]),
+        "WAIT": IntrinsicInfo(inputs=[Type.int(2, False)], outputs=[]),
         "TCL": IntrinsicInfo(inputs=[], outputs=[]),
         "HALT": IntrinsicInfo(inputs=[], outputs=[]),
         "OFF": IntrinsicInfo(inputs=[], outputs=[]),
-        "RESET": IntrinsicInfo(inputs=[], outputs=[]),
+        "RESET": IntrinsicInfo(inputs=[], outputs=[Type.int(3, False)]),
         "VALIDATE_F": IntrinsicInfo(inputs=[Type.int(1, False)], outputs=[]),
         "PREFLIGHT_VECTOR_TRANSFER": IntrinsicInfo(
             inputs=[Type.int(3, False), Type.int(3, False)],
@@ -87,26 +86,22 @@ class SC62015(Architecture):
     }
 
     @staticmethod
-    def _decode_canonical(data, addr):
+    def _decode_executable(data, addr):
         """Decode an executable instruction, rejecting reserved and partial forms."""
 
         decoded = decode(data, addr, OPCODES)
         if decoded is None or isinstance(decoded, (PRE, UnknownInstruction)):
             return None
 
-        encoded = bytes(data[: decoded.length()])
-        recoded = bytes(encode(decoded, addr))
-        if encoded != recoded:
-            # Every accepted raw alias (currently the documented ED/FD selector
-            # aliases) is preserved by the decoder's operand objects. Any
-            # mismatch here is therefore a malformed form or an implementation
-            # defect, not permission to broaden an alias.
-            return None
+        # The raw decoder validates selectors, prefix fusion and the narrow
+        # silicon-alias allowlists. Text assembly is deliberately canonical;
+        # re-encoding here wrongly rejects valid PRE and high-nibble aliases.
+        # A byte sequence's validity also cannot establish a ROM code boundary.
         return decoded
 
     def get_instruction_info(self, data, addr):
         try:
-            if decoded := self._decode_canonical(data, addr):
+            if decoded := self._decode_executable(data, addr):
                 info = InstructionInfo()
                 decoded.analyze(info, addr)
                 return info
@@ -119,7 +114,7 @@ class SC62015(Architecture):
 
     def get_instruction_text(self, data, addr):
         try:
-            if decoded := self._decode_canonical(data, addr):
+            if decoded := self._decode_executable(data, addr):
                 return asm(decoded.render()), decoded.length()
         except (AssertionError, InvalidInstruction):
             # Invalid instruction encoding, return None to mark as data
@@ -130,7 +125,7 @@ class SC62015(Architecture):
 
     def get_instruction_low_level_il(self, data, addr, il):
         try:
-            if decoded := self._decode_canonical(data, addr):
+            if decoded := self._decode_executable(data, addr):
                 decoded.lift(il, addr)
                 return decoded.length()
         except (AssertionError, InvalidInstruction):
