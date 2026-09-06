@@ -2,12 +2,324 @@
 
 Date: 2026-08-30
 Live Binary Ninja requalification: 2026-09-03
+Follow-up corrections and reopened qualification: 2026-09-05
 
 This audit covers the Python decoder, assembler, LLIL evaluator, the Rust
 LLAMA decoder/evaluator, the Python-to-Rust bridge, v4 checkpoints, timer
 scheduling, and parity evidence paths.  Its purpose is to separate
 ROM-supported behavior from emulator convention and to stop invalid or
 unverified encodings from silently executing as plausible instructions.
+
+## September 5–6 follow-up: bounded close-out, broader questions remain open
+
+The final September 6 bounded batch adds **608 accepted DADL byte pairs**, all
+matching both cores, after fresh user confirmation and RETF/F/word controls.
+All 38 predeclared chunks passed complete readback and pre/post health; the
+connection closed healthy. Current accepted coverage is **279 captures /
+17,664 unique pairs / 69 complete measured rows** (27 DADL, 42 DSBL) and
+**35,328 successful hardware/backend comparisons**, still partial relative
+to the full input space. The final offline evidence/replay/receiver selection
+passes **879 tests**. No CPU semantics changed, reset/flash occurred or hardware
+question group was closed. Earlier rejected raw captures remain excluded.
+
+The user-approved bounded close-out is complete: public execution inputs and
+the native module still match passing Python/Rust/lint and view-owned BN
+qualification, and fresh private CI passes **1,522 tests / one skip** in
+276 seconds. The ten broader hardware question groups remain open; exhaustive
+BCD/carry/A-source, I=0 Z, MVL micro-order and peripheral research are deferred.
+
+Offline host-source replay also proves an idle-gap reply-framing weakness.
+The private direct-session adapter now completes one status response across
+fragments with a bounded receive-only wait, without retransmission or weaker
+health acceptance. Its 93 tests pass, and the receiver passed the fresh physical
+session. This does not prove the session encountered a delayed fragment or
+establish the cause of earlier physical truncations. Its scope is the exclusive
+direct path, not the external shared daemon.
+
+Latest bounded software correction: scalar Python lifters latch each IMEM
+operand's address across wide reads and read-modify-write operations. Indirect
+JP now preserves PRE modes and reports an unresolved branch, not a false
+static target from its selector. The PyO3 IR/RETI trace observer uses the
+host-authoritative silent peek path instead of extra architectural SFR reads.
+No register, temporary/snapshot layout, BCD formula or I=0 policy changed.
+
+The 74 new execution regressions plus five branch-metadata tests pass; the
+full SC62015/qualifier selection passes **1,740 tests / two skips**. Rust core
+tests (538 passes, six ignored), bridge unit tests (26 passes), bridge Clippy,
+configured Pyright and all **32,256** archived BCD/backend comparisons pass.
+Ten real-BN view-owned fixtures at `24899d1d3395` qualify both typed IL stages;
+21 private archive/address-data replay checks pass independently of the
+production evaluator. Two initial 60-second console timeouts remain recorded;
+inspection subsequently completed without restart and the isolated app closed
+without saving. Native diagnostic baselines stayed unchanged. The earlier
+native text/typed-constant discrepancy remains unattributed.
+
+The same 1,804-pair IMEM-read survey now has **six differences** (three MVL
+encodings per seed), with no register/write/wait/error differences. Remaining
+MVL base-versus-pointer read ordering needs a separate contract review, not a
+patch solely to obtain parity. The 16-seed state sweep has 14,432 pairs and
+zero result differences. These checks are software evidence; no new silicon
+measurement, device reset or hardware-question closure is claimed.
+
+The preceding read-contract audit fixed three further software defects:
+Python wide indirect loads now latch their IMEM-held pointer once, `PUSHU IMR`
+clears IRM from the same sample it pushes, and Rust reads only BP/PX/PY fields
+actually used by the address mode. Perfetto omits unused fields without
+fabricating zero values or adding reads. The 92 new callback/trace cases pass;
+the full SC62015/qualifier selection passes **1,661 tests / two skips**.
+All-feature/all-target Rust tests, Clippy, configured Pyright and all **32,256**
+archived BCD/backend comparisons pass. Fixed temporary/snapshot layouts and
+BCD/I=0 policies are unchanged.
+
+Ten view-owned real-BN fixtures at fingerprint `d53fc5d085d2` qualify pointer
+latches, IMR sample reuse and BCD controls in both IL stages. Initial start and
+inspection commands timed out at 30 seconds; all retained fixtures subsequently
+reached idle, and inspection completed with a 60-second request. Original
+timeouts and unchanged, nonempty native log baselines are retained. No restart
+or database save was needed. Some native text rows print `0xff` for typed
+size-3 constants containing `0xfffff`; independent typed-tree address checks
+confirm the 20-bit masks. This formatting discrepancy is not attributed or
+compensated for in the lifter. No new hardware was contacted.
+
+At that preceding checkpoint, the 1,804-pair IMEM-read survey dropped from 978 to 370 differing sequences,
+without register/write/wait/error differences. Repeated base sampling in other
+Python wide/RMW expressions and Rust RETI synchronization reads then needed
+minimized contract review; the latest correction above resolves those patterns.
+These historical counts are not confirmed silicon defects.
+
+A subsequent live-input review found another Python BCD LLIL defect: lazy
+operand loads were reevaluated in low/high-digit expressions (DADL read each
+operand four times per byte). Stable-RAM output tests hid the problem. Both
+BCD helpers now latch each operand and generated carry once per iteration,
+matching Rust. All 38 Python callback regressions failed before correction;
+the paired 38 native cases already passed. Tests retain distinct reads for
+aliased operands, resampling across iterations and consumed-once A sources.
+The correction changes no BCD formula or provisional I=0 flag policy.
+
+At that BCD checkpoint, full SC62015/qualifier selection: **1,569 passed, two skipped**;
+configured Pyright and targeted Ruff/format pass. All **32,256** comparisons
+against the 16,128 archived hardware pairs still match. Six view-owned real-BN
+fixtures at fingerprint `bbc7c047413e` confirm one operand LOAD for A forms,
+two for memory forms, and loop re-entry through those latches in both IL
+stages. The startup error is retained unchanged; one section-layout warning
+appeared after the pre-open baseline and before fixture creation. Neither
+diagnostic history is erased. The dedicated audit process closed without
+saving. This is callback/static-IL qualification, not a new hardware read-order
+measurement; older fingerprints below retain their original scope.
+
+The latest physical BCD continuation adds 768 pairs, completing DADL left=90/A0
+and DSBL left=90 against all 256 right-byte values, following the prior 512-pair
+left=9A/AA batch. All new observations match both cores; no semantic change was
+needed. The private archive now holds 183 indexed captures / 16,128 unique
+pairs / 63 complete rows. New captures
+use explicit operator-expected sequence identities plus complete fetch/readback
+and health checks. This is still partial invalid-BCD coverage; the I=0 flag
+question and exact earlier native-crash attribution remain open.
+
+Latest preparation exposed a separate MVL LLIL addressing defect: the Python
+lifter selected PRE2 for the external-destination form's lone IMEM selector,
+while decoding/rendering and Rust select PRE1. It now calls the shared
+`_addressing_modes()` helper. Eight Python regressions failed before correction;
+the expanded 120-case two-backend matrix passes across all four source modes,
+selected aliases/no PRE, `EB` X pre-decrement/post-increment, `DB` absolute
+destinations and I=1/2. Full-memory comparisons also reject unintended writes.
+These are software consistency checks, not new physical PRE1 measurements.
+Full SC62015/qualifier validation: 1,493 passed, two skipped; configured Pyright
+and targeted Ruff/format checks pass.
+
+Conservative source fingerprint `d2a2850528a8` also has twelve real-BN
+`6.1.10608-dev Personal` fixtures: four PRE1 modes by three destination forms,
+with retained owners, idle/unskipped analysis and both IL stages free of
+reachable missing semantics. Archived typed initializer operands validate
+8-bit internal arithmetic and 20-bit external masks at wrap boundaries;
+this is not full instruction execution within BN. Complete native warning/error
+snapshots stayed unchanged, including their nonempty startup baselines. The
+dedicated process closed without saving. Earlier reports retain their original
+fingerprints; the prior native crash is still unattributed. No hardware was
+contacted for this qualification.
+
+The paired private post-clear hardware study also records USR=18 (TXE | TXR)
+and SSR=04 (RSF) after a full-ring clear, plus Z=0 on ADCL/DSLL with I=256.
+This invalidates the all-zero input premise at the measured boundaries, but
+does not distinguish an additional I=0 flag rule. The provisional I=0 policy
+remains unchanged. A host checker initially rejected the correctly prefixed
+clear instruction; its original error and raw capture are preserved, with
+subsequent offline validation and no repeated capture. Hardware closed healthy;
+Glasgow and new gateware were not used.
+
+The earlier root-only LLIL check was insufficient. Real Binary Ninja emits
+unimplemented default carry expressions for ROL/ROR/RLC even though the mock
+and native executors calculate numeric results. The current lifters snapshot
+their inputs and assign C/Z explicitly. An exhaustive byte/C/Z software matrix
+covers all eight register/IMEM bit-rotation encodings on both backends; this
+does not replace hardware evidence.
+
+The architectural adapter now accepts the same validated raw aliases as the
+execution decoder, without demanding a canonical assembler round trip. The
+assembler remains canonical; executable bytes still do not establish a ROM
+function boundary. WAIT exposes its I input and subsequent I=0 write in LLIL.
+RESET exposes its validated vector target as an intrinsic output and a jump,
+without adding another architectural vector read. Reset SFR changes remain
+opaque to static analysis and retain their existing, scoped model contract.
+
+The subsequent PC-E500 batch captured 36 instruction cases plus three controls:
+DSLL/DSRL set Z from stored bytes, excluding discarded nonzero nibbles; EX/EXW
+latch both initial BP/PX/PY effective addresses. Python now matches these
+observations. Invalid-BCD DADL gives 0F+0F=14 and FF+FF=54/C=1, requiring boolean
+digit overflow rather than either former backend formula. DSBL ignores initial
+C in both memory and A-source forms but propagates borrow between bytes. Both
+cores and the old assumed-borrow DSBL test/reference were corrected. These are
+bounded measured cases, not exhaustive invalid-digit hardware coverage.
+
+The subsequent indexed byte-pair sweep found **another shared DSBL error**:
+`0A-00=94/C=1`, not `0A/C=0`. Eight isolated D4/D5 controls, including both
+initial C values and a two-byte chain, confirm it. Wrapped digit differences
+greater than 9 require decimal correction and borrow, including positive
+10..15. Both Python LLIL and Rust now implement this rule. `A0-00=40/C=1`
+and `FF-00=89/C=1` also have isolated readback witnesses. Broader sweeps are
+ongoing; backend agreement is not the evidence source.
+
+The measured
+65,536-iteration zero-count behavior stands, but the special Z=0 interpretation
+from a supposedly all-zero IMEM ring needs review: that ring includes live SFRs.
+The relevant comments/tests in both cores now explicitly identify the special
+Z=0 override as provisional. Re-decoding six archived captures preserves their
+I/F results and observes USR transmit-empty/ready before clearing and after
+restoring, but still does not establish the status reads during the target.
+New read-only USR surveys and ordinary-RAM I=1 copy/zero controls reproduce
+the differing Z pattern with measured nonzero inputs. They strengthen the
+input-contamination hypothesis, not a claim about unobserved I=0 inputs;
+the provisional zero-count policy is unchanged.
+
+A later review of the original
+[Sharp ESR-L Instruction Manual](https://github.com/sarnau/SharpIQDocuments/blob/8e025ac6de317c7421fa160b341d18ddcfcc26a6/ESR-LInstructionManual.pdf)
+(printed pages 12, 56, 58 and 65) strengthens that concern: USR is read-only,
+and the documented Z rule uses aggregate results. The scan does not establish
+live peripheral inputs during a zero-count operation. It also exposes two
+separate conflicts: its ADCL/SBCL description excludes incoming C on the first
+byte and uses A only once, whereas both pre-probe cores consumed incoming C and
+reused A. Twelve subsequent ordinary-RAM captures resolve HW-024: both
+ADCL/SBCL ignore initial C in memory and A forms, and consume A only on the
+first byte while propagating generated carry/borrow. Eight cases contradicted
+both cores; the new regressions reproduced 16 backend failures before the fix.
+Both cores are corrected. The paired private repository preserves all twelve
+raw captures, three fresh return/readback controls, exact input/output witness
+cross-links, and healthy session closure. These are scoped I=1/I=2 findings,
+not exhaustive binary coverage or a resolution of HW-023's I=0 Z question.
+
+After this correction the full public suite passes 1,373 tests with two skips;
+the private evidence suite passes 913 with one skip. Full Rust tests, Clippy,
+configured Pyright and the standalone PC-E500 ROM harness pass. All four
+binary forms also have view-owned real-BN lifted/analysis LLIL checks at
+source fingerprint `8d3991babf32`, including C=0 before the loop and clearing
+the A-source temporary for subsequent iterations. No reachable missing or
+undefined semantics was found. Per-command error guards passed, but the first
+run's saved native log windows omit 35 intervening IDs; that archive is not
+relabelled. A separate four-fixture repeat at the same fingerprint now retains
+complete error/warning endpoint snapshots (1,000-entry limit each). The initial
+startup port-binding error and section-layout warning remain exactly unchanged,
+with no new diagnostics and neither limit reached. This is bounded native
+integration evidence, not an empty-log claim or attribution of the earlier
+crash. Both audit-only instances closed without saving user databases.
+
+The real-API batch also produced intermittent LLIL index diagnostics, including
+in repeated NOP-only fragments, and the GUI process crashed during lifecycle
+isolation. The exact cause is not established. Batch qualification is now
+disabled in the GUI and requires a disposable licensed headless process. The
+harness checks nested expressions for missing semantics. A separate bounded
+GUI-owned BinaryView/Function qualifier now works with the user's GUI license
+on 6.1.10608-dev: thirteen initial fixtures and six measured-fix fixtures contain
+no nested missing semantics in lifted or analysis LLIL. It retains object owners,
+respects skipped analysis, does not save databases or redirect GUI logs, and is
+not the full anonymous manifest stress test. That stress path remains unqualified.
+The disposable headless path retains per-call warning/error logs and fails on those diagnostics even
+when the API returns successfully. Diagnostic association with a call is not
+proof of the exact native fault's cause.
+
+A later SDK-contract review found a separate harness defect in both qualifiers:
+they dereferenced every allocated expression slot, although unused slots can
+be malformed even within the expression count. Both now traverse instruction
+roots and attached typed operands, checking nested missing/undefined semantics
+without reading unused slots. This follows the
+[Binary Ninja API warning](https://api.binary.ninja/binaryninja.lowlevelil-module.html#binaryninja.lowlevelil.LowLevelILFunction.get_expr).
+The revised policy tests pass (20 tests, fake API objects). A subsequent run
+in a separate audit-only GUI process qualifies all 29 bounded fixtures through
+the new traversal, with all owners retained and both IL stages free of reachable
+missing/undefined semantics. Ten-case requests exceeded the bridge's 30-second
+non-cancelling worker timeout; qualification uses later successful requests of
+at most three cases, not those failed responses. Native logs retained an initial
+port-binding error and section-layout warning but gained no new entries.
+The targeted architecture/qualifier selection passes 70 tests. This is a
+supported tooling correction and bounded requalification, **not** attribution
+of the earlier NOP-only diagnostics or native crash. Anonymous GUI stress
+remains disabled, and earlier GUI reports are not relabelled as validation of
+the new traversal.
+
+A subsequent evidence-scope audit found that the BCD regression's blanket
+C=0/1 parametrization overclaimed direct capture coverage. Its 23 operand
+vectors now declare 30 measured initial-C/input states; the other 16 states
+retain separate model-extension tests. No numeric checks were dropped and no
+production semantics changed. The paired private suite independently decodes
+the matching archived operands/F/I/results and rejects expanded evidence claims
+without a witness. All 108 exchange/BCD regressions still run on both backends.
+The public CI selection now explicitly includes the 20 qualifier-policy tests
+under `tools/`, which `pytest sc62015` previously omitted.
+
+The I=0 flat-bus parity test likewise now identifies itself as a model
+contract, not a hardware match: its count is measured, but its all-zero SFR
+input assumption and provisional addition/shift Z handling are not a raw
+capture replay. All numeric assertions remain, and its 18 backend cases pass.
+The full SC62015/qualifier-policy run with coverage passes 1,349 tests with
+two skips in 368 seconds; the subsequent I=0 name/docstring-only change was
+verified with that 18-case rerun.
+
+These test-only edits change the conservative all-Python source fingerprint to
+`5a354af07336`; the archived GUI reports remain evidence for `2905c1a78af0`.
+They are not rewritten or described as a fresh live qualification of the new
+fingerprint. No real Binary Ninja process or hardware was contacted for this
+evidence-labeling/CI correction.
+
+A later bounded GUI run qualifies the ten remaining named raw-encoding
+regressions: five additional PRE variants, both paired-PRE orders, and three
+high-nibble CALLF/register/address forms. Together with the initial two cases,
+all twelve named raw-encoding regressions have real lifted/analysis LLIL
+evidence, not exhaustive alias-family coverage. No warnings/errors were
+observed. Direct numeric inspection of the target nodes confirms low-20-bit
+targets/values and the `FFFFF` mask, despite this SDK sometimes rendering
+three-byte masks as `0xff` in text. The qualification cache now fingerprints
+all Python source dependencies and rejects stale fixtures after changes;
+the earlier three-file key could silently miss intrinsic/operand edits.
+
+Post-hardware validation: 1,312 Python/native passes, two skips; full Rust tests
+and Clippy pass; 14,432 seeded pairs show zero differences. The corrected
+valid-BCD reference passes 40,000 pairs. The paired private repository preserves
+raw captures, hashes and reproduction in
+`sc62015_hardware_llil_followup_2026-09-05.md`. HW-023's zero-count flag
+interpretation remains provisional; broader hardware/static-analysis work
+remains open. No new PR has been created.
+
+After the later DSBL correction, the full Python/native run passes **1,340
+tests, 2 skips**, and all **14,848** valid indexed hardware pairs now match each
+backend. Full Rust tests/Clippy, the ROM harness, 14,432 seeded pairs and
+40,000 valid-decimal reference pairs pass. Two FT-overflow attempts are
+explicitly excluded from evidence. After user-confirmed recovery, 48 smaller
+sixteen-pair captures qualified the short-burst format on hardware, completing
+three additional rows without loss. Three additional two-byte carry probes
+also match both cores. A subsequent mixed-sequence double execution was
+rejected and stopped acquisition; its output is not arithmetic evidence.
+The offline decoder now also rejects extra/incomplete UART execution markers
+when that auxiliary log is present. Broad carry/A-source coverage remains
+open. Following another user-confirmed recovery, six return-only handoff
+controls and two readback controls passed, then all 45 remaining selected
+two-byte carry/borrow cases passed. Together with the three earlier accepted
+captures, **all 48 selected cases match both backends**. In particular, a
+propagated borrow changes upper-byte `0A-00` to `09/C=0`, and the ordinary
+I=2 A-source addition `99:99 + 1` produces `00:00` with C/Z set. Initial C=0/1
+does not change the paired results. These are scoped hardware observations,
+not exhaustive input coverage or evidence for I=0 behavior. The last session
+closed healthy; the old double execution remains rejected and unexplained.
+No additional CPU semantic change was needed for this batch. See the paired private
+`sc62015_hardware_bcd_matrix_2026-09-05.md` report for captures and recovery.
 
 ## Evidence standard
 
@@ -80,9 +392,10 @@ self-confirming. Static text exports remain secondary evidence.
 
 The execution policy after this audit is:
 
-- reserved opcodes, malformed operands, consecutive prefixes, and unsupported
+- reserved opcodes, malformed operands, unsupported prefix combinations, and unsupported
   execution shapes fail without advancing PC;
-- decoded metadata, text, and LLIL share the same canonicality checks;
+- decoded metadata, text, and LLIL share the validated raw-decoder policy,
+  including the narrow measured aliases; assembly remains canonical;
 - semantics supported by ROM use sites and the reference are implemented and
   covered in both cores;
 - snapshots, native shadows, callbacks, timers, and parity traces use strict
@@ -166,7 +479,7 @@ is promoted to an ISA fact.
 | Area | Previous behavior | Audit disposition |
 | --- | --- | --- |
 | Reserved opcodes `20`/`BF` | Python/Rust could manufacture placeholder execution | Reject as invalid; ROM byte sightings are not treated as executable proof |
-| PRE decoding | Consecutive or noncanonical prefixes could reach execution, and mid-instruction byte pairs at `EFE2B` and `F0002` were incorrectly promoted to executable overlaps | Reject unsupported stacked/noncanonical PRE before scheduler mutation. Device probes now pin the accepted redundant aliases and consecutive-prefix boundary; only the named `F0002` entry `23 48 3F` remains exact ROM-backed redundant-PRE evidence |
+| PRE decoding | Unsupported prefixes could reach execution, and mid-instruction byte pairs at `EFE2B` and `F0002` were incorrectly promoted to executable overlaps | Reject unsupported PRE before scheduler mutation. Device probes pin the accepted redundant aliases and consecutive-prefix boundary. Neither `EFE2B` nor `F0002` is accepted as ROM entry-point evidence; `F0002` overlaps an operand, as corrected below |
 | Instruction observers and lookahead | Python fused-decode inspected the following opcode after every non-PRE instruction, the facade and PCE wrapper could fetch the current opcode repeatedly for rendering, WAIT detection, and tracing, and device reads therefore changed merely by enabling observers | Only PRE fetches its sister opcode. Scheduled execution is allowed only when every byte inspected by preflight is explicitly callback-free; the single normal opcode fetch is bound to the current PC in an owner-held prepared operation and reused by execution, WAIT inspection, rendering, and tracing. PRE carries its fused length and bytes in the same proof, so observers cannot add bus reads or reinterpret an operand as an opcode |
 | Assembler PRE selection | Mode metadata could be lost and prefixes deduplicated by bytes rather than semantics | Preserve addressing provenance and verify all 16 two-operand PRE combinations |
 | 20-bit assembler literals | Values above `FFFFF` were emitted and silently decoded as a different semantic value | Text assembly rejects values above `FFFFF` and emits a canonical low-nibble high byte. Executable decoding is instruction-specific: X/Y/U/S register-immediate loads expose only bits 19-0; guarded 62/66/6A/72/7A, 88-8F, A8-AF, D0-D3, and D8-DB probes map tested upper nibble `8` to the low-20-bit data address. Unverified vectors and other untested absolute-memory families still reject bits 23-20 |
@@ -358,10 +671,12 @@ O(1) host-timer arithmetic, and parity trace validation are emulator-integrity
 requirements.  They do not need to be promoted to ISA facts, and they do not
 resolve any silicon question below.
 
-The paired private repository's 2026-09-01 closure record concludes that no
-remaining hardware row selects between competing architectural descriptions of
-a valid implemented opcode. The following residual work remains intentionally
-outside that closure:
+The paired private repository's 2026-09-01 closure record is historical, not a
+current blanket valid-instruction closure. The September 5 work above reopened
+valid-input flags/BCD semantics and zero-count evidence, and the subsequent
+manual review added ADCL/SBCL incoming-C and A-source questions, subsequently
+resolved by the twelve bounded HW-024 captures described above.
+The following broader residual work also remains outside that earlier closure:
 
 1. Reserved `20`/`BF`, reserved register selectors, and malformed mode/PRE
    encodings. Device probes pin the accepted PRE aliases/boundary and show that

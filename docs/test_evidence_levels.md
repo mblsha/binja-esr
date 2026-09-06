@@ -22,6 +22,14 @@ they do not prove instruction semantics.  Cross-backend LLIL parity has the
 same limitation.  See `sc62015_asm_llil_audit.md` for the current fail-closed
 policy and the real-hardware trace queue.
 
+Parameter expansion must preserve that distinction too. The September 5 BCD
+regressions now declare measured incoming-C values per operand vector. Their
+30 measured instruction/input states and 16 unmeasured carry-state extensions
+run under separate test names on both backends. The private suite matches each
+measured declaration to a hash-checked, independently decoded target/input/F/I/
+result witness and rejects invented carry coverage. Carry independence on one
+input does not make every parametrized C value a hardware observation.
+
 The 2026-08-30 raw campaign record and follow-up are
 `docs/pc-e500/en/analysis/sc62015_hardware_campaign_2026-08-30.md` in the
 paired private repository, with the follow-up at

@@ -404,20 +404,29 @@ ordering, and partial visibility remain model contracts.
 | `SBC (m),n`     | `(m) ← (m)-n-C`                                                                                      | `○ ○`       | 3     | 4        | `0101 1001` / `59` <br> `m` <br> `n`              | `m,n`        |
 | `SBC A,(n)`     | `A ← A-(n)-C`                                                                                        | `○ ○`       | 2     | 4        | `0101 1010` / `5A` <br> `n`                       | `n`          |
 | `SBC (n),A`     | `(n) ← (n)-A-C`                                                                                      | `○ ○`       | 2     | 4        | `0101 1011` / `5B` <br> `n`                       | `n`          |
-| `ADCL (m),(n)`  | Loop `I` times: `(m) ← (m)+(n)+C` (byte-wise, C propagates)                                          | `○ ○`       | 3     | 5+2×I    | `0101 0100` / `54` <br> `m` <br> `n`              | `m,n`        |
-| `ADCL (n),A`    | Loop `I` times: `(n) ← (n)+A+C` (byte-wise, A is src for each byte, C propagates)                    | `○ ○`       | 2     | 4+1×I    | `0101 0101` / `55` <br> `n`                       | `n`          |
-| `SBCL (m),(n)`  | Loop `I` times: `(m) ← (m)-(n)-C` (byte-wise, C propagates as borrow)                                | `○ ○`       | 3     | 5+2×I    | `0101 1100` / `5C` <br> `m` <br> `n`              | `m,n`        |
-| `SBCL (n),A`    | Loop `I` times: `(n) ← (n)-A-C` (byte-wise, A is src for each byte, C propagates)                    | `○ ○`       | 2     | 4+1×I    | `0101 1101` / `5D` <br> `n`                       | `n`          |
-| `DADL (m),(n)`  | BCD add with carry: `(m) ← (m)+(n)+C` (multi-byte, addresses dec.)                                   | `○ ○`       | 3     | 5+2×I    | `1100 0100` / `C4` <br> `m` <br> `n`              | `m,n`        |
-| `DADL (n),A`    | BCD add with carry: `(n) ← (n)+A+C` (multi-byte, (n) addr dec.)                                      | `○ ○`       | 2     | 4+1×I    | `1100 0101` / `C5` <br> `n`                       | `n`          |
-| `DSBL (m),(n)`  | BCD sub with borrow: `(m) ← (m)-(n)-C` (multi-byte, addresses dec.)                                  | `○ ○`       | 3     | 5+2×I    | `1101 0100` / `D4` <br> `m` <br> `n`              | `m,n`        |
-| `DSBL (n),A`    | BCD sub with borrow: `(n) ← (n)-A-C` (multi-byte, (n) addr dec.)                                     | `○ ○`       | 2     | 4+1×I    | `1101 0101` / `D5` <br> `n`                       | `n`          |
+| `ADCL (m),(n)`  | Byte-wise addition, ascending addresses; initial C ignored, generated carry propagates | `○ ○` | 3 | 5+2×I | `0101 0100` / `54` <br> `m` <br> `n` | `m,n` |
+| `ADCL (n),A`    | Add A to the first byte only; subsequent ascending bytes add generated carry, initial C ignored | `○ ○` | 2 | 4+1×I | `0101 0101` / `55` <br> `n` | `n` |
+| `SBCL (m),(n)`  | Byte-wise subtraction, ascending addresses; initial C ignored, generated borrow propagates | `○ ○` | 3 | 5+2×I | `0101 1100` / `5C` <br> `m` <br> `n` | `m,n` |
+| `SBCL (n),A`    | Subtract A from the first byte only; subsequent ascending bytes subtract generated borrow, initial C ignored | `○ ○` | 2 | 4+1×I | `0101 1101` / `5D` <br> `n` | `n` |
+| `DADL (m),(n)`  | BCD addition, initial carry=0; carry propagates between bytes (addresses dec.)                     | `○ ○`       | 3     | 5+2×I    | `1100 0100` / `C4` <br> `m` <br> `n`              | `m,n`        |
+| `DADL (n),A`    | BCD addition, initial carry=0; A consumed once, then source=0 (address dec.)                        | `○ ○`       | 2     | 4+1×I    | `1100 0101` / `C5` <br> `n`                       | `n`          |
+| `DSBL (m),(n)`  | BCD subtraction, initial borrow=0; borrow propagates between bytes (addresses dec.)                | `○ ○`       | 3     | 5+2×I    | `1101 0100` / `D4` <br> `m` <br> `n`              | `m,n`        |
+| `DSBL (n),A`    | BCD subtraction, initial borrow=0; A consumed once, then source=0 (address dec.)                    | `○ ○`       | 2     | 4+1×I    | `1101 0101` / `D5` <br> `n`                       | `n`          |
 | `PMDF (m),n`    | Pointer modify: `(m) ← (m)+n` (8-bit wrapping binary add)                                            | `- -`       | 3     | 4        | `0100 0111` / `47` <br> `m` <br> `n`              | `m,n`        |
 | `PMDF (n),A`    | Pointer modify: `(n) ← (n)+A` (8-bit wrapping binary add)                                            | `- -`       | 2     | 4        | `0101 0111` / `57` <br> `n`                       | `n`          |
 
 Real-device zero, wrap, non-wrap, and register-source cases verify that `PMDF`
 uses ordinary 8-bit binary addition and preserves the incoming `C` and `Z`
 bits, even when those bits contradict the arithmetic result.
+
+For DADL/DSBL, incoming architectural C is distinct from carry/borrow generated
+inside the instruction. The current multi-byte contract starts at zero and
+propagates only the latter. Invalid BCD digits are data, not reserved opcode
+encodings: measured examples include DADL `0F+0F=14` and DSBL `0A-00=94`, the
+latter with C set. DSBL's wrapped digit difference greater than 9 triggers
+correction/borrow even for a positive difference 10..15. Systematic byte-input
+qualification remains incomplete; see the scoped hardware findings in
+[`sc62015_asm_llil_audit.md`](../../docs/sc62015_asm_llil_audit.md).
 
 ### Logical Instructions (AND, OR, XOR, TEST, SWAP)
 
