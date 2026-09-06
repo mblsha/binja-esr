@@ -1,15 +1,19 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py
 
+#[path = "sc62015_lcd/host.rs"]
+mod host;
+
 use chrono::{Datelike, Timelike, Utc};
 use clap::Parser;
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    cursor::MoveTo,
+    event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    terminal::{Clear, ClearType},
 };
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::llama::state::mask_for;
 use sc62015_core::memory::{IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_RXD_OFFSET};
+use sc62015_core::native_ui::ControlState;
 use sc62015_core::pacing::{ExecutionMode, Pacer, HOST_SLICE_TARGET_US};
 use sc62015_core::{
     iq7000_annunciators::Iq7000Annunciators, pce500::ROM_WINDOW_START, CoreRuntime,
@@ -106,6 +110,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     loop_diagnostics: bool,
 
+    /// Show expensive call-stack/keyboard/loop details (off during normal interaction).
+    #[arg(long, default_value_t = false)]
+    debug_state: bool,
+
     /// Legacy extra delay after LCD checks. Sleep is split into <=4 ms waits to service controls.
     #[arg(long, default_value_t = 0)]
     sleep_ms: u64,
@@ -179,39 +187,6 @@ struct Args {
     loop_report: Option<PathBuf>,
 }
 
-struct TerminalGuard {
-    use_tty: bool,
-    use_alt: bool,
-}
-
-impl TerminalGuard {
-    fn enter(use_tty: bool, use_alt: bool) -> Result<Self, Box<dyn Error>> {
-        let mut out = stdout();
-        if use_tty {
-            crossterm::terminal::enable_raw_mode()?;
-            if use_alt {
-                crossterm::execute!(out, EnterAlternateScreen)?;
-            }
-            crossterm::execute!(out, Hide, Clear(ClearType::All))?;
-            out.flush()?;
-        }
-        Ok(Self { use_tty, use_alt })
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        if self.use_tty {
-            let mut out = stdout();
-            let _ = crossterm::execute!(out, Show);
-            if self.use_alt {
-                let _ = crossterm::execute!(out, LeaveAlternateScreen);
-            }
-            let _ = crossterm::terminal::disable_raw_mode();
-        }
-    }
-}
-
 fn default_rom_path(model: DeviceModel) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../data/{}", model.rom_basename()))
 }
@@ -235,11 +210,9 @@ fn normalize_lines(mut lines: Vec<String>, line_count: usize, width: usize) -> V
         lines.push(String::new());
     }
     for line in &mut lines {
-        if line.len() > width {
-            line.truncate(width);
-        }
-        if line.len() < width {
-            let pad = width.saturating_sub(line.len());
+        *line = line.chars().take(width).collect();
+        if line.chars().count() < width {
+            let pad = width.saturating_sub(line.chars().count());
             line.push_str(&" ".repeat(pad));
         }
     }
@@ -247,12 +220,12 @@ fn normalize_lines(mut lines: Vec<String>, line_count: usize, width: usize) -> V
 }
 
 fn render_frame(
+    out: &mut impl Write,
     lines: &[String],
     status: &str,
     extra_lines: &[String],
     use_tty: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let mut out = stdout();
     if use_tty {
         let (cols, _) = crossterm::terminal::size().unwrap_or((0, 0));
         let max_cols = cols.saturating_sub(1) as usize;
@@ -373,11 +346,52 @@ mod tests {
         for model in ["pc-e500", "iq-7000"] {
             let normal = Args::try_parse_from(["sc62015-lcd", "--model", model]).unwrap();
             assert!(!normal.loop_diagnostics);
+            assert!(!normal.debug_state);
             assert!(normal.loop_report.is_none());
             let diagnostics =
                 Args::try_parse_from(["sc62015-lcd", "--model", model, "--loop-diagnostics"])
                     .unwrap();
             assert!(diagnostics.loop_diagnostics);
+        }
+    }
+
+    #[test]
+    fn focus_and_exit_cleanup_release_contacts_and_cancel_future_taps() {
+        for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+            let mut runtime = CoreRuntime::for_model(model, &[]).unwrap();
+            let mut releases = Vec::new();
+            let mut presses = vec![PendingPress {
+                code: 2,
+                due_step: 120,
+                hold_steps: 10,
+                force_key_irq: false,
+            }];
+            let mut on_release = Some(140);
+            inject_key(&mut runtime, 3, 100, &mut releases, 30, false);
+            runtime.press_on_key();
+            assert!(!runtime
+                .keyboard
+                .as_ref()
+                .unwrap()
+                .pressed_matrix_codes()
+                .is_empty());
+            release_host_inputs(&mut runtime, &mut releases, &mut presses, &mut on_release);
+            assert!(runtime
+                .keyboard
+                .as_ref()
+                .unwrap()
+                .pressed_matrix_codes()
+                .is_empty());
+            assert!(!runtime.physical_on_key_pressed());
+            assert!(releases.is_empty());
+            assert!(presses.is_empty());
+            assert_eq!(on_release, None);
+            assert!(!apply_pending_presses(
+                &mut runtime,
+                &mut presses,
+                &mut releases,
+                1000
+            ));
         }
     }
 
@@ -505,11 +519,15 @@ mod tests {
     }
 }
 
-fn render_status_line(status: &str, row: u16, use_tty: bool) -> Result<(), Box<dyn Error>> {
+fn render_status_line(
+    out: &mut impl Write,
+    status: &str,
+    row: u16,
+    use_tty: bool,
+) -> Result<(), Box<dyn Error>> {
     if !use_tty {
         return Ok(());
     }
-    let mut out = stdout();
     let (cols, _) = crossterm::terminal::size().unwrap_or((0, 0));
     let max_cols = cols.saturating_sub(1) as usize;
     let status_view = if max_cols > 0 {
@@ -530,6 +548,7 @@ fn format_status(
     last_key_step: u64,
     symbols: Option<&SymbolMap>,
     pacer: &Pacer,
+    control: ControlState,
 ) -> String {
     let pc = runtime.state.pc() & 0x000f_ffff;
     let power_state = if runtime.state.is_off() {
@@ -546,7 +565,14 @@ fn format_status(
         .map(|label| format!(" last_key={label}@{last_key_step}"))
         .unwrap_or_default();
     let iq_status = format_iq7000_annunciator_status(runtime);
-    format!("[{} uncalibrated] {pc_display} boundaries={executed} state={power_state}{key_status}{iq_status} dropped_host_ms={} (Ctrl+C to exit)", pacer.mode().label(), pacer.dropped_host_ns() / 1_000_000)
+    let ui_state = if control.quit {
+        "STOPPED"
+    } else if control.paused {
+        "PAUSED"
+    } else {
+        "RUNNING"
+    };
+    format!("{ui_state} ack={} boundaries={executed} [{}, uncalibrated] {pc_display} cpu={power_state}{key_status}{iq_status} dropped_host_ms={} (Ctrl+P pause/resume; Ctrl+C quit)", control.revision, pacer.mode().label(), pacer.dropped_host_ns() / 1_000_000)
 }
 
 fn format_iq7000_annunciator_status(runtime: &CoreRuntime) -> String {
@@ -785,6 +811,7 @@ fn format_extra_lines(
 }
 
 fn render_extra_lines(
+    out: &mut impl Write,
     lines: &[String],
     start_row: u16,
     use_tty: bool,
@@ -793,7 +820,6 @@ fn render_extra_lines(
     if !use_tty {
         return Ok(());
     }
-    let mut out = stdout();
     let (cols, _) = crossterm::terminal::size().unwrap_or((0, 0));
     let max_cols = cols.saturating_sub(1) as usize;
     for (idx, line) in lines.iter().enumerate() {
@@ -1761,15 +1787,91 @@ fn validate_execution_args(args: &Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+struct UiView<'a> {
+    decoder: &'a Option<sc62015_core::DeviceTextDecoder>,
+    symbols: Option<&'a SymbolMap>,
+    functions: Option<&'a FunctionSet>,
+    debug: bool,
+}
+
+struct UiProgress<'a> {
+    executed: u64,
+    last_key: &'a Option<String>,
+    last_key_step: u64,
+    releases: &'a [PendingRelease],
+    halted_steps: u64,
+    control: ControlState,
+}
+
+impl UiView<'_> {
+    fn frame(&self, runtime: &CoreRuntime, pacer: &Pacer, progress: UiProgress<'_>) -> host::Frame {
+        host::Frame {
+            lcd: self
+                .decoder
+                .as_ref()
+                .zip(runtime.lcd.as_deref())
+                .map(|(decoder, lcd)| decoder.capture_text_frame(lcd)),
+            status: format_status(
+                runtime,
+                progress.executed,
+                progress.last_key,
+                progress.last_key_step,
+                self.symbols,
+                pacer,
+                progress.control,
+            ),
+            extra: if self.debug {
+                format_extra_lines(
+                    runtime,
+                    self.symbols,
+                    self.functions,
+                    progress.last_key,
+                    progress.last_key_step,
+                    progress.releases,
+                    progress.halted_steps,
+                )
+            } else {
+                Vec::new()
+            },
+            final_log: None,
+        }
+    }
+}
+
+fn release_host_inputs(
+    runtime: &mut CoreRuntime,
+    releases: &mut Vec<PendingRelease>,
+    presses: &mut Vec<PendingPress>,
+    on_release: &mut Option<u64>,
+) {
+    releases.clear();
+    presses.clear();
+    *on_release = None;
+    if let Some(keyboard) = &mut runtime.keyboard {
+        for code in keyboard.pressed_matrix_codes() {
+            keyboard.release_matrix_code(code, &mut runtime.memory);
+        }
+    }
+    runtime.release_on_key(); // Physical contact only; RTC wake remains independent.
+}
+
+fn main() -> std::process::ExitCode {
+    match run_native() {
+        Ok(code) => code,
+        Err(error) => {
+            host::report_error_bounded(format!("[execution] {error}"));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
     let args = Args::parse();
     validate_execution_args(&args)?;
     let mut pacer = Pacer::for_model(args.model, args.mode);
-    eprintln!("[execution] {}: {} compatibility timing units/s, not hardware calibrated; IQ uses the PC fallback. RTC follows guest elapsed time, not paused host time.", args.mode.label(), pacer.timebase_hz());
+    let mut warnings = vec![format!("[execution] {}: {} compatibility timing units/s, not hardware calibrated; IQ uses the PC fallback. RTC follows guest elapsed time, not paused host time.", args.mode.label(), pacer.timebase_hz())];
     if args.mode == ExecutionMode::Deterministic {
-        eprintln!(
-            "[execution] explicit --steps budget; live guest keys disabled (Ctrl+C still exits)"
-        );
+        warnings.push("[execution] explicit --steps budget; live guest keys disabled (Ctrl+P pause/resume, Ctrl+C quit)".into());
     }
     let rom_path = args.rom.unwrap_or_else(|| default_rom_path(args.model));
     let rom_bytes = fs::read(&rom_path)?;
@@ -1806,7 +1908,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let function_addrs = bnida_path
         .as_ref()
         .and_then(|path| load_bnida_functions(path).ok());
-    let mut last_lines: Vec<String> = Vec::new();
     let mut first_draw = true;
     let mut last_key: Option<String> = None;
     let mut last_key_step: u64 = 0;
@@ -1832,36 +1933,33 @@ fn main() -> Result<(), Box<dyn Error>> {
     let use_tty = args.force_tty || (stdout().is_terminal() && std::io::stdin().is_terminal());
     let use_alt = use_tty && !args.no_alt_screen;
 
-    let _guard = TerminalGuard::enter(use_tty, use_alt)?;
-    let status_row = line_count as u16 + 1;
+    let mut host = host::NativeHost::new(
+        text_decoder.clone(),
+        (line_count, width),
+        use_tty,
+        use_alt,
+        warnings,
+    )?;
+    let view = UiView {
+        decoder: &text_decoder,
+        symbols: symbols.as_ref(),
+        functions: function_addrs.as_ref(),
+        debug: args.debug_state,
+    };
+    let mut observed = host.controls.state();
     let mut last_status_draw = Instant::now();
-    let mut last_stack_lines = 0usize;
-    let stack_row = status_row.saturating_add(1);
-    if use_tty {
-        let blank_lines = normalize_lines(Vec::new(), line_count, width);
-        let status = format_status(
-            &runtime,
-            0,
-            &last_key,
+    host.publish(view.frame(
+        &runtime,
+        &pacer,
+        UiProgress {
+            executed: 0,
+            last_key: &last_key,
             last_key_step,
-            symbols.as_ref(),
-            &pacer,
-        );
-        let extra_lines = format_extra_lines(
-            &runtime,
-            symbols.as_ref(),
-            function_addrs.as_ref(),
-            &last_key,
-            last_key_step,
-            &pending_releases,
+            releases: &pending_releases,
             halted_steps,
-        );
-        render_frame(&blank_lines, &status, &extra_lines, use_tty)?;
-        render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;
-        last_lines = blank_lines;
-        first_draw = false;
-        last_status_draw = Instant::now();
-    }
+            control: observed,
+        },
+    ));
 
     let mut executed: u64 = 0;
     let mut running = true;
@@ -1870,213 +1968,263 @@ fn main() -> Result<(), Box<dyn Error>> {
     let display_interval = Duration::from_secs_f64(1.0 / args.target_fps as f64);
     let mut last_display_check = Instant::now();
     let mut legacy_delay_until: Option<Instant> = None;
-    while running {
-        if args.steps > 0 && executed >= args.steps {
-            break;
-        }
-        let mut dirty = false;
-        let mut remaining = if args.steps == 0 {
-            args.refresh_steps
-        } else {
-            (args.steps - executed).min(args.refresh_steps)
-        };
-        if remaining == 0 {
-            break;
-        }
-        while remaining > 0 {
-            let previously_executed = executed;
-            let now = Instant::now();
-            let delayed = legacy_delay_until.is_some_and(|deadline| now < deadline);
-            if !delayed && legacy_delay_until.take().is_some() {
-                pacer.rebase();
+    let execution: Result<(), Box<dyn Error>> = (|| {
+        while running {
+            if args.steps > 0 && executed >= args.steps {
+                break;
             }
-            let mut host_wait = if delayed { host_target } else { Duration::ZERO };
-            let mut did_stub = false;
-            if !delayed
-                && apply_stub_returns(
-                    &mut runtime,
-                    &mut fast_init_cleared,
-                    StubReturnConfig {
-                        symbols: symbols.as_ref(),
-                        stub_iocs: args.stub_iocs,
-                        fast_delay: args.fast_delay,
-                        stub_sio: args.stub_sio,
-                        fast_init: args.fast_init,
-                        ram_zero_buf: fast_init_buf.as_deref(),
-                    },
-                )
-            {
-                executed = executed.saturating_add(1);
-                remaining = remaining.saturating_sub(1);
-                dirty = true;
-                did_stub = true;
-            }
-            let chunk = if args.input_steps == 0 {
-                remaining
+            let mut dirty = false;
+            let mut remaining = if args.steps == 0 {
+                args.refresh_steps
             } else {
-                remaining.min(args.input_steps)
+                (args.steps - executed).min(args.refresh_steps)
             };
-            let chunk = limit_input_deadline(
-                chunk,
-                executed,
-                &pending_presses,
-                &pending_releases,
-                [
-                    pending_on_release,
-                    auto_basic_step,
-                    auto_type_next_step,
-                    ((auto_basic_pending
-                        || jump_basic_pending
-                        || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
-                        && auto_basic_step.is_none())
-                    .then_some(last_lcd_check.saturating_add(lcd_check_interval)),
-                ],
-            );
-            if !did_stub && !delayed {
-                let slice_start = Instant::now();
-                let limit = usize::try_from(chunk).unwrap_or(usize::MAX);
-                let used = if args.mode == ExecutionMode::Deterministic {
-                    runtime
-                        .run_slice(limit, |_| slice_start.elapsed() >= host_target)?
-                        .progress
-                        .boundary_budget_used
-                } else {
-                    let result = runtime.run_automatic_slice(
-                        &mut pacer,
-                        u64::try_from(host_epoch.elapsed().as_nanos()).unwrap_or(u64::MAX),
-                        limit,
-                        |_| slice_start.elapsed() >= host_target,
-                    )?;
-                    host_wait = Duration::from_nanos(result.plan.wait_ns);
-                    result
-                        .slice
-                        .map_or(0, |slice| slice.progress.boundary_budget_used)
-                } as u64;
-                executed = executed.saturating_add(used);
-                remaining = remaining.saturating_sub(used);
+            if remaining == 0 {
+                break;
             }
-            if apply_pending_presses(
-                &mut runtime,
-                &mut pending_presses,
-                &mut pending_releases,
-                executed,
-            ) {
-                dirty = true;
-            }
-            apply_pending_releases(&mut runtime, &mut pending_releases, executed);
-            if let Some(release_boundary) = pending_on_release {
-                if executed >= release_boundary {
-                    runtime.release_on_key();
-                    pending_on_release = None;
-                }
-            }
-            if let Some(step) = auto_basic_step {
-                if executed >= step {
-                    inject_key(
-                        &mut runtime,
-                        BASIC_KEY_CODE,
-                        executed,
-                        &mut pending_releases,
-                        PF_KEY_HOLD_STEPS,
-                        args.force_key_irq,
-                    );
-                    last_key = Some("BASIC".to_string());
-                    last_key_step = executed;
-                    auto_basic_step = None;
-                    if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                        auto_type_next_step = Some(executed.saturating_add(args.auto_type_delay));
+            while remaining > 0 {
+                let requested = host.controls.state();
+                if requested != observed {
+                    if requested.release_epoch != observed.release_epoch {
+                        release_host_inputs(
+                            &mut runtime,
+                            &mut pending_releases,
+                            &mut pending_presses,
+                            &mut pending_on_release,
+                        );
                     }
+                    if requested.paused != observed.paused {
+                        pacer.rebase();
+                    }
+                    observed = requested;
                     dirty = true;
                 }
-            }
-            if let Some(next_step) = auto_type_next_step {
-                if executed >= next_step {
-                    let mut sent = false;
-                    while let Some(ch) = auto_type_queue.first().copied() {
-                        auto_type_queue.remove(0);
-                        let did_inject = match ch {
-                            '\n' | '\r' => {
-                                inject_key(
-                                    &mut runtime,
-                                    ENTER_KEY_CODE,
-                                    executed,
-                                    &mut pending_releases,
-                                    CHAR_KEY_HOLD_STEPS,
-                                    args.force_key_irq,
-                                );
-                                true
-                            }
-                            _ => inject_char_key(
-                                &mut runtime,
-                                ch,
-                                executed,
-                                &mut pending_releases,
-                                &mut pending_presses,
-                                CHAR_KEY_HOLD_STEPS,
-                                args.force_key_irq,
-                            ),
-                        };
-                        if did_inject {
-                            last_key = Some(ch.to_string());
-                            last_key_step = executed;
-                            auto_type_next_step =
-                                Some(executed.saturating_add(auto_type_gap_for_char(ch)));
-                            sent = true;
-                            dirty = true;
-                            break;
+                if observed.quit {
+                    running = false;
+                    break;
+                }
+                if let Some(error) = host.stats().error {
+                    return Err(format!("terminal output failed: {error}").into());
+                }
+                let previously_executed = executed;
+                let now = Instant::now();
+                let delayed = legacy_delay_until.is_some_and(|deadline| now < deadline);
+                if !delayed && legacy_delay_until.take().is_some() {
+                    pacer.rebase();
+                }
+                let mut host_wait = if delayed || observed.paused {
+                    host_target
+                } else {
+                    Duration::ZERO
+                };
+                let mut did_stub = false;
+                if !delayed
+                    && !observed.paused
+                    && apply_stub_returns(
+                        &mut runtime,
+                        &mut fast_init_cleared,
+                        StubReturnConfig {
+                            symbols: symbols.as_ref(),
+                            stub_iocs: args.stub_iocs,
+                            fast_delay: args.fast_delay,
+                            stub_sio: args.stub_sio,
+                            fast_init: args.fast_init,
+                            ram_zero_buf: fast_init_buf.as_deref(),
+                        },
+                    )
+                {
+                    executed = executed.saturating_add(1);
+                    remaining = remaining.saturating_sub(1);
+                    dirty = true;
+                    did_stub = true;
+                }
+                let chunk = if args.input_steps == 0 {
+                    remaining
+                } else {
+                    remaining.min(args.input_steps)
+                };
+                let chunk = limit_input_deadline(
+                    chunk,
+                    executed,
+                    &pending_presses,
+                    &pending_releases,
+                    [
+                        pending_on_release,
+                        auto_basic_step,
+                        auto_type_next_step,
+                        ((auto_basic_pending
+                            || jump_basic_pending
+                            || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
+                            && auto_basic_step.is_none())
+                        .then_some(last_lcd_check.saturating_add(lcd_check_interval)),
+                    ],
+                );
+                if !did_stub && !delayed && !observed.paused {
+                    let slice_start = Instant::now();
+                    let limit = usize::try_from(chunk).unwrap_or(usize::MAX);
+                    let used = if args.mode == ExecutionMode::Deterministic {
+                        runtime
+                            .run_slice(limit, |_| {
+                                slice_start.elapsed() >= host_target
+                                    || host.controls.changed(observed)
+                            })?
+                            .progress
+                            .boundary_budget_used
+                    } else {
+                        let result = runtime.run_automatic_slice(
+                            &mut pacer,
+                            u64::try_from(host_epoch.elapsed().as_nanos()).unwrap_or(u64::MAX),
+                            limit,
+                            |_| {
+                                slice_start.elapsed() >= host_target
+                                    || host.controls.changed(observed)
+                            },
+                        )?;
+                        host_wait = Duration::from_nanos(result.plan.wait_ns);
+                        result
+                            .slice
+                            .map_or(0, |slice| slice.progress.boundary_budget_used)
+                    } as u64;
+                    executed = executed.saturating_add(used);
+                    remaining = remaining.saturating_sub(used);
+                }
+                if !observed.paused {
+                    if apply_pending_presses(
+                        &mut runtime,
+                        &mut pending_presses,
+                        &mut pending_releases,
+                        executed,
+                    ) {
+                        dirty = true;
+                    }
+                    apply_pending_releases(&mut runtime, &mut pending_releases, executed);
+                    if let Some(release_boundary) = pending_on_release {
+                        if executed >= release_boundary {
+                            runtime.release_on_key();
+                            pending_on_release = None;
                         }
                     }
-                    if !sent {
-                        auto_type_next_step = None;
-                    }
-                }
-            }
-            if runtime.state.is_halted() {
-                halted_steps =
-                    halted_steps.saturating_add(executed.saturating_sub(previously_executed));
-            } else {
-                halted_steps = 0;
-            }
-            let should_check_lcd = (auto_basic_pending
-                || jump_basic_pending
-                || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
-                && auto_basic_step.is_none();
-            if should_check_lcd && executed.saturating_sub(last_lcd_check) >= lcd_check_interval {
-                last_lcd_check = executed;
-                let row0 = decode_row0(&text_decoder, &runtime);
-                let display_text = decode_display_text(&text_decoder, &runtime);
-                if auto_type_next_step.is_none()
-                    && !auto_type_queue.is_empty()
-                    && display_text.contains('>')
-                {
-                    auto_type_next_step = Some(executed.saturating_add(args.auto_type_delay));
-                    dirty = true;
-                    continue;
-                }
-                let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
-                if jump_basic_pending && auto_basic_step.is_none() && row_has_menu {
-                    jump_to_basic_loop(&mut runtime);
-                    jump_basic_pending = false;
-                    if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
-                        auto_type_next_step = Some(executed.saturating_add(args.auto_basic_delay));
-                    }
-                    dirty = true;
-                } else if auto_basic_pending && auto_basic_step.is_none() && row_has_menu {
-                    auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
-                    auto_basic_pending = false;
-                }
-            }
-
-            if use_tty {
-                while event::poll(Duration::from_millis(0))? {
-                    if let Event::Key(key) = event::read()? {
-                        if args.mode == ExecutionMode::Deterministic {
-                            if matches!(key.code, KeyCode::Char('c' | 'C'))
-                                && key.modifiers.contains(KeyModifiers::CONTROL)
-                            {
-                                running = false;
-                                break;
+                    if let Some(step) = auto_basic_step {
+                        if executed >= step {
+                            inject_key(
+                                &mut runtime,
+                                BASIC_KEY_CODE,
+                                executed,
+                                &mut pending_releases,
+                                PF_KEY_HOLD_STEPS,
+                                args.force_key_irq,
+                            );
+                            last_key = Some("BASIC".to_string());
+                            last_key_step = executed;
+                            auto_basic_step = None;
+                            if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
+                                auto_type_next_step =
+                                    Some(executed.saturating_add(args.auto_type_delay));
                             }
+                            dirty = true;
+                        }
+                    }
+                    if let Some(next_step) = auto_type_next_step {
+                        if executed >= next_step {
+                            let mut sent = false;
+                            while let Some(ch) = auto_type_queue.first().copied() {
+                                auto_type_queue.remove(0);
+                                let did_inject = match ch {
+                                    '\n' | '\r' => {
+                                        inject_key(
+                                            &mut runtime,
+                                            ENTER_KEY_CODE,
+                                            executed,
+                                            &mut pending_releases,
+                                            CHAR_KEY_HOLD_STEPS,
+                                            args.force_key_irq,
+                                        );
+                                        true
+                                    }
+                                    _ => inject_char_key(
+                                        &mut runtime,
+                                        ch,
+                                        executed,
+                                        &mut pending_releases,
+                                        &mut pending_presses,
+                                        CHAR_KEY_HOLD_STEPS,
+                                        args.force_key_irq,
+                                    ),
+                                };
+                                if did_inject {
+                                    last_key = Some(ch.to_string());
+                                    last_key_step = executed;
+                                    auto_type_next_step =
+                                        Some(executed.saturating_add(auto_type_gap_for_char(ch)));
+                                    sent = true;
+                                    dirty = true;
+                                    break;
+                                }
+                            }
+                            if !sent {
+                                auto_type_next_step = None;
+                            }
+                        }
+                    }
+                    if runtime.state.is_halted() {
+                        halted_steps = halted_steps
+                            .saturating_add(executed.saturating_sub(previously_executed));
+                    } else {
+                        halted_steps = 0;
+                    }
+                    let should_check_lcd = (auto_basic_pending
+                        || jump_basic_pending
+                        || (auto_type_next_step.is_none() && !auto_type_queue.is_empty()))
+                        && auto_basic_step.is_none();
+                    if should_check_lcd
+                        && executed.saturating_sub(last_lcd_check) >= lcd_check_interval
+                    {
+                        last_lcd_check = executed;
+                        let row0 = decode_row0(&text_decoder, &runtime);
+                        let display_text = decode_display_text(&text_decoder, &runtime);
+                        if auto_type_next_step.is_none()
+                            && !auto_type_queue.is_empty()
+                            && display_text.contains('>')
+                        {
+                            auto_type_next_step =
+                                Some(executed.saturating_add(args.auto_type_delay));
+                            dirty = true;
+                            continue;
+                        }
+                        let row_has_menu = row0.contains("S2(CARD):") || row0.contains("S1(MAIN):");
+                        if jump_basic_pending && auto_basic_step.is_none() && row_has_menu {
+                            jump_to_basic_loop(&mut runtime);
+                            jump_basic_pending = false;
+                            if auto_type_next_step.is_none() && !auto_type_queue.is_empty() {
+                                auto_type_next_step =
+                                    Some(executed.saturating_add(args.auto_basic_delay));
+                            }
+                            dirty = true;
+                        } else if auto_basic_pending && auto_basic_step.is_none() && row_has_menu {
+                            auto_basic_step = Some(executed.saturating_add(args.auto_basic_delay));
+                            auto_basic_pending = false;
+                        }
+                    }
+                } // Freeze budget-scheduled taps and automation while paused.
+
+                if use_tty {
+                    let (epoch, keys) = host.controls.take_batch();
+                    if epoch != observed.release_epoch {
+                        release_host_inputs(
+                            &mut runtime,
+                            &mut pending_releases,
+                            &mut pending_presses,
+                            &mut pending_on_release,
+                        );
+                        observed.release_epoch = epoch;
+                        dirty = true;
+                    }
+                    for key in keys {
+                        let current = host.controls.state();
+                        if current.release_epoch != epoch || current.quit {
+                            break;
+                        }
+                        if args.mode == ExecutionMode::Deterministic {
                             continue;
                         }
                         let feedback = handle_key_event(
@@ -2103,95 +2251,107 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                 }
+                if use_tty && !first_draw && last_status_draw.elapsed() >= STATUS_UPDATE_INTERVAL {
+                    dirty = true;
+                }
+                if !running {
+                    break;
+                }
+                if dirty {
+                    break;
+                }
+                if last_display_check.elapsed() >= display_interval {
+                    break;
+                }
+                if args.steps > 0 && executed >= args.steps {
+                    break;
+                }
+                if !host_wait.is_zero() {
+                    // Rounding tiny waits up avoids a sub-millisecond busy wake
+                    // loop. Any resulting host credit is accounted by Rust next time.
+                    sleep(host_wait.max(Duration::from_millis(1)).min(host_target));
+                }
             }
-            if use_tty && !first_draw && last_status_draw.elapsed() >= STATUS_UPDATE_INTERVAL {
-                let status = format_status(
-                    &runtime,
-                    executed,
-                    &last_key,
-                    last_key_step,
-                    symbols.as_ref(),
-                    &pacer,
-                );
-                let extra_lines = format_extra_lines(
-                    &runtime,
-                    symbols.as_ref(),
-                    function_addrs.as_ref(),
-                    &last_key,
-                    last_key_step,
-                    &pending_releases,
-                    halted_steps,
-                );
-                render_status_line(&status, status_row, use_tty)?;
-                render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;
-                last_status_draw = Instant::now();
-            }
-            if !running {
-                break;
-            }
-            if dirty {
-                break;
-            }
-            if last_display_check.elapsed() >= display_interval {
-                break;
-            }
-            if args.steps > 0 && executed >= args.steps {
-                break;
-            }
-            if !host_wait.is_zero() {
-                // Rounding tiny waits up avoids a sub-millisecond busy wake
-                // loop. Any resulting host credit is accounted by Rust next time.
-                sleep(host_wait.max(Duration::from_millis(1)).min(host_target));
-            }
-        }
 
-        if !first_draw
-            && !dirty
-            && running
-            && (args.steps == 0 || executed < args.steps)
-            && last_display_check.elapsed() < display_interval
-        {
-            continue;
-        }
-        last_display_check = Instant::now();
+            if !first_draw
+                && !dirty
+                && running
+                && (args.steps == 0 || executed < args.steps)
+                && last_display_check.elapsed() < display_interval
+            {
+                continue;
+            }
+            last_display_check = Instant::now();
 
-        let lines = match (&text_decoder, runtime.lcd.as_deref()) {
-            (Some(decoder), Some(lcd)) => decoder.decode_display_text(lcd),
-            _ => Vec::new(),
-        };
-        let lines = normalize_lines(lines, line_count, width);
-        if first_draw || dirty || lines != last_lines {
-            let status = format_status(
+            let mut frame = view.frame(
                 &runtime,
-                executed,
-                &last_key,
-                last_key_step,
-                symbols.as_ref(),
                 &pacer,
+                UiProgress {
+                    executed,
+                    last_key: &last_key,
+                    last_key_step,
+                    releases: &pending_releases,
+                    halted_steps,
+                    control: observed,
+                },
             );
-            let extra_lines = format_extra_lines(
-                &runtime,
-                symbols.as_ref(),
-                function_addrs.as_ref(),
-                &last_key,
-                last_key_step,
-                &pending_releases,
-                halted_steps,
-            );
-            render_frame(&lines, &status, &extra_lines, use_tty)?;
-            render_extra_lines(&extra_lines, stack_row, use_tty, &mut last_stack_lines)?;
-            last_lines = lines;
+            if host.controls.dropped_inputs() > 0 {
+                frame.status.push_str(&format!(
+                    " INPUT OVERFLOW TOTAL: {} discarded; old contacts cleared",
+                    host.controls.dropped_inputs()
+                ));
+            }
+            if !host.publish(frame) {
+                return Err("terminal output worker stopped".into());
+            }
             first_draw = false;
             last_status_draw = Instant::now();
-        }
 
-        if args.sleep_ms > 0 && legacy_delay_until.is_none() {
-            legacy_delay_until = Instant::now().checked_add(Duration::from_millis(args.sleep_ms));
+            if args.sleep_ms > 0 && legacy_delay_until.is_none() {
+                legacy_delay_until =
+                    Instant::now().checked_add(Duration::from_millis(args.sleep_ms));
+            }
         }
+        Ok(())
+    })();
+
+    let fault = execution
+        .err()
+        .map(|error| error.to_string())
+        .or_else(|| host.controls.error());
+    release_host_inputs(
+        &mut runtime,
+        &mut pending_releases,
+        &mut pending_presses,
+        &mut pending_on_release,
+    );
+    observed.quit = true;
+    let mut final_frame = view.frame(
+        &runtime,
+        &pacer,
+        UiProgress {
+            executed,
+            last_key: &last_key,
+            last_key_step,
+            releases: &pending_releases,
+            halted_steps,
+            control: observed,
+        },
+    );
+    let mut log = format!("[execution] finished boundaries={executed} retired={} cpu_timing={} elapsed_timing={} dropped_host_ns={}", runtime.instruction_count(), runtime.cycle_count(), runtime.elapsed_timing_units(), pacer.dropped_host_ns());
+    if let Some(error) = &fault {
+        log.push_str(&format!("\n[execution] FAULT: {error}"));
+        final_frame.status = format!("FAULT: {error}; {}", final_frame.status);
     }
-
-    eprintln!("[execution] finished boundaries={executed} retired={} cpu_timing={} elapsed_timing={} dropped_host_ns={}",
-        runtime.instruction_count(), runtime.cycle_count(), runtime.elapsed_timing_units(), pacer.dropped_host_ns());
+    final_frame.final_log = Some(log);
+    host.publish(final_frame);
+    if !host.finish() {
+        host::report_error_bounded("[execution] terminal output could not finish within the shutdown deadline, or terminal restoration failed; final display may be incomplete".into());
+        return Ok(std::process::ExitCode::from(2));
+    }
+    if let Some(error) = fault {
+        return Err(error.into());
+    }
     if let Some(detector) = runtime.loop_detector() {
         if let Some(report) = detector.last_report() {
             let path = args
@@ -2200,9 +2360,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(default_loop_report_path);
             let json = serde_json::to_string_pretty(report)?;
             fs::write(&path, json)?;
-            eprintln!("[loop] report saved to {}", path.display());
+            host::report_error_bounded(format!("[loop] report saved to {}", path.display()));
         }
     }
 
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }

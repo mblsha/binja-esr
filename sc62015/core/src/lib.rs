@@ -14,6 +14,8 @@ pub mod lcd_text;
 pub mod llama;
 pub mod loop_detector;
 pub mod memory;
+#[cfg(all(feature = "cli", not(target_arch = "wasm32")))]
+pub mod native_ui;
 pub mod pacing;
 pub mod pce500;
 pub mod pce500_peripherals;

@@ -18,6 +18,9 @@ flate2 = "1.0"
 tiny-skia = { version = "0.12", default-features = false, features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [dependencies.clap]
 version = "4.5"
 features = ["derive"]

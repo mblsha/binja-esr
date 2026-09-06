@@ -189,6 +189,13 @@ fn pce500_jp_display_char(code: u8) -> Option<char> {
 
 pub fn decode_display_text(lcd: &dyn LcdHal, font: &Pce500FontMap) -> Vec<String> {
     let buffer = lcd.display_buffer();
+    decode_display_pixels(&buffer, font)
+}
+
+pub fn decode_display_pixels(
+    buffer: &[[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
+    font: &Pce500FontMap,
+) -> Vec<String> {
     let char_rows = LCD_DISPLAY_ROWS / ROWS_PER_CELL;
     let char_cols = LCD_DISPLAY_COLS / COLS_PER_CELL;
     let mut lines = Vec::with_capacity(char_rows);
@@ -350,12 +357,20 @@ pub fn decode_iq7000_display_text_auto(
     large_font: &Iq7000LargeFontMap,
 ) -> Vec<String> {
     let bytes = lcd.display_vram_bytes();
+    decode_iq7000_vram_text_auto(&bytes, small_font, large_font)
+}
+
+pub fn decode_iq7000_vram_text_auto(
+    bytes: &[[u8; LCD_DISPLAY_COLS]; 8],
+    small_font: &Iq7000FontMap,
+    large_font: &Iq7000LargeFontMap,
+) -> Vec<String> {
     let mut out = Vec::with_capacity(IQ7000_TEXT_ROWS);
 
     for row_pair in 0..IQ7000_LARGE_TEXT_ROWS {
-        let small_top = decode_iq7000_small_row(&bytes, row_pair * 2, small_font);
-        let small_bottom = decode_iq7000_small_row(&bytes, row_pair * 2 + 1, small_font);
-        let large = decode_iq7000_large_row(&bytes, row_pair, large_font);
+        let small_top = decode_iq7000_small_row(bytes, row_pair * 2, small_font);
+        let small_bottom = decode_iq7000_small_row(bytes, row_pair * 2 + 1, small_font);
+        let large = decode_iq7000_large_row(bytes, row_pair, large_font);
 
         let small_score = score_text(&small_top).merge(score_text(&small_bottom));
         let large_score = score_text(&large);
@@ -370,7 +385,7 @@ pub fn decode_iq7000_display_text_auto(
     }
 
     trim_trailing_empty_lines(&mut out);
-    if let Some(calendar) = decode_iq7000_calendar_compact_text(&bytes, &out) {
+    if let Some(calendar) = decode_iq7000_calendar_compact_text(bytes, &out) {
         return calendar;
     }
     out

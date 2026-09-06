@@ -74,6 +74,18 @@ fn sliced_execution_matches_direct_boot_for_both_real_roms() {
             direct_lcd.iter().flatten().any(|pixel| *pixel != 0),
             "ROM did not draw"
         );
+        // Native rendering receives an immutable display copy, not the live
+        // controller. It must decode the same text even after the guest resets.
+        let decoder = model.text_decoder(&rom).expect("ROM font decoder");
+        let lcd = sliced.lcd.as_deref().unwrap();
+        let expected_text = decoder.decode_display_text(lcd);
+        let text_frame = decoder.capture_text_frame(lcd);
+        assert_eq!(
+            decoder.decode_text_frame(&text_frame),
+            Some(expected_text.clone())
+        );
+        sliced.lcd.as_deref_mut().unwrap().reset();
+        assert_eq!(decoder.decode_text_frame(&text_frame), Some(expected_text));
         for mode in [ExecutionMode::Interactive, ExecutionMode::Turbo] {
             let mut paced = machine();
             let mut pacer = Pacer::for_model(model, mode);

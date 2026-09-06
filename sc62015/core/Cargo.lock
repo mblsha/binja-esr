@@ -890,6 +890,7 @@ dependencies = [
  "crc32fast",
  "crossterm",
  "flate2",
+ "libc",
  "retrobus-perfetto",
  "serde",
  "serde_json",

@@ -390,7 +390,40 @@ pub enum DeviceTextDecoder {
     },
 }
 
+/// Immutable, display-only copy. No controller, bus or machine is shared with
+/// a renderer. This is not an architectural save/restore snapshot.
+#[derive(Debug, Clone)]
+pub enum DeviceTextFrame {
+    Pce500(Box<[[u8; crate::lcd::LCD_DISPLAY_COLS]; crate::lcd::LCD_DISPLAY_ROWS]>),
+    Iq7000(Box<[[u8; crate::lcd::LCD_DISPLAY_COLS]; 8]>),
+}
+
 impl DeviceTextDecoder {
+    pub fn capture_text_frame(&self, lcd: &dyn LcdHal) -> DeviceTextFrame {
+        match self {
+            Self::Pce500(_) => DeviceTextFrame::Pce500(Box::new(lcd.display_buffer())),
+            Self::Iq7000 { .. } => DeviceTextFrame::Iq7000(Box::new(lcd.display_vram_bytes())),
+        }
+    }
+
+    pub fn decode_text_frame(&self, frame: &DeviceTextFrame) -> Option<Vec<String>> {
+        match (self, frame) {
+            (Self::Pce500(font), DeviceTextFrame::Pce500(pixels)) => {
+                Some(crate::lcd_text::decode_display_pixels(pixels, font))
+            }
+            (
+                Self::Iq7000 {
+                    small_font,
+                    large_font,
+                },
+                DeviceTextFrame::Iq7000(vram),
+            ) => Some(crate::lcd_text::decode_iq7000_vram_text_auto(
+                vram, small_font, large_font,
+            )),
+            _ => None,
+        }
+    }
+
     pub fn decode_display_text(&self, lcd: &dyn LcdHal) -> Vec<String> {
         match self {
             Self::Pce500(font) => decode_display_text(lcd, font),
