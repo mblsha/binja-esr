@@ -156,7 +156,21 @@ def eval_intrinsic_wait(
     to zero.  Those idle cycles are timing events, not architectural memory
     reads, so they remain delegated to the existing scheduler hook.
     """
-    initial_i = regs.get_by_name("I") & 0xFFFF
+    from binja_test_mocks.eval_llil import evaluate_llil
+
+    params = getattr(llil, "params", ())
+    if len(params) > 1:
+        raise RuntimeError("WAIT requires one 16-bit input")
+    if params:
+        value, _flags = evaluate_llil(
+            params[0], regs, memory, state, get_flag=get_flag, set_flag=set_flag
+        )
+        if value is None:
+            raise RuntimeError("WAIT input did not produce a value")
+        initial_i = int(value) & 0xFFFF
+    else:
+        # Compatibility with historical callers constructing a bare intrinsic.
+        initial_i = regs.get_by_name("I") & 0xFFFF
     wait_cycles = initial_i if initial_i != 0 else 0x10000
 
     wait_hook = getattr(memory, "wait_cycles", None)
@@ -167,7 +181,8 @@ def eval_intrinsic_wait(
         )
 
     wait_hook(wait_cycles)
-    regs.set_by_name("I", 0)
+    if not params:
+        regs.set_by_name("I", 0)
     return None, None
 
 

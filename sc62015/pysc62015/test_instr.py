@@ -533,13 +533,17 @@ def test_emem_value_offset_helper_lifting() -> None:
 
     il = MockLowLevelILFunction()
     lifted = h.lift(il)
-    nodes = list(_walk_mock_llil(lifted))
+    # Address and pointer are saved in emitted statements before the data load.
+    nodes = [node for root in [*il.ils, lifted] for node in _walk_mock_llil(root)]
     ops = [node.op for node in nodes]
     assert lifted.op == "LOAD.b"
     # The three-byte pointer itself must be composed from wrapped byte loads;
     # a LOAD.l at IMEM FF would spill into the synthetic 0x100 window.
     assert "LOAD.l" not in ops
-    assert ops.count("LOAD.b") >= 3
+    assert len(il.ils) == 2
+    assert [root.op for root in il.ils] == ["SET_REG.l", "SET_REG.l"]
+    assert ops.count("LOAD.b") == 5  # BP once, pointer triple, one data byte
+    assert sum(node.op == "LOAD.b" for node in _walk_mock_llil(lifted)) == 1
     assert any(node.op == "CONST.l" and node.ops == [0xFF] for node in nodes)
     assert any(node.op == "CONST.l" and node.ops == [PC_MASK] for node in nodes)
 
@@ -555,11 +559,14 @@ def test_emem_value_offset_helper_widths() -> None:
         h = EMemValueOffsetHelper(imem, offset, width=width)
         il = MockLowLevelILFunction()
         lifted = h.lift(il)
-        nodes = list(_walk_mock_llil(lifted))
+        nodes = [node for root in [*il.ils, lifted] for node in _walk_mock_llil(root)]
         ops = [node.op for node in nodes]
         assert lifted.op == f"OR.{suffix}"
         assert f"LOAD.{suffix}" not in ops
-        assert ops.count("LOAD.b") >= width + 3
+        assert len(il.ils) == 2
+        assert [root.op for root in il.ils] == ["SET_REG.l", "SET_REG.l"]
+        assert ops.count("LOAD.b") == width + 4  # BP once and one pointer triple
+        assert sum(node.op == "LOAD.b" for node in _walk_mock_llil(lifted)) == width
         assert any(node.op == "CONST.l" and node.ops == [0xFF] for node in nodes)
         assert any(node.op == "CONST.l" and node.ops == [PC_MASK] for node in nodes)
 
@@ -1215,7 +1222,7 @@ def test_lift_mv_memory_to_memory() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0x1234)
     # With BP_N addressing for both operands
-    assert il.ils == [
+    expected = [
         mllil(
             "STORE.b",
             [
@@ -1276,6 +1283,26 @@ def test_lift_mv_memory_to_memory() -> None:
             ],
         )
     ]
+    dst_addr, src_load = expected[0].ops
+    assert il.ils == [
+        mllil("SET_REG.l", [mreg("TEMP2"), dst_addr]),
+        mllil("SET_REG.l", [mreg("TEMP3"), src_load.ops[0]]),
+        mllil(
+            "STORE.b",
+            [
+                mllil("REG.l", [mreg("TEMP2")]),
+                mllil("LOAD.b", [mllil("REG.l", [mreg("TEMP3")])]),
+            ],
+        ),
+    ]
+
+
+@pytest.mark.parametrize("raw", ["1020", "301020", "341020", "241020", "1104"])
+def test_indirect_jump_analysis_does_not_name_the_selector_as_code(raw: str) -> None:
+    instr = decode(bytearray.fromhex(raw), 0x40000)
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x40000)
+    assert info.mybranches == [(BranchType.UnresolvedBranch, None)]
 
 
 def test_invalid_instruction() -> None:
@@ -1313,7 +1340,7 @@ def test_lift_pre() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0xF0102)
     # With no PRE (defaults to BP_N), destination uses BP+0xFB addressing
-    assert il.ils == [
+    expected = [
         mllil(
             "STORE.b",
             [
@@ -1344,6 +1371,10 @@ def test_lift_pre() -> None:
             ],
         )
     ]
+    assert il.ils == [
+        mllil("SET_REG.l", [mreg("TEMP2"), expected[0].ops[0]]),
+        mllil("STORE.b", [mllil("REG.l", [mreg("TEMP2")]), mllil("CONST.b", [0])]),
+    ]
 
 
 def test_cmp_with_pre() -> None:
@@ -1354,7 +1385,7 @@ def test_cmp_with_pre() -> None:
 
     il = MockLowLevelILFunction()
     instr.lift(il, 0x2000)
-    assert il.ils == [
+    expected = [
         mllil(
             "SUB.b{CZ}",
             [
@@ -1391,6 +1422,11 @@ def test_cmp_with_pre() -> None:
             ],
         )
     ]
+    first, second = expected[0].ops
+    assert il.ils == [
+        mllil("SET_REG.l", [mreg("TEMP3"), second.ops[0]]),
+        mllil("SUB.b{CZ}", [first, mllil("LOAD.b", [mllil("REG.l", [mreg("TEMP3")])])]),
+    ]
 
 
 def test_silicon_proven_single_operand_pre_aliases_decode() -> None:
@@ -1417,7 +1453,7 @@ def test_silicon_proven_single_operand_pre_aliases_decode() -> None:
 
     il = MockLowLevelILFunction()
     instr.lift(il, 0xF0102)
-    assert il.ils == [
+    expected = [
         mllil(
             "STORE.b",
             [
@@ -1454,6 +1490,10 @@ def test_silicon_proven_single_operand_pre_aliases_decode() -> None:
             ],
         )
     ]
+    assert il.ils == [
+        mllil("SET_REG.l", [mreg("TEMP2"), expected[0].ops[0]]),
+        mllil("STORE.b", [mllil("REG.l", [mreg("TEMP2")]), mllil("CONST.b", [0])]),
+    ]
 
 
 def test_wait_lifts_to_timing_intrinsic() -> None:
@@ -1461,7 +1501,7 @@ def test_wait_lifts_to_timing_intrinsic() -> None:
     il = MockLowLevelILFunction()
     instr.lift(il, 0x1234)
 
-    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT"]
+    assert [getattr(node, "name", None) for node in il.ils] == ["WAIT", None]
 
 
 def test_ir_lifts_frame_before_architectural_vector_fetch() -> None:

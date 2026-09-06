@@ -611,9 +611,9 @@ impl PerfettoTracer {
         &mut self,
         mode: &str,
         base: u32,
-        bp: u32,
-        px: u32,
-        py: u32,
+        bp: Option<u32>,
+        px: Option<u32>,
+        py: Option<u32>,
         op_index: Option<u64>,
         pc: Option<u32>,
     ) {
@@ -630,9 +630,12 @@ impl PerfettoTracer {
                 .add_instant_event(self.exec_track, "IMEM_EffectiveAddr".to_string(), ts);
         ev.add_annotation("mode", mode.to_string());
         ev.add_annotation("base", base as u64);
-        ev.add_annotation("bp", bp as u64);
-        ev.add_annotation("px", px as u64);
-        ev.add_annotation("py", py as u64);
+        // Missing means not sampled, not a synthetic zero or a silent reread.
+        for (name, value) in [("bp", bp), ("px", px), ("py", py)] {
+            if let Some(value) = value {
+                ev.add_annotation(name, value as u64);
+            }
+        }
         if let Some(pc_val) = pc {
             ev.add_annotation("pc", pc_val as u64);
         }
@@ -949,9 +952,9 @@ impl PerfettoTracer {
         &mut self,
         _mode: &str,
         _base: u32,
-        _bp: u32,
-        _px: u32,
-        _py: u32,
+        _bp: Option<u32>,
+        _px: Option<u32>,
+        _py: Option<u32>,
         _op_index: Option<u64>,
         _pc: Option<u32>,
     ) {

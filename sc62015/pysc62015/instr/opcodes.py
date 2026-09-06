@@ -241,6 +241,20 @@ TempLoopByteResult = LLIL_TEMP(12)
 TempBcdDigitCarry = LLIL_TEMP(13)
 TempWideMemoryValue = LLIL_TEMP(14)
 TempWideMemoryAddress = LLIL_TEMP(15)
+# BCD arithmetic does not execute MVL helpers. Keep its latched inputs distinct
+# from digit/result temporaries without expanding the native snapshot layout.
+TempBcdOperand1 = TempMvlSrc
+TempBcdOperand2 = TempMvlDst
+# An instruction has at most one IMEM-held external pointer and cannot combine
+# that addressing form with BCD arithmetic. These latches stay separate from
+# the wide-store value/address and the counted-transfer source/destination.
+TempIndirectIMemBase = TempBcdHighNibbleProcessing
+TempIndirectExternalAddress = TempBcdDigitCarry
+# Non-counted instruction operands retain separate initial IMEM addresses.
+# These callers do not execute MVL/BCD loops; arithmetic/rotation value temps
+# and the wide-load/store helpers occupy other slots.
+TempOperandAddress1 = TempMvlSrc
+TempOperandAddress2 = TempMvlDst
 # Counted instructions cannot also execute a wide-memory helper inside their
 # LLIL, so TEMP15 is safe to reuse for the initial-I snapshot.
 TempInitialICount = TempWideMemoryAddress
@@ -1100,19 +1114,39 @@ class Instruction:
     def analyze(self, info: InstructionInfo, addr: int) -> None:
         info.length += self.length()
 
-    def lift(self, il: LowLevelILFunction, addr: int) -> None:
-        dst_mode, src_mode = self._addressing_modes()
+    def _latched_imem_operands(
+        self, il: LowLevelILFunction
+    ) -> Tuple[Tuple[Operand, ...], Tuple[Optional[AddressingMode], ...]]:
+        """Prepare initial IMEM addresses for non-counted scalar operations.
 
+        Latch per operand, not per BP/PX/PY name: two operands may require
+        distinct callback samples. Counted/exchange lifters own their address
+        lifetimes and deliberately do not use this helper.
+        """
         operands = tuple(self.operands())
+        if len(operands) > 2:
+            raise NotImplementedError("at most two scalar operand addresses")
+        modes = self._addressing_modes()
+        prepared = [
+            latch_imem_operand(il, operand, mode, temporary)
+            for operand, mode, temporary in zip(
+                operands, modes, (TempOperandAddress1, TempOperandAddress2)
+            )
+        ]
+        return tuple(p[0] for p in prepared), tuple(p[1] for p in prepared)
+
+    def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        operands, modes = self._latched_imem_operands(il)
         if not operands:
             il.append(il.unimplemented())
         else:
+            dst_mode = modes[0]
             # For destination operand, disable side effects on first lift() to avoid double increment
             op1 = operands[0].lift(il, dst_mode, side_effects=False)
             if len(operands) == 1:
                 il_value = self.lift_operation1(il, op1)
             elif len(operands) == 2:
-                op2 = operands[1].lift(il, src_mode)
+                op2 = operands[1].lift(il, modes[1])
                 il_value = self.lift_operation2(il, op1, op2)
             else:
                 raise NotImplementedError("lift() not implemented for this instruction")
@@ -1952,6 +1986,26 @@ class IMem20(IMem8):
         return 3
 
 
+def latch_imem_operand(
+    il: LowLevelILFunction,
+    operand: Operand,
+    mode: Optional[AddressingMode],
+    temporary: Any,
+) -> Tuple[Operand, Optional[AddressingMode]]:
+    if isinstance(operand, IMemOperand):
+        helper, mode = operand.helper, operand.mode
+    elif isinstance(operand, IMem8):
+        helper = operand._helper()
+    else:
+        return operand, mode
+    if mode == AddressingMode.N:
+        # A constant direct address cannot be changed by callback reads.
+        return operand, mode
+    address = TempReg(temporary, width=3)
+    address.lift_assign(il, helper.imem_addr(il, mode))
+    return IMemHelper(helper.width(), address), AddressingMode.N
+
+
 # Register operand encoded as part of the instruction opcode
 class RegLiftMixin(HasWidth):
     """Mixin providing common register lifting helpers."""
@@ -2381,15 +2435,22 @@ class EMemValueOffsetHelper(OperandHelper, Pointer):
             # For indirect addressing, the IMem8 value points to a location in internal memory
             # that contains a 20-bit external memory address. We need to read 3 bytes from there.
             # First get the internal memory address
-            imem_addr = self.value._helper().imem_addr(il, pre)
+            imem_base = TempReg(TempIndirectIMemBase, width=3)
+            imem_base.lift_assign(il, self.value._helper().imem_addr(il, pre))
             # Now load the three-byte pointer, wrapping FF -> 00 inside IMEM.
             addr = _lift_wrapped_memory_load(
                 il,
                 3,
-                imem_addr,
+                imem_base.lift(il),
                 address_mask=0xFF,
                 region_base=INTERNAL_MEMORY_START,
             )
+            # Sample the complete pointer before any external data read. A
+            # lazy pointer expression repeated by a wide load can consume
+            # RXD again or combine bytes from different callback observations.
+            pointer = TempReg(TempIndirectExternalAddress, width=3)
+            pointer.lift_assign(il, addr)
+            addr = pointer.lift(il)
         else:
             addr = self.value.lift(il, pre=pre, side_effects=side_effects)
 
