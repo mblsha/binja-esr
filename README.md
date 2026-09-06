@@ -162,10 +162,15 @@ provisional physical assignments, explicitly labelled in capture metadata.
 See [IQ-7000 LCD segments](docs/iq7000_lcd_annunciators.md) for the mapping,
 confidence limits, and full-display capture API.
 
-In the live terminal LCD (`sc62015-lcd --model iq-7000`), `F6` injects the
-IQ-7000 SHIFT event, `F7` injects CAPS, and `F8` injects the FUNCTION event;
-Caps Lock is also accepted when the terminal reports it. The status line shows
-all thirteen candidate flags and preserves unknown bits numerically.
+The live terminal LCD and browser share a model-specific physical key map.
+On IQ-7000, `F1`–`F8` select Calendar/Schedule/TEL/MEMO/Calc/Card/World/Home;
+`F9` is SHIFT, `F10` is CAPS, `F11` is newline, and `F12` is ON. Enter stores;
+Page Up/Down searches. A–Z, digits, arrows and edit keys use matrix contacts,
+not translated FIFO events. Device CAPS controls case. Terminal input is a
+serialized assisted keycap stream, not a faithful host-key hold/release stream.
+The status line shows all thirteen candidate flags and preserves unknown bits.
+See [Rust input correctness](docs/rust_input_correctness.md) for controls,
+real-ROM acceptance, the PC-E500 BASIC blocker, and remaining limitations.
 
 `CoreRuntime::set_external_interrupt_level` is currently a neutral API/test
 hook. Its level-sensitive EXI re-latch policy is an explicit emulator model

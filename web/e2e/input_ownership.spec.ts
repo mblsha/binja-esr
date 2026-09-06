@@ -179,3 +179,102 @@ test('real IQ ROM consumes the browser physical MEMO and CAPS controls', async (
 	await script(page, `e.assert(!(await e.lcd.capture()).annunciators.caps, 'physical CAPS must change ROM state');`);
 	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-iq-physical-memo-caps.png') });
 });
+
+// Drive actual DOM keyboard/pointer events and advance the compiled Rust worker.
+// No keyboard.injectEvent, RAM/FIFO writes, direct app calls or display patches.
+async function hostTap(page: Page, key: string) {
+	await page.getByTestId('emu-status').click();
+	await page.keyboard.down(key);
+	await request(page, 'step', { instructions: 40_000 });
+	await page.keyboard.up(key);
+	await request(page, 'step', { instructions: 40_000 });
+}
+async function virtualTap(page: Page, id: string, settle = 40_000) {
+	await page.getByTestId('vk-' + id).click();
+	await request(page, 'step', { instructions: 40_000 + settle });
+}
+
+test('real IQ ROM: browser letter/digit/editor input stores and reopens edited MEMO', async ({ page }, info) => {
+	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
+	await open(page, 'iq-7000', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await page.getByTestId('physical-keyboard-toggle').check();
+	await request(page, 'step', { instructions: 500_000 });
+	await hostTap(page, 'F4');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	for (const key of ['KeyA', 'KeyB', 'KeyC']) await hostTap(page, key);
+	await virtualTap(page, '2');
+	await hostTap(page, 'Backspace');
+	await hostTap(page, 'KeyD');
+	await expect(page.getByTestId('lcd-text')).toContainText('ABCD');
+	await hostTap(page, 'Enter');
+	await hostTap(page, 'F4');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	await hostTap(page, 'PageDown');
+	await expect(page.getByTestId('lcd-text')).toHaveText('ABCD');
+	await hostTap(page, 'F9'); // device SHIFT latch, not host uppercase composition
+	await hostTap(page, 'KeyA'); // EDIT
+	await virtualTap(page, 'x');
+	await hostTap(page, 'Enter');
+	await hostTap(page, 'F4');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	await hostTap(page, 'PageDown');
+	await expect(page.getByTestId('lcd-text')).toHaveText('XBCD');
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-iq-edited-memo.png') });
+});
+
+test('real ROM: PC-E500 browser calculator consumes physical and virtual expression input', async ({ page }, info) => {
+	test.skip(process.env.PCE500_E2E_REAL_ROM !== '1', 'Requires private PC-E500 ROM');
+	await open(page, 'pc-e500', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await page.getByTestId('physical-keyboard-toggle').check();
+	await request(page, 'step', { instructions: 500_000 });
+	await virtualTap(page, 'pf1', 800_000);
+	await expect(page.getByTestId('lcd-text')).toContainText('S1(MAIN):NEW CARD');
+	await virtualTap(page, 'pf1', 800_000);
+	await expect(page.getByTestId('lcd-text')).toContainText('MAIN MENU');
+	await virtualTap(page, 'pf2', 800_000);
+	await expect(page.getByTestId('lcd-text')).toContainText('0.');
+	await hostTap(page, 'Digit2');
+	await expect(page.getByTestId('lcd-text')).toContainText('2.');
+	await virtualTap(page, 'plus');
+	await hostTap(page, 'Digit2');
+	await hostTap(page, 'Enter');
+	await expect(page.getByTestId('lcd-text')).toContainText('4.');
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-pc-calculator-4.png') });
+});
+
+test('real IQ ROM: cursor directions and Insert/Delete have distinct editor effects', async ({ page }) => {
+	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
+	await open(page, 'iq-7000', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await page.getByTestId('physical-keyboard-toggle').check();
+	await request(page, 'step', { instructions: 500_000 });
+	for (const key of [
+		'F4',
+		'KeyA',
+		'KeyB',
+		'KeyC',
+		'KeyD',
+		'F11',
+		'KeyE',
+		'KeyF',
+		'KeyG',
+		'KeyH',
+		'ArrowLeft',
+		'ArrowLeft',
+		'Insert',
+		'KeyX',
+	])
+		await hostTap(page, key);
+	await expect(page.getByTestId('lcd-text')).toContainText('EFXGH');
+	await hostTap(page, 'Delete');
+	await expect(page.getByTestId('lcd-text')).toContainText('EFXH');
+	for (const key of ['ArrowUp', 'ArrowRight', 'KeyX']) await hostTap(page, key);
+	await expect(page.getByTestId('lcd-text')).toContainText('ABCDX');
+	for (const key of ['ArrowDown', 'KeyX']) await hostTap(page, key);
+	await expect(page.getByTestId('lcd-text')).toContainText('EFXHX');
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+});

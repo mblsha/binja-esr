@@ -50,8 +50,9 @@ changes do not bound every explicit trace/snapshot/artifact operation.
 
 ### Follow-ups, not v1 gates
 
-Complete native/browser character and navigation maps; replace native IQ's
-legacy translated-event shortcuts with fully ROM-qualified contacts; comprehensive
+Native/browser basic character and navigation maps, removal of native IQ's
+translated-event shortcuts, and actual app-entry acceptance are now tracked in
+[Rust input correctness](rust_input_correctness.md). Remaining follow-ups: comprehensive
 artifact/trace budgets and fault taxonomy; extended background/reload/long
 instruction stress and statistical latency qualification. Native terminal taps
 remain assisted boundary-scheduled input, not a physical keyboard timing proof.

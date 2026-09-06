@@ -71,6 +71,12 @@ struct TerminalChild {
 
 impl TerminalChild {
     fn spawn(model: &str, stdout: Stdio, stderr: Stdio) -> Self {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/emulator-wasm/testdata/pf1_demo_rom_window.rom");
+        Self::spawn_rom(model, fixture, stdout, stderr)
+    }
+
+    fn spawn_rom(model: &str, rom: PathBuf, stdout: Stdio, stderr: Stdio) -> Self {
         let (mut master, mut slave) = (0, 0);
         let mut size = libc::winsize {
             ws_row: 40,
@@ -100,12 +106,10 @@ impl TerminalChild {
             );
         }
         let original = termios(&master);
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../web/emulator-wasm/testdata/pf1_demo_rom_window.rom");
         let mut command = Command::new(env!("CARGO_BIN_EXE_sc62015-lcd"));
         command
             .arg("--rom")
-            .arg(fixture)
+            .arg(rom)
             .args([
                 "--model",
                 model,
@@ -216,6 +220,27 @@ impl TerminalChild {
             sleep(Duration::from_millis(5));
         }
     }
+
+    fn wait_text(&mut self, marker: &str) {
+        let started = Instant::now();
+        let mut text = String::new();
+        loop {
+            self.read_output(&mut text);
+            if text.contains(marker) {
+                return;
+            }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "child exited: {text}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "missing {marker}: {}",
+                text.chars().take(8000).collect::<String>()
+            );
+            sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 impl Drop for TerminalChild {
@@ -288,4 +313,64 @@ fn full_stdout_and_stderr_cannot_block_quit_or_raw_mode_restoration() {
         terminal.assert_restored();
         drop(stderr_read);
     }
+}
+
+#[test]
+#[ignore = "requires private IQ7000_ROM_PATH; explicit real-ROM acceptance"]
+fn real_iq_rom_terminal_burst_entry_edit_store_and_reopen() {
+    let rom = PathBuf::from(std::env::var_os("IQ7000_ROM_PATH").expect("IQ7000_ROM_PATH"));
+    let mut terminal = TerminalChild::spawn_rom("iq-7000", rom, Stdio::piped(), Stdio::inherit());
+    nonblocking(terminal.child.stdout.as_ref().unwrap().as_raw_fd(), true);
+    terminal.wait_raw();
+    terminal.wait_text("2026");
+    // Calendar text appears before boot has finished installing its scanner.
+    // Match the 500k-boundary ready baseline used by the deterministic ROM
+    // browser/Function Runner proof, rather than racing its partial first draw.
+    while terminal.wait_status("RUNNING ack=0 boundaries=") < 500_000 {}
+    terminal.key(b"\x1bOS"); // F4 = MEMO
+    terminal.wait_text("MEMO ?");
+    // One terminal read can contain the whole burst. It must not become an
+    // impossible simultaneous A+B+C+D+ENTER chord or a translated FIFO write.
+    terminal.key(b"ABCD");
+    terminal.wait_text("ABCD");
+    terminal.key(b"\r\x1bOS");
+    terminal.wait_text("MEMO ?");
+    terminal.key(b"\x1b[6~"); // Search down: reopen saved record
+    terminal.wait_text("ABCD");
+    terminal.key(b"\x1b[20~aX"); // SHIFT+A = EDIT, overwrite A with X
+    terminal.wait_text("XBCD");
+    terminal.key(b"\r\x1bOS"); // Store, then return to an empty search prompt
+    terminal.wait_text("MEMO ?");
+    terminal.key(b"\x1b[6~");
+    terminal.wait_text("XBCD");
+    terminal.key(b"\x1bOS");
+    terminal.wait_text("MEMO ?");
+    // Comma uses the supported SHIFT legend. Unqualified ':' must not silently
+    // insert a period; the native status reports it as unmapped.
+    terminal.key(b"ABC,:D");
+    terminal.wait_text("ABC,D");
+    terminal.key(b"\x03");
+    assert!(terminal.wait_exit().success());
+    terminal.assert_restored();
+}
+
+#[test]
+#[ignore = "requires private PCE500_ROM_PATH; explicit real-ROM acceptance"]
+fn real_pc_rom_terminal_burst_calculator_expression() {
+    let rom = PathBuf::from(std::env::var_os("PCE500_ROM_PATH").expect("PCE500_ROM_PATH"));
+    let mut terminal = TerminalChild::spawn_rom("pc-e500", rom, Stdio::piped(), Stdio::inherit());
+    nonblocking(terminal.child.stdout.as_ref().unwrap().as_raw_fd(), true);
+    terminal.wait_raw();
+    terminal.wait_text("S2(CARD):NEW CARD");
+    terminal.key(b"\x1bOP");
+    terminal.wait_text("S1(MAIN):NEW CARD");
+    terminal.key(b"\x1bOP");
+    terminal.wait_text("MAIN MENU");
+    terminal.key(b"\x1bOQ"); // PF2 = CAL
+    terminal.wait_text("0.");
+    terminal.key(b"2+2\r");
+    terminal.wait_text("4.");
+    terminal.key(b"\x03");
+    assert!(terminal.wait_exit().success());
+    terminal.assert_restored();
 }
