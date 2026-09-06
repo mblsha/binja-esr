@@ -652,14 +652,20 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 
 	async function tapEvent(code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) {
 		adapter.injectMatrixEvent?.(code & 0xff, false);
-		if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
-		adapter.injectMatrixEvent?.(code & 0xff, true);
+		try {
+			if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+		} finally {
+			adapter.injectMatrixEvent?.(code & 0xff, true);
+		}
 	}
 
 	async function tapPhysical(code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) {
 		adapter.pressMatrixCode?.(code & 0xff);
-		if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
-		adapter.releaseMatrixCode?.(code & 0xff);
+		try {
+			if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+		} finally {
+			adapter.releaseMatrixCode?.(code & 0xff);
+		}
 	}
 
 	function normalizeWaitOptions(options?: EvalWaitOptions) {
@@ -990,8 +996,11 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			},
 			tap: async (holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
 				adapter.pressOnKey?.();
-				if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
-				adapter.releaseOnKey?.();
+				try {
+					if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
+				} finally {
+					adapter.releaseOnKey?.();
+				}
 			},
 		},
 		pclinkSerial: {

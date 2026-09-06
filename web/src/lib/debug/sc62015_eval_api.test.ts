@@ -3,6 +3,26 @@ import { describe, expect, it } from 'vitest';
 import { createEvalApi } from './sc62015_eval_api';
 
 describe('createEvalApi', () => {
+	it('releases scripted event, physical, and ON taps when stepping is cancelled or faults', async () => {
+		for (const asynchronous of [false, true]) {
+			const transitions: string[] = [];
+			const api = createEvalApi({
+				step: () => {
+					if (asynchronous) return Promise.reject(new Error('cancelled'));
+					throw new Error('fault');
+				},
+				injectMatrixEvent: (_code: number, release: boolean) => transitions.push(release ? 'event up' : 'event down'),
+				pressMatrixCode: () => transitions.push('physical down'),
+				releaseMatrixCode: () => transitions.push('physical up'),
+				pressOnKey: () => transitions.push('ON down'),
+				releaseOnKey: () => transitions.push('ON up'),
+			} as any);
+			await expect(api.keys.tap('event:0x56', 100)).rejects.toThrow(asynchronous ? 'cancelled' : 'fault');
+			await expect(api.keys.tap('physical:0x56', 100)).rejects.toThrow(asynchronous ? 'cancelled' : 'fault');
+			await expect(api.onKey.tap(100)).rejects.toThrow(asynchronous ? 'cancelled' : 'fault');
+			expect(transitions).toEqual(['event down', 'event up', 'physical down', 'physical up', 'ON down', 'ON up']);
+		}
+	});
 	it('SHIFT injects its scanner event, not its translated ROM keycode', async () => {
 		const events: Array<[number, boolean]> = [];
 		const api = createEvalApi({
