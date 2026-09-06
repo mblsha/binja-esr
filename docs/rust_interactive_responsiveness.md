@@ -38,8 +38,9 @@ pacing is not proof of physically calibrated instruction timing.
    boundaries with retired instructions.
 4. **Pacing and presentation:** explicit interactive/turbo/deterministic modes,
    bounded catch-up policy, latest-frame delivery, and cheap normal-play status.
-   Browser latest-only delivery is implemented; pacing and per-capture cost
-   qualification remain unfinished.
+   Browser latest-only delivery and shared Rust pacing/mode controls are
+   implemented. Native pacing adoption, cheap-default diagnostics and
+   per-capture cost qualification remain unfinished.
 5. **Qualification:** actual browser input against both ROMs; HALT/OFF/wake,
    long counted instructions, busy loops, slow execution, script cancellation,
    tab focus/background and reload stress; architectural chunking/bus-order
@@ -493,3 +494,46 @@ one-second stalls without waiting in real time. Registers, power state, timing
 counters, internal/external RAM, timer deadlines, RTC state and actual nonblank
 LCD buffers matched exactly. This qualifies chunking/pacing, not calibrated
 speed or all application behavior.
+
+## Browser pacing controls (2026-09-06)
+
+Continuous browser Run now calls the shared Rust automatic-slice API. The JS
+adapter only limits the submitted slice to the next input-release boundary,
+accounts for the actual boundary progress, and yields for the suggested host
+delay. Pauses do not expire assisted input holds. Explicit Step and Function
+Runner calls continue to use unthrottled, cancellable boundary budgets in every
+mode. Rendering retains its independent FPS loop and latest-only delivery.
+
+The mode selector is available only while paused and acknowledges the actual
+worker operation before changing UI state. The worker independently rejects
+mode changes while running or while another operation owns the machine. Invalid
+mode names fail without mutating the machine. Deterministic mode refuses Run
+at both UI and worker boundaries; it does not silently reset guest state or
+change the default host-derived RTC seed. The UI explicitly explains the fixed
+seed/input-schedule requirement. Stop and Start rebase pacing so paused host
+time is never replayed as catch-up. An old display frame cannot overwrite an
+acknowledged mode selection. The no-worker fallback uses the same WASM pacing
+adapter, while browser user scripts still require worker isolation.
+
+Pacing status reports the nominal timebase, lack of hardware calibration, and
+discarded host backlog. Background browser throttling may therefore slow guest
+elapsed time; this deliberately is not an always-wall-clock RTC. Turbo removes
+the speed throttle, not execution/host yielding, input ownership or fault checks.
+
+Validation: 111 frontend tests passed, Svelte reported zero errors/warnings,
+and formatting passed. The full compiled Chromium suite passed 38 tests with
+four opt-in ROM cases skipped (50.8 seconds including rebuild). Two new synthetic
+mode regressions cover both models, actual worker state/progress, invalid modes,
+explicit steps, frozen paused state and mode-change rejection during a huge
+cancellable explicit request. They join the short PR control guard; no new
+long-running mandatory ROM suite was added.
+
+Four private-ROM browser regressions passed separately against the current
+build (10.6 seconds): PC-E500 PF1 and traced function call, IQ-7000 annunciators
+and actual MEMO/CAPS browser input. No framebuffer/FIFO injection is used as
+evidence for those input captures. The twenty-sample synthetic foreground Pause
+smoke observed maxima of 25.09 ms (PC-E500) and 21.50 ms (IQ-7000) on M1 Ultra /
+Chromium 143. These short samples are not a sustained p99, hardware-speed proof
+or input-to-firmware latency guarantee. Native input/render isolation, complete
+model key maps, expensive artifact processing and broader qualification remain
+active goal work.

@@ -11,7 +11,8 @@
 	import { createPersistedStore } from '$lib/stores/persisted';
 	import { normalizeRomModel, type RomModel } from '$lib/rom_model';
 	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
-	import { runHostSlice, stepBounded } from '$lib/emulator/bounded_step';
+	import { stepBounded } from '$lib/emulator/bounded_step';
+	import { automaticHostSlice, type ExecutionMode, type PacingStatus } from '$lib/emulator/host_pacing';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
 	import { HostInputs, applyContact, type InputContact } from '$lib/emulator/host_inputs';
 
@@ -28,7 +29,9 @@
 	let workerNextId = 1;
 	let workerRequests: WorkerRequests | null = null;
 	let workerHealth: 'ready' | 'unresponsive' | 'faulted' = 'ready';
-	let controlPending: 'start' | 'stop' | null = null;
+	let controlPending: 'start' | 'stop' | 'mode' | null = null;
+	let executionMode: ExecutionMode = 'interactive';
+	let pacingStatus: PacingStatus | null = null;
 	let stepBusy = false;
 	let fallbackStepAbort: AbortController | null = null;
 	const canUseWorker =
@@ -97,7 +100,6 @@
 	let symbolsPromiseModel: RomModel | null = null;
 
 	const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
-	const RUN_YIELD_MS = 0;
 	let runLoopId = 0;
 
 	let debugKio: {
@@ -140,6 +142,9 @@
 			pcReg = frame?.pc ?? pcReg;
 			halted = Boolean(frame?.halted);
 			instructionCount = frame?.instructionCount ?? instructionCount;
+			// Frames are observations, not control acknowledgements. An older
+			// in-flight frame must never revert an acknowledged mode selection.
+			pacingStatus = frame?.pacing ?? pacingStatus;
 
 			if (frame?.keyboardDebug) {
 				debugKio = frame.keyboardDebug;
@@ -569,6 +574,7 @@
 	function refreshFast() {
 		if (worker) return;
 		if (!emulator) return;
+		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
 			const geometry = emulator.lcd_capture();
 			if (geometry && typeof geometry === 'object') {
@@ -828,21 +834,20 @@
 	}
 
 	function stepCore(count: number) {
-		if (!emulator) return;
-		const used = runHostSlice(emulator, fallbackInputs.limitBudget(count));
-		applyVirtualReleaseBudget(used);
+		return automaticHostSlice(emulator, count, fallbackInputs);
 	}
 
 	function pumpEmulator(id: number) {
 		if (!running || !emulator || id !== runLoopId) return;
+		let waitMs: number;
 		try {
-			stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
+			waitMs = stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
 		} catch (err) {
 			lastError = String(err);
 			running = false;
 			return;
 		}
-		setTimeout(() => pumpEmulator(id), RUN_YIELD_MS);
+		setTimeout(() => pumpEmulator(id), waitMs);
 	}
 
 	function pumpRender(id: number) {
@@ -876,8 +881,32 @@
 		}
 	}
 
+	async function setExecutionMode(event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const mode = select.value as ExecutionMode;
+		if (!romLoaded || running || controlPending || stepBusy || functionRunnerBusy || workerHealth !== 'ready') {
+			select.value = executionMode;
+			return;
+		}
+		controlPending = 'mode';
+		try {
+			if (worker) pacingStatus = await workerCall('set_execution_mode', { mode });
+			else {
+				emulator.set_execution_mode(mode);
+				pacingStatus = emulator.pacing_status();
+			}
+			executionMode = mode;
+		} catch (error) {
+			lastError = String(error);
+			select.value = executionMode;
+		} finally {
+			if (controlPending === 'mode') controlPending = null;
+		}
+	}
+
 	async function start() {
 		if (!romLoaded || running || controlPending || stepBusy || functionRunnerBusy || workerHealth !== 'ready') return;
+		if (executionMode === 'deterministic') return;
 		lastLcdTextUpdateMs = 0;
 		if (worker) {
 			controlPending = 'start';
@@ -891,6 +920,7 @@
 			}
 			return;
 		}
+		emulator.rebase_pacing();
 		running = true;
 		runLoopId += 1;
 		pumpEmulator(runLoopId);
@@ -913,6 +943,7 @@
 			}
 		}
 		fallbackStepAbort?.abort();
+		emulator?.rebase_pacing();
 		running = false;
 		runLoopId += 1;
 		return true;
@@ -1030,6 +1061,24 @@
 	{/if}
 
 	<div class="controls">
+		<label>
+			Execution mode:
+			<select
+				data-testid="execution-mode"
+				value={executionMode}
+				on:change={setExecutionMode}
+				disabled={!romLoaded ||
+					running ||
+					stepBusy ||
+					functionRunnerBusy ||
+					!!controlPending ||
+					workerHealth !== 'ready'}
+			>
+				<option value="interactive">Interactive (nominal)</option>
+				<option value="turbo">Turbo (unthrottled)</option>
+				<option value="deterministic">Deterministic (explicit budgets)</option>
+			</select>
+		</label>
 		<button
 			on:click={() => stepOnce(1_000)}
 			disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
@@ -1042,8 +1091,13 @@
 		>
 		<button
 			on:click={start}
-			disabled={!romLoaded || running || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
-			>Run</button
+			disabled={!romLoaded ||
+				executionMode === 'deterministic' ||
+				running ||
+				stepBusy ||
+				functionRunnerBusy ||
+				!!controlPending ||
+				workerHealth !== 'ready'}>Run</button
 		>
 		<button
 			on:click={stop}
@@ -1059,6 +1113,20 @@
 	</div>
 
 	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
+	<p class="hint" data-testid="pacing-status">
+		{executionMode}: Interactive pacing uses {pacingStatus?.nominal_timebase_hz ?? '—'} compatibility timing units/s, not
+		hardware-calibrated MHz. IQ-7000 currently uses the PC-E500 fallback timebase. The RTC follows emulated elapsed time;
+		paused wall time is not simulated. Catch-up is capped at 50 ms; dropped host backlog: {(
+			Number(pacingStatus?.dropped_host_ns ?? 0) / 1e6
+		).toFixed(1)} ms. Step and Function Runner use explicit, unthrottled budgets in every mode.
+	</p>
+	{#if executionMode === 'deterministic'}
+		<p class="hint">
+			Automatic Run is disabled. Repeatable results require the same ROM/state, a fixed RTC seed (the default seed comes
+			from host time), and identical inputs at identical scheduler boundaries. This selection does not reset your
+			machine or make live human input deterministic.
+		</p>
+	{/if}
 	{#if functionRunnerBusy && functionProgress}
 		<p class="hint" data-testid="execution-progress">{functionProgress}</p>
 	{/if}

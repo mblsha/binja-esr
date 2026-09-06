@@ -1,7 +1,8 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
-import { ExecutionCancelled, runHostSlice, stepBounded } from './bounded_step';
+import { ExecutionCancelled, stepBounded } from './bounded_step';
+import { automaticHostSlice, type ExecutionMode, type PacingStatus } from './host_pacing';
 import { WorkerOperations } from './worker_operations';
 import { callBounded } from './bounded_call';
 import { runIsolatedScript } from './isolated_script';
@@ -29,6 +30,8 @@ type WorkerRequest =
 	| { id: number; type: 'step'; instructions: number }
 	| { id: number; type: 'start' }
 	| { id: number; type: 'stop' }
+	| { id: number; type: 'set_execution_mode'; mode: ExecutionMode }
+	| { id: number; type: 'pacing_status' }
 	| { id: number; type: 'snapshot' }
 	| { id: number; type: 'lcd_trace' }
 	| { id: number; type: 'eval_js'; source: string }
@@ -68,6 +71,7 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	pacing: PacingStatus;
 	model: RomModel;
 	generation: number;
 	lcdPixels: ArrayBuffer;
@@ -92,7 +96,6 @@ type Frame = {
 const IMEM_BASE = 0x100000;
 
 const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
-const RUN_YIELD_MS = 0;
 
 const LCD_TEXT_UPDATE_INTERVAL_MS = 250;
 
@@ -402,9 +405,7 @@ function replyErr(id: number, error: unknown) {
 }
 
 function stepCore(boundaries: number) {
-	const used = runHostSlice(emulator, inputs.limitBudget(boundaries));
-	inputs.advance(used);
-	return used;
+	return automaticHostSlice(emulator, boundaries, inputs);
 }
 
 function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: string } | null {
@@ -499,6 +500,7 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		pacing: emulator.pacing_status(),
 		model: romModel,
 		generation: machineGeneration,
 		lcdAnnunciatorBytes: annunciatorBytesCopy.buffer,
@@ -537,8 +539,9 @@ function requestFrame(forceText: boolean) {
 
 function pumpEmulator(id: number) {
 	if (!running || !emulator || id !== runLoopId) return;
+	let waitMs: number;
 	try {
-		stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
+		waitMs = stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
 	} catch (err) {
 		// Crash stops the run loop; render loop will stop too.
 		running = false;
@@ -546,7 +549,7 @@ function pumpEmulator(id: number) {
 		(self as any).postMessage({ type: 'fatal', error: String(err) });
 		return;
 	}
-	setTimeout(() => pumpEmulator(id), RUN_YIELD_MS);
+	setTimeout(() => pumpEmulator(id), waitMs);
 }
 
 function pumpRender(id: number) {
@@ -654,10 +657,27 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id, res);
 				return;
 			}
+			case 'pacing_status': {
+				await ensureEmulator();
+				replyOk(msg.id, emulator.pacing_status());
+				return;
+			}
+			case 'set_execution_mode': {
+				await ensureEmulator();
+				if (signal?.aborted) throw new ExecutionCancelled(0);
+				if (running) throw new Error('Pause before changing execution mode');
+				emulator.set_execution_mode(msg.mode);
+				replyOk(msg.id, emulator.pacing_status());
+				requestFrame(false);
+				return;
+			}
 			case 'start': {
 				await ensureEmulator();
 				if (signal?.aborted) throw new ExecutionCancelled(0);
+				if (emulator.execution_mode() === 'deterministic')
+					throw new Error('Deterministic mode requires explicit Step or Function Runner budgets');
 				if (!running) {
+					emulator.rebase_pacing();
 					running = true;
 					runLoopId += 1;
 					const id = runLoopId;
@@ -673,6 +693,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				running = false;
 				runLoopId += 1;
 				await operations.stop();
+				emulator?.rebase_pacing();
 				replyOk(msg.id);
 				// Ownership has been released. A slow final LCD/text capture
 				// must not delay acknowledgement of the architectural pause.
@@ -718,10 +739,10 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 }
 
 async function dispatchRequest(msg: WorkerRequest) {
-	if (['load_rom', 'step', 'eval_js', 'start'].includes(msg.type)) {
+	if (['load_rom', 'step', 'eval_js', 'start', 'set_execution_mode'].includes(msg.type)) {
 		try {
 			await operations.run(async (signal) => {
-				if (msg.type !== 'start') {
+				if (msg.type !== 'start' && msg.type !== 'set_execution_mode') {
 					running = false;
 					runLoopId++;
 				}
