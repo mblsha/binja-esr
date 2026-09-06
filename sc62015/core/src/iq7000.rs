@@ -3035,6 +3035,9 @@ impl Iq7000RtcPeripheral {
     }
 
     fn latch_schedule_alarm(&mut self, datetime: Iq7000RtcDateTime) {
+        // A schedule deadline is one-shot, including when F1 programs the
+        // current minute. Preserve only the fired value until FF acknowledges it.
+        self.schedule_alarm = None;
         self.latched_schedule = Some(datetime);
         self.pending_status |= IQ7000_RTC_STATUS_SCHEDULE_ALARM;
     }
@@ -3051,7 +3054,6 @@ impl Iq7000RtcPeripheral {
         if let Some(schedule) = self.schedule_alarm {
             if schedule.same_minute(self.current) {
                 self.latch_schedule_alarm(schedule);
-                self.schedule_alarm = None;
             }
         }
         if let Some((hour, minute)) = self.daily_alarm {
@@ -3771,6 +3773,66 @@ mod tests {
         host_write_byte(&mut peripheral, RTC_COMMAND_ACK_SCHEDULE_ALARM);
         assert_eq!(peripheral.pending_status(), 0);
         assert!(!peripheral.alarm_wake_level());
+    }
+
+    #[test]
+    fn rtc_schedule_alarm_consumes_deadline_for_immediate_and_future_fire() {
+        // Check immediate programming both at and within the current minute,
+        // plus the existing minute-boundary path, through the wire protocol.
+        for (initial_seconds, alarm_minute, seconds_until_fire) in
+            [(0, 0x19, 0), (30, 0x19, 0), (0, 0x20, 60)]
+        {
+            let seed = Iq7000ClockSeed::from_yyyymmddhhmm("202604252119").unwrap();
+            let mut peripheral = Iq7000RtcPeripheral::new(seed);
+            peripheral.advance_seconds(initial_seconds);
+            let alarm = [alarm_minute, 0x10, 0x26, 0x04, 0x26, 0x01];
+            host_write_byte(&mut peripheral, RTC_COMMAND_SET_SCHEDULE_ALARM);
+            for byte in alarm {
+                host_write_byte(&mut peripheral, byte);
+            }
+            assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+            if seconds_until_fire != 0 {
+                assert!(peripheral.state().schedule_alarm.is_some());
+                assert!(!peripheral.alarm_wake_level());
+                assert!(peripheral.advance_seconds(seconds_until_fire));
+            }
+
+            assert!(peripheral.state().schedule_alarm.is_none());
+            assert_eq!(
+                peripheral.state().latched_schedule.unwrap().wire_bytes(),
+                alarm
+            );
+            assert!(peripheral.alarm_wake_level());
+            host_write_byte(&mut peripheral, RTC_COMMAND_ALARM_STATUS);
+            assert_eq!(
+                host_read_byte_like_rom(&mut peripheral),
+                IQ7000_RTC_STATUS_SCHEDULE_ALARM
+            );
+            host_write_byte(&mut peripheral, RTC_COMMAND_SCHEDULE_ALARM_VALUE);
+            for expected in alarm {
+                assert_eq!(host_read_byte_like_rom(&mut peripheral), expected);
+            }
+
+            host_write_byte(&mut peripheral, RTC_COMMAND_ACK_SCHEDULE_ALARM);
+            assert!(peripheral.state().schedule_alarm.is_none());
+            assert!(peripheral.state().latched_schedule.is_none());
+            assert_eq!(peripheral.pending_status(), 0);
+            assert!(!peripheral.alarm_wake_level());
+            host_write_byte(&mut peripheral, RTC_COMMAND_SCHEDULE_ALARM_VALUE);
+            for _ in 0..6 {
+                assert_eq!(host_read_byte_like_rom(&mut peripheral), 0);
+            }
+
+            // Setting the clock back into the fired minute must not rearm the
+            // consumed one-shot deadline after its cause has been acknowledged.
+            host_write_byte(&mut peripheral, RTC_COMMAND_SET_CLOCK);
+            for byte in alarm {
+                host_write_byte(&mut peripheral, byte);
+            }
+            assert_eq!(host_read_byte_like_rom(&mut peripheral), 0x00);
+            assert!(!peripheral.alarm_wake_level());
+            assert!(!peripheral.advance_seconds(120));
+        }
     }
 
     #[test]
