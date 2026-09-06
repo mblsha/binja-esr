@@ -60,7 +60,7 @@ jobs:
       env:
         FORCE_BINJA_MOCK: 1
       run: |
-        uv run pytest sc62015 -v --cov=sc62015/pysc62015 --cov-report=term-missing
+        uv run pytest sc62015 tools/test_live_binja_llil_qualify.py tools/test_gui_binja_llil_qualify.py -v --cov=sc62015/pysc62015 --cov-report=term-missing
     
     - name: Run PCE500 tests
       env:
