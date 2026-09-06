@@ -43,8 +43,10 @@ npm run wasm:test
 The browser Function Runner uses a disposable script worker, separate from the
 worker that owns the Rust/WASM machine. Stop terminates runaway user JavaScript
 (including stub/probe callbacks), then waits for cooperative machine execution
-and debugger cleanup. It does not reset or roll back guest state. Explicit raw
-key-down state is not automatically undone; use balanced taps/releases.
+and debugger cleanup. It does not reset or roll back guest state. Browser
+scripts own raw matrix/ON contacts only for their invocation: those contacts
+are released on success, error or cancellation without releasing another host
+input owner's contact. Keep a held-key experiment within one invocation.
 
 Serve the app over HTTPS or localhost with these headers on **both HTML and
 worker JavaScript**, including immutable assets served by a proxy/CDN:
@@ -91,4 +93,14 @@ await e.call(0x00F1234, undefined, { maxInstructions: 5_000 });
   of a full capture) maps to `0xC0000..0xFFFFF`, while an exact 128 KiB base
   ROM maps to `0xE0000..0xFFFFF`; `power_on_reset` uses the vector at
   `0xFFFFD` in either layout.
-- Keyboard mapping lives in `src/lib/keymap.ts` (currently `F1/F2` + arrow keys).
+- Initial model-specific control mappings live in `src/lib/keymap.ts` (full
+  character-key mapping is still being qualified). PC-E500 uses F1–F5 for PF
+  keys; IQ-7000 uses F1–F8 for app keys. F12 is ON for both models.
+- Virtual controls default to a minimum 40,000 **scheduler-boundary** hold from
+  DOWN; uncheck assistance for immediate raw releases. No machine work runs
+  solely to complete a tap while paused. Focus loss, hidden documents and
+  cancellation force releases. Keyboard/mouse/script owners cannot release
+  each other's contacts. An input acknowledgement is not ROM-consumption proof.
+- Use `e.keys.phys` for physical-contact experiments. Legacy `keys.event` and
+  `keyboard.injectEvent` still perturb debounce/FIFO state and are diagnostic
+  compatibility helpers, not normal-UI or hardware input evidence.

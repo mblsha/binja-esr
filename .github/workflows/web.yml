@@ -60,7 +60,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           PCE500_E2E_USE_EXISTING_BUILD: '1'
-        run: npm run e2e -- e2e/responsiveness.spec.ts e2e/script_isolation.spec.ts --workers=1 --grep-invert 'measure acknowledged Pause'
+        run: npm run e2e -- e2e/responsiveness.spec.ts e2e/script_isolation.spec.ts e2e/input_ownership.spec.ts --workers=1 --grep-invert 'measure acknowledged Pause'
 
       - name: Run browser e2e tests
         if: github.event_name == 'push'

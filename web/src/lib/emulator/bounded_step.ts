@@ -25,6 +25,13 @@ export function checkBoundaryBudget(boundaries: number): void {
 	}
 }
 
+export function limitedBudget(requested: number, limit?: (requested: number) => number): number {
+	const budget = limit?.(requested) ?? requested;
+	if (!Number.isSafeInteger(budget) || budget < (requested > 0 ? 1 : 0) || budget > requested)
+		throw new Error('Invalid input-deadline boundary budget');
+	return budget;
+}
+
 export function runHostSlice(emulator: SlicedEmulator, boundaries: number): number {
 	checkBoundaryBudget(boundaries);
 	if (typeof emulator.run_slice !== 'function') {
@@ -43,6 +50,7 @@ export async function stepBounded(
 	boundaries: number,
 	options: {
 		signal?: AbortSignal;
+		limitBudget?: (requested: number) => number;
 		onProgress?: (used: number) => void;
 		yieldHost?: () => Promise<void>;
 	} = {},
@@ -52,7 +60,7 @@ export async function stepBounded(
 	do {
 		if (options.signal?.aborted) throw new ExecutionCancelled(completed);
 		if (completed < boundaries) {
-			const used = runHostSlice(emulator, boundaries - completed);
+			const used = runHostSlice(emulator, limitedBudget(boundaries - completed, options.limitBudget));
 			completed += used;
 			options.onProgress?.(used);
 		}

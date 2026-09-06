@@ -13,6 +13,7 @@
 	import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from '$lib/emulator/pce500_iocs_workspace';
 	import { runHostSlice, stepBounded } from '$lib/emulator/bounded_step';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
+	import { HostInputs, applyContact, type InputContact } from '$lib/emulator/host_inputs';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -70,9 +71,11 @@
 	let functionRunnerBusy = false;
 	let functionProgress: string | null = null;
 	const pressedCodes = new Set<number>();
-	const physicalHeldCodes = new Set<number>();
+	const physicalHeldCodes = new Map<string, InputContact>();
 	const pendingVirtualRelease = new Map<number, number>();
-	const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
+	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+	let assistedTaps = true;
+	let lastInputAck: string | null = null;
 	const IMEM_BASE = 0x100000;
 	const debugLog: string[] = [];
 	let physicalKeyboardEnabled = false;
@@ -366,47 +369,57 @@
 		}
 	}
 
-	function setMatrixCode(code: number, down: boolean) {
+	function setContact(
+		source: 'physical' | 'virtual',
+		code: InputContact,
+		down: boolean,
+		owner = String(code),
+		cancel = false,
+	) {
+		const generation = romLoadGeneration;
+		const minimumHold = source === 'virtual' && assistedTaps ? 40_000 : 0;
+		const label = code === 'on' ? 'ON' : hex(code, 2);
+		if (down && (!romLoaded || workerHealth !== 'ready')) return;
+		const recordAck = () => {
+			if (generation !== romLoadGeneration) return;
+			lastInputAck = `${label} ${down ? 'down' : cancel ? 'cancelled' : 'up'} applied to input controller; ROM consumption not confirmed`;
+			logDebug(lastInputAck);
+		};
 		if (worker) {
-			const id = workerNextId++;
-			workerPost({ id, type: 'virtual_key', code, down });
-			logDebug(`${down ? 'press' : 'release'} ${hex(code, 2)}`);
-			return;
-		}
-		if (!emulator) return;
-		if (down) {
-			if (pressedCodes.has(code)) return;
-			pressedCodes.add(code);
-			emulator.press_matrix_code?.(code);
-			logDebug(`press ${hex(code, 2)}`);
-		} else {
-			if (!pressedCodes.has(code)) return;
-			pressedCodes.delete(code);
-			pendingVirtualRelease.delete(code);
-			emulator.release_matrix_code?.(code);
-			logDebug(`release ${hex(code, 2)}`);
+			void workerCall(`${source}_key`, { code, down, owner, cancel, minimumHold, generation })
+				.then(recordAck)
+				.catch((error) => {
+					if (generation === romLoadGeneration) lastError = `Input not acknowledged: ${String(error)}`;
+				});
+		} else if (emulator) {
+			try {
+				fallbackInputs.set({ source, owner, contact: code, down, cancel, minimumHold });
+				recordAck();
+			} catch (error) {
+				lastError = `Input failed: ${String(error)}`;
+			}
 		}
 	}
 
-	function setPhysicalMatrixCode(code: number, down: boolean) {
-		if (worker) {
-			const id = workerNextId++;
-			workerPost({ id, type: 'physical_key', code, down });
-			return;
-		}
-		if (!emulator) return;
-		if (down) {
-			emulator.press_matrix_code?.(code);
-		} else {
-			emulator.release_matrix_code?.(code);
-		}
+	function setMatrixCode(code: InputContact, down: boolean) {
+		setContact('virtual', code, down);
+	}
+	function setPhysicalMatrixCode(code: InputContact, down: boolean, owner = String(code)) {
+		setContact('physical', code, down, owner);
+	}
+
+	function releaseInputSource(source: 'physical' | 'virtual') {
+		const generation = romLoadGeneration;
+		if (worker)
+			void workerCall('release_inputs', { source, generation }).catch((error) => {
+				if (generation === romLoadGeneration) lastError = `Input cleanup not acknowledged: ${String(error)}`;
+			});
+		else if (emulator) fallbackInputs.releaseSource(source);
 	}
 
 	function releaseAllPhysicalHeldCodes() {
 		if (physicalHeldCodes.size === 0) return;
-		for (const code of physicalHeldCodes.values()) {
-			setPhysicalMatrixCode(code, false);
-		}
+		releaseInputSource('physical');
 		physicalHeldCodes.clear();
 	}
 
@@ -414,6 +427,9 @@
 		if (physicalKeyboardHookInstalled) return;
 		window.addEventListener('keydown', onKeyDown, { passive: false });
 		window.addEventListener('keyup', onKeyUp, { passive: false });
+		window.addEventListener('blur', releaseAllPhysicalHeldCodes);
+		document.addEventListener('visibilitychange', onVisibilityChange);
+		document.addEventListener('focusin', onFocusIn);
 		physicalKeyboardHookInstalled = true;
 	}
 
@@ -421,38 +437,22 @@
 		if (!physicalKeyboardHookInstalled) return;
 		window.removeEventListener('keydown', onKeyDown);
 		window.removeEventListener('keyup', onKeyUp);
+		window.removeEventListener('blur', releaseAllPhysicalHeldCodes);
+		document.removeEventListener('visibilitychange', onVisibilityChange);
+		document.removeEventListener('focusin', onFocusIn);
 		physicalKeyboardHookInstalled = false;
 	}
 
-	function virtualPress(code: number) {
-		if (worker) {
-			setMatrixCode(code, true);
-			return;
-		}
-		setMatrixCode(code, true);
-		pendingVirtualRelease.delete(code);
+	function virtualPress(code: InputContact, owner = String(code)) {
+		setContact('virtual', code, true, owner);
 	}
 
-	function virtualRelease(code: number) {
-		if (worker) {
-			setMatrixCode(code, false);
-			return;
-		}
-		if (!pressedCodes.has(code)) return;
-		pendingVirtualRelease.set(code, MIN_VIRTUAL_HOLD_INSTRUCTIONS);
+	function virtualRelease(code: InputContact, owner = String(code), cancel = false) {
+		setContact('virtual', code, false, owner, cancel);
 	}
 
 	function applyVirtualReleaseBudget(stepped: number) {
-		if (pendingVirtualRelease.size === 0) return;
-		for (const [code, remaining] of pendingVirtualRelease.entries()) {
-			const next = remaining - stepped;
-			if (next <= 0) {
-				pendingVirtualRelease.delete(code);
-				setMatrixCode(code, false);
-			} else {
-				pendingVirtualRelease.set(code, next);
-			}
-		}
+		fallbackInputs.advance(stepped);
 	}
 
 	async function ensureEmulator(): Promise<any> {
@@ -514,6 +514,8 @@
 	}
 
 	async function tryAutoLoadRom(force = false) {
+		releaseAllPhysicalHeldCodes();
+		releaseInputSource('virtual');
 		const generation = ++romLoadGeneration;
 		loadingRom = true;
 		romLoaded = false;
@@ -544,6 +546,7 @@
 		} else {
 			const emu = await ensureEmulator();
 			if (generation !== romLoadGeneration) return;
+			fallbackInputs.clear();
 			if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 			else emu.load_rom(bytes);
 			refreshAllNow();
@@ -644,10 +647,14 @@
 				fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoBase + i) ?? 0) : 0,
 			);
 			debugKio = { pc, instr, imr, isr, kol, koh, kil, fifoHead, fifoTail, fifo };
+			const inputState = fallbackInputs.snapshot();
+			pressedCodes.clear();
+			for (const code of inputState.pressedCodes) pressedCodes.add(code);
+			pendingVirtualRelease.clear();
+			for (const [code, remaining] of inputState.pendingVirtualRelease) pendingVirtualRelease.set(code, remaining);
 			debugKioJson = safeJson({
 				...debugKio,
-				pressedCodes: Array.from(pressedCodes.values()),
-				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
+				...fallbackInputs.snapshot(),
 			});
 		} catch {
 			debugKio = null;
@@ -693,8 +700,7 @@
 				fifoHead,
 				fifoTail,
 				fifo,
-				pressedCodes: Array.from(pressedCodes.values()),
-				pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
+				...fallbackInputs.snapshot(),
 			});
 		} catch (err) {
 			console.log(`[pce500] ${tag}: dump failed`, err);
@@ -717,17 +723,23 @@
 			},
 			press: (code: number) => virtualPress(code),
 			release: (code: number) => virtualRelease(code),
-			tap: (code: number, stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+			tap: async (code: number, stepCount = 40_000) => {
 				virtualPress(code);
-				stepOnce(stepCount);
-				virtualRelease(code);
+				try {
+					await stepOnce(stepCount);
+				} finally {
+					virtualRelease(code, String(code), true);
+				}
 			},
 			pressPF1: () => virtualPress(0x56),
 			releasePF1: () => virtualRelease(0x56),
-			tapPF1: (stepCount = MIN_VIRTUAL_HOLD_INSTRUCTIONS) => {
+			tapPF1: async (stepCount = 40_000) => {
 				virtualPress(0x56);
-				stepOnce(stepCount);
-				virtualRelease(0x56);
+				try {
+					await stepOnce(stepCount);
+				} finally {
+					virtualRelease(0x56, String(0x56), true);
+				}
 			},
 		};
 		console.log('[pce500] devtools helpers installed: __pce500.dump(), __pce500.tapPF1(), __pce500.readInternal(0xF2)');
@@ -789,7 +801,11 @@
 		}
 		fallbackStepAbort = new AbortController();
 		try {
-			await stepBounded(emulator, count, { signal: fallbackStepAbort.signal, onProgress: applyVirtualReleaseBudget });
+			await stepBounded(emulator, count, {
+				signal: fallbackStepAbort.signal,
+				limitBudget: fallbackInputs.limitBudget,
+				onProgress: applyVirtualReleaseBudget,
+			});
 			refreshFast();
 			const nowMs = performance.now();
 			refreshUi(nowMs);
@@ -805,7 +821,7 @@
 
 	function stepCore(count: number) {
 		if (!emulator) return;
-		const used = runHostSlice(emulator, count);
+		const used = runHostSlice(emulator, fallbackInputs.limitBudget(count));
 		applyVirtualReleaseBudget(used);
 	}
 
@@ -895,22 +911,51 @@
 	}
 
 	function onKeyDown(event: KeyboardEvent) {
-		if (event.repeat) return;
-		const code = matrixCodeForKeyEvent(event);
+		if (
+			event.repeat ||
+			!romLoaded ||
+			event.isComposing ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.altKey ||
+			isHostControl(event.target)
+		)
+			return;
+		if (
+			event.target instanceof Element &&
+			event.target.closest('button') &&
+			(event.key === 'Enter' || event.key === ' ')
+		)
+			return;
+		const code = matrixCodeForKeyEvent(event, romModel);
 		if (code === null) return;
-		if (physicalHeldCodes.has(code)) return;
-		physicalHeldCodes.add(code);
-		setPhysicalMatrixCode(code, true);
+		if (physicalHeldCodes.has(event.code)) return;
+		physicalHeldCodes.set(event.code, code);
+		setPhysicalMatrixCode(code, true, event.code);
 		event.preventDefault();
 	}
 
 	function onKeyUp(event: KeyboardEvent) {
-		const code = matrixCodeForKeyEvent(event);
-		if (code === null) return;
-		if (!physicalHeldCodes.has(code)) return;
-		physicalHeldCodes.delete(code);
-		setPhysicalMatrixCode(code, false);
+		const code = physicalHeldCodes.get(event.code);
+		if (code === undefined) return;
+		physicalHeldCodes.delete(event.code);
+		setPhysicalMatrixCode(code, false, event.code);
 		event.preventDefault();
+	}
+
+	function isHostControl(target: EventTarget | null): boolean {
+		return (
+			target instanceof Element &&
+			Boolean(
+				target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'),
+			)
+		);
+	}
+	function onVisibilityChange() {
+		if (document.hidden) releaseAllPhysicalHeldCodes();
+	}
+	function onFocusIn(event: FocusEvent) {
+		if (isHostControl(event.target)) releaseAllPhysicalHeldCodes();
 	}
 
 	onMount(() => {
@@ -935,6 +980,9 @@
 	}
 
 	onDestroy(() => {
+		uninstallPhysicalKeyboardHook();
+		physicalHeldCodes.clear();
+		if (!worker && emulator) fallbackInputs.clear();
 		workerRequests?.fail(new Error('Emulator page closed'));
 		fallbackStepAbort?.abort();
 		running = false;
@@ -943,8 +991,6 @@
 			worker.terminate();
 			worker = null;
 		}
-		uninstallPhysicalKeyboardHook();
-		releaseAllPhysicalHeldCodes();
 	});
 </script>
 
@@ -1044,14 +1090,38 @@
 	{/if}
 
 	<VirtualKeyboard
-		disabled={!romLoaded}
-		onPress={(code) => virtualPress(code)}
-		onRelease={(code) => virtualRelease(code)}
+		disabled={!romLoaded || workerHealth !== 'ready'}
+		model={romModel}
+		onPress={virtualPress}
+		onRelease={virtualRelease}
+		onCancelAll={() => releaseInputSource('virtual')}
 	/>
+	<label>
+		<input
+			type="checkbox"
+			data-testid="assisted-taps-toggle"
+			bind:checked={assistedTaps}
+			on:change={() => releaseInputSource('virtual')}
+		/>
+		Assist virtual taps (minimum 40,000 scheduler boundaries from press; no execution while paused)
+	</label>
+	<p class="hint">
+		Disable assistance for immediate raw contact releases. ON uses the power-key input, not a forced interrupt.
+	</p>
+	<p class="hint">
+		{#if romModel === 'iq-7000'}
+			IQ controls: F1–F5 = Calendar/Schedule/TEL/MEMO/Calc; F6–F8 = Card/World/Home; Page Up/Down = Search; Enter =
+			Store.
+		{:else}
+			PC-E500 controls: F1–F5 = PF1–PF5, arrows, Enter, Backspace, Delete, Insert and Space.
+		{/if}
+		Both: Shift, Caps Lock and F12 = ON. This is an initial control subset; full text-key mapping is still being qualified.
+	</p>
+	{#if lastInputAck}<p class="hint" data-testid="input-ack">{lastInputAck}</p>{/if}
 
 	<label>
 		<input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
-		Enable physical keyboard input (F1/F2, arrows)
+		Enable physical keyboard input (model-specific keys; F12 = ON; ignored in text fields and controls)
 	</label>
 
 	{#if romLoaded}

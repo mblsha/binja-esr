@@ -5,6 +5,7 @@ import { ExecutionCancelled, runHostSlice, stepBounded } from './bounded_step';
 import { WorkerOperations } from './worker_operations';
 import { callBounded } from './bounded_call';
 import { runIsolatedScript } from './isolated_script';
+import { applyContact, HostInputs, type InputContact } from './host_inputs';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -31,8 +32,18 @@ type WorkerRequest =
 	| { id: number; type: 'lcd_trace' }
 	| { id: number; type: 'eval_js'; source: string }
 	| { id: number; type: 'set_options'; targetFps?: number; debug?: Partial<DebugOptions> }
-	| { id: number; type: 'virtual_key'; code: number; down: boolean }
-	| { id: number; type: 'physical_key'; code: number; down: boolean };
+	| {
+			id: number;
+			type: 'virtual_key' | 'physical_key';
+			code: InputContact;
+			down: boolean;
+			owner?: string;
+			cancel?: boolean;
+			minimumHold?: number;
+			generation?: number;
+	  }
+	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
+	| { id: number; type: 'input_state' };
 
 type WorkerReply =
 	| { type: 'reply'; id: number; ok: true; result?: any }
@@ -75,7 +86,6 @@ type Frame = {
 	keyboardDebugJson: string | null;
 };
 
-const MIN_VIRTUAL_HOLD_INSTRUCTIONS = 40_000;
 const IMEM_BASE = 0x100000;
 
 const RUN_SLICE_MAX_INSTRUCTIONS = 200_000;
@@ -110,8 +120,25 @@ let runLoopId = 0;
 let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
-const pressedCodes = new Set<number>();
-const pendingVirtualRelease = new Map<number, number>();
+const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+const diagnosticContacts = new Set<number>();
+
+function injectDiagnostic(code: number, release: boolean) {
+	inputs.set({ source: 'diagnostic', owner: String(code), contact: code, down: !release });
+	if (release) diagnosticContacts.delete(code);
+	else diagnosticContacts.add(code);
+	try {
+		emulator.inject_matrix_event(code, release);
+	} finally {
+		inputs.reapply(code);
+	}
+}
+
+function releaseScriptInputs() {
+	for (const code of diagnosticContacts) injectDiagnostic(code, true);
+	inputs.releaseSource('diagnostic');
+	inputs.releaseSource('script');
+}
 let perfettoSymbolsPromise: Promise<void> | null = null;
 
 function safeJson(value: any): string {
@@ -148,147 +175,165 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 	const { createEvalApi } = await import('../debug/sc62015_eval_api');
 	let lastScriptProgress = -Infinity;
 	let reportedPrint = false;
-	return runIsolatedScript({
-		source,
-		signal,
-		read8: (addr) => emulator.read_u8(addr),
-		onRequest: (path) => {
-			const now = performance.now();
-			if (now - lastScriptProgress >= 100 || (path === 'print' && !reportedPrint)) {
-				if (path === 'print') reportedPrint = true;
-				lastScriptProgress = now;
-				self.postMessage({ type: 'script_progress', generation: machineGeneration, operation: path });
-			}
-		},
-		createApi: ({ signal, dispatchStub }) => {
-			let mutating = false;
-			const requireIdle = () => {
-				if (mutating) throw new Error('Await the active machine operation before starting another mutation');
-			};
-			function wrapError(context: string, err: unknown): Error {
-				const msg = err instanceof Error ? err.message : String(err);
-				return new Error(`${context}: ${msg}`);
-			}
-			const runWithError = <T>(context: string, fn: () => T): T => {
-				try {
-					return fn();
-				} catch (err) {
-					throw wrapError(context, err);
+	try {
+		return await runIsolatedScript({
+			source,
+			signal,
+			read8: (addr) => emulator.read_u8(addr),
+			onRequest: (path) => {
+				const now = performance.now();
+				if (now - lastScriptProgress >= 100 || (path === 'print' && !reportedPrint)) {
+					if (path === 'print') reportedPrint = true;
+					lastScriptProgress = now;
+					self.postMessage({ type: 'script_progress', generation: machineGeneration, operation: path });
 				}
-			};
-			const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
-				requireIdle();
-				mutating = true;
-				try {
-					if (signal?.aborted) throw new ExecutionCancelled(0);
-					return await fn();
-				} catch (err) {
-					throw wrapError(context, err);
-				} finally {
-					mutating = false;
+			},
+			createApi: ({ signal, dispatchStub }) => {
+				let mutating = false;
+				const requireIdle = () => {
+					if (mutating) throw new Error('Await the active machine operation before starting another mutation');
+				};
+				function wrapError(context: string, err: unknown): Error {
+					const msg = err instanceof Error ? err.message : String(err);
+					return new Error(`${context}: ${msg}`);
 				}
-			};
-			return createEvalApi({
-				callFunction: async (
-					address: number,
-					maxInstructions: number,
-					options?: {
-						trace?: boolean;
-						probe?: { pc: number; maxSamples?: number };
-						stubs?: Array<{ id: number; pc: number }>;
-					} | null,
-				) =>
-					runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
-						if (options?.trace) await ensurePerfettoSymbols();
-						let lastProgress = -Infinity;
-						return callBounded(
-							emulator,
-							address,
-							maxInstructions,
-							{
-								trace: Boolean(options?.trace),
-								probe_pc: options?.probe ? options.probe.pc : null,
-								probe_max_samples: options?.probe?.maxSamples ?? 256,
-								stubs: options?.stubs ?? [],
-							},
-							{
-								signal,
-								onProgress: (used, slice) => {
-									applyVirtualReleaseBudget(used);
-									const now = performance.now();
-									if (now - lastProgress >= 100 || slice.state === 'complete') {
-										lastProgress = now;
-										(self as any).postMessage({
-											type: 'execution_progress',
-											generation: machineGeneration,
-											address,
-											steps: slice.steps,
-											schedulerBoundaries: slice.scheduler_boundaries,
-										});
-									}
+				const runWithError = <T>(context: string, fn: () => T): T => {
+					try {
+						return fn();
+					} catch (err) {
+						throw wrapError(context, err);
+					}
+				};
+				const runWithErrorAsync = async <T>(context: string, fn: () => Promise<T> | T): Promise<T> => {
+					requireIdle();
+					mutating = true;
+					try {
+						if (signal?.aborted) throw new ExecutionCancelled(0);
+						return await fn();
+					} catch (err) {
+						throw wrapError(context, err);
+					} finally {
+						mutating = false;
+					}
+				};
+				return createEvalApi({
+					callFunction: async (
+						address: number,
+						maxInstructions: number,
+						options?: {
+							trace?: boolean;
+							probe?: { pc: number; maxSamples?: number };
+							stubs?: Array<{ id: number; pc: number }>;
+						} | null,
+					) =>
+						runWithErrorAsync(`call(0x${address.toString(16).toUpperCase()})`, async () => {
+							if (options?.trace) await ensurePerfettoSymbols();
+							let lastProgress = -Infinity;
+							return callBounded(
+								emulator,
+								address,
+								maxInstructions,
+								{
+									trace: Boolean(options?.trace),
+									probe_pc: options?.probe ? options.probe.pc : null,
+									probe_max_samples: options?.probe?.maxSamples ?? 256,
+									stubs: options?.stubs ?? [],
 								},
-								dispatchStub,
-							},
-						);
-					}),
-				startPerfettoTrace: async (name: string) =>
-					runWithErrorAsync(`perfetto.start(${name})`, async () => {
-						await ensurePerfettoSymbols();
-						if (typeof emulator.perfetto_start !== 'function') {
-							throw new Error('perfetto_start is not available in this runtime');
-						}
-						emulator.perfetto_start(name);
-					}),
-				stopPerfettoTrace: () =>
-					runWithError('perfetto.stop()', () => {
-						if (typeof emulator.perfetto_stop_b64 !== 'function') {
-							throw new Error('perfetto_stop_b64 is not available in this runtime');
-						}
-						const raw = emulator.perfetto_stop_b64();
-						if (typeof raw !== 'string') {
-							throw new Error('perfetto_stop_b64 returned a non-string value');
-						}
-						return raw;
-					}),
-				reset: async () => runWithErrorAsync('reset()', () => Promise.resolve(emulator.reset?.())),
-				step: async (instructions: number) =>
-					runWithErrorAsync(`step(${instructions})`, async () => {
-						await stepBounded(emulator, instructions, { signal, onProgress: applyVirtualReleaseBudget });
-					}),
-				getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
-				setReg: (name: string, value: number) =>
-					runWithError(`setReg(${name}=${value})`, () => {
-						requireIdle();
-						emulator.set_reg?.(name, value);
-					}),
-				read8: (addr: number) =>
-					runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
-				write8: (addr: number, value: number) =>
-					runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => {
-						requireIdle();
-						emulator.write_u8?.(addr, value);
-					}),
-				lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
-				lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels()),
-				lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
-				pressMatrixCode: (code: number) =>
-					runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () =>
-						emulator.press_matrix_code?.(code),
-					),
-				releaseMatrixCode: (code: number) =>
-					runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
-						emulator.release_matrix_code?.(code),
-					),
-				injectMatrixEvent: (code: number, release: boolean) =>
-					runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
-						emulator.inject_matrix_event?.(code, release),
-					),
-				// Handler closures and their registry live only in the disposable worker.
-				registerStub: () => {},
-				clearStubs: () => {},
-			});
-		},
-	});
+								{
+									signal,
+									limitBudget: inputs.limitBudget,
+									onProgress: (used, slice) => {
+										inputs.advance(used);
+										const now = performance.now();
+										if (now - lastProgress >= 100 || slice.state === 'complete') {
+											lastProgress = now;
+											(self as any).postMessage({
+												type: 'execution_progress',
+												generation: machineGeneration,
+												address,
+												steps: slice.steps,
+												schedulerBoundaries: slice.scheduler_boundaries,
+											});
+										}
+									},
+									dispatchStub,
+								},
+							);
+						}),
+					startPerfettoTrace: async (name: string) =>
+						runWithErrorAsync(`perfetto.start(${name})`, async () => {
+							await ensurePerfettoSymbols();
+							if (typeof emulator.perfetto_start !== 'function') {
+								throw new Error('perfetto_start is not available in this runtime');
+							}
+							emulator.perfetto_start(name);
+						}),
+					stopPerfettoTrace: () =>
+						runWithError('perfetto.stop()', () => {
+							if (typeof emulator.perfetto_stop_b64 !== 'function') {
+								throw new Error('perfetto_stop_b64 is not available in this runtime');
+							}
+							const raw = emulator.perfetto_stop_b64();
+							if (typeof raw !== 'string') {
+								throw new Error('perfetto_stop_b64 returned a non-string value');
+							}
+							return raw;
+						}),
+					reset: async () =>
+						runWithErrorAsync('reset()', () => {
+							releaseScriptInputs();
+							inputs.clear();
+							emulator.reset();
+						}),
+					step: async (instructions: number) =>
+						runWithErrorAsync(`step(${instructions})`, async () => {
+							await stepBounded(emulator, instructions, {
+								signal,
+								limitBudget: inputs.limitBudget,
+								onProgress: inputs.advance,
+							});
+						}),
+					getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
+					setReg: (name: string, value: number) =>
+						runWithError(`setReg(${name}=${value})`, () => {
+							requireIdle();
+							emulator.set_reg?.(name, value);
+						}),
+					read8: (addr: number) =>
+						runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
+					write8: (addr: number, value: number) =>
+						runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => {
+							requireIdle();
+							emulator.write_u8?.(addr, value);
+						}),
+					lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
+					lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels()),
+					lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),
+					pressMatrixCode: (code: number) =>
+						runWithError(`keyboard.press(0x${code.toString(16).toUpperCase()})`, () =>
+							inputs.set({ source: 'script', owner: String(code), contact: code, down: true }),
+						),
+					releaseMatrixCode: (code: number) =>
+						runWithError(`keyboard.release(0x${code.toString(16).toUpperCase()})`, () =>
+							inputs.set({ source: 'script', owner: String(code), contact: code, down: false }),
+						),
+					injectMatrixEvent: (code: number, release: boolean) =>
+						runWithError(`keyboard.inject(0x${code.toString(16).toUpperCase()}, ${release})`, () =>
+							injectDiagnostic(code, release),
+						),
+					pressOnKey: () => inputs.set({ source: 'script', owner: 'on', contact: 'on', down: true }),
+					releaseOnKey: () => inputs.set({ source: 'script', owner: 'on', contact: 'on', down: false }),
+					// Handler closures and their registry live only in the disposable worker.
+					registerStub: () => {},
+					clearStubs: () => {},
+				});
+			},
+		});
+	} finally {
+		// A script owns its raw presses only for this invocation, on success too.
+		// The isolated host has already drained all pending RPC cleanup here.
+		releaseScriptInputs();
+	}
 }
 
 async function ensureEmulator(): Promise<any> {
@@ -353,23 +398,9 @@ function replyErr(id: number, error: unknown) {
 	} satisfies WorkerReply);
 }
 
-function applyVirtualReleaseBudget(stepped: number) {
-	if (pendingVirtualRelease.size === 0) return;
-	for (const [code, remaining] of pendingVirtualRelease.entries()) {
-		const next = remaining - stepped;
-		if (next <= 0) {
-			pendingVirtualRelease.delete(code);
-			pressedCodes.delete(code);
-			emulator.release_matrix_code?.(code);
-		} else {
-			pendingVirtualRelease.set(code, next);
-		}
-	}
-}
-
 function stepCore(boundaries: number) {
-	const used = runHostSlice(emulator, boundaries);
-	applyVirtualReleaseBudget(used);
+	const used = runHostSlice(emulator, inputs.limitBudget(boundaries));
+	inputs.advance(used);
 	return used;
 }
 
@@ -401,8 +432,7 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 			fifoHead,
 			fifoTail,
 			fifo,
-			pressedCodes: Array.from(pressedCodes.values()),
-			pendingVirtualRelease: Array.from(pendingVirtualRelease.entries()),
+			...inputs.snapshot(),
 		};
 		return { keyboardDebug, keyboardDebugJson: safeJson(keyboardDebug) };
 	} catch {
@@ -532,6 +562,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (signal?.aborted) throw new ExecutionCancelled(0);
 				romModel = msg.model ?? romModel;
 				perfettoSymbolsPromise = null;
+				releaseScriptInputs();
+				inputs.clear();
 				if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(msg.bytes, romModel);
 				else emu.load_rom(msg.bytes);
 				machineGeneration = msg.generation ?? machineGeneration + 1;
@@ -540,8 +572,6 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				}
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
-				pressedCodes.clear();
-				pendingVirtualRelease.clear();
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
 				return;
@@ -553,7 +583,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			}
 			case 'step': {
 				await ensureEmulator();
-				await stepBounded(emulator, msg.instructions, { signal, onProgress: applyVirtualReleaseBudget });
+				await stepBounded(emulator, msg.instructions, {
+					signal,
+					limitBudget: inputs.limitBudget,
+					onProgress: inputs.advance,
+				});
 				postFrame(captureFrame(true));
 				replyOk(msg.id);
 				return;
@@ -629,30 +663,32 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				}
 				return;
 			}
-			case 'virtual_key': {
-				await ensureEmulator();
-				if (msg.down) {
-					if (!pressedCodes.has(msg.code)) {
-						pressedCodes.add(msg.code);
-						pendingVirtualRelease.delete(msg.code);
-						emulator.press_matrix_code?.(msg.code);
-					}
-				} else {
-					if (pressedCodes.has(msg.code)) {
-						pendingVirtualRelease.set(msg.code, MIN_VIRTUAL_HOLD_INSTRUCTIONS);
-					}
-				}
-				replyOk(msg.id);
-				return;
-			}
+			case 'virtual_key':
 			case 'physical_key': {
 				await ensureEmulator();
-				if (msg.down) {
-					emulator.press_matrix_code?.(msg.code);
-				} else {
-					emulator.release_matrix_code?.(msg.code);
-				}
-				replyOk(msg.id);
+				if (msg.generation !== undefined && msg.generation !== machineGeneration)
+					throw new Error('Stale input generation');
+				inputs.set({
+					source: msg.type === 'virtual_key' ? 'virtual' : 'physical',
+					owner: msg.owner ?? String(msg.code),
+					contact: msg.code,
+					down: msg.down,
+					cancel: msg.cancel,
+					minimumHold: msg.type === 'virtual_key' ? (msg.minimumHold ?? 40_000) : 0,
+				});
+				replyOk(msg.id, { generation: machineGeneration, applied: true, contact: msg.code, down: msg.down });
+				return;
+			}
+			case 'release_inputs': {
+				if (msg.generation !== undefined && msg.generation !== machineGeneration)
+					throw new Error('Stale input generation');
+				if (msg.source !== 'physical' && msg.source !== 'virtual') throw new Error('Invalid host input source');
+				inputs.releaseSource(msg.source);
+				replyOk(msg.id, { generation: machineGeneration, applied: true });
+				return;
+			}
+			case 'input_state': {
+				replyOk(msg.id, { generation: machineGeneration, ...inputs.snapshot(), rust: emulator.input_contacts() });
 				return;
 			}
 		}

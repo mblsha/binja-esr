@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { callBounded, type FunctionCallSlice } from './bounded_call';
+import { HostInputs } from './host_inputs';
 
 const finished = JSON.stringify({ report: { reason: 'returned', steps: 65 } });
 const cancelled = JSON.stringify({ report: { reason: 'cancelled', steps: 64 } });
@@ -19,6 +20,34 @@ const machine = () => ({
 });
 
 describe('resumable Rust function calls', () => {
+	it('limits call slices at input release boundaries and does not charge debugger stub actions', async () => {
+		const emulator = machine();
+		let boundaries = 0;
+		const releaseAt: number[] = [];
+		const inputs = new HostInputs((_contact, down) => {
+			if (!down) releaseAt.push(boundaries);
+		});
+		inputs.set({ source: 'virtual', owner: 'test', contact: 1, down: true, minimumHold: 40 });
+		inputs.set({ source: 'virtual', owner: 'test', contact: 1, down: false });
+		emulator.call_function_slice.mockImplementationOnce(() => ({ ...status('stub', 0), steps: 1 }));
+		emulator.call_function_slice.mockImplementation((_id?: number, budget?: number) => {
+			boundaries += Math.min(budget!, 100 - boundaries);
+			return { ...status(boundaries === 100 ? 'complete' : 'running', boundaries), steps: boundaries + 1 };
+		});
+		await callBounded(
+			emulator,
+			0x10000,
+			1000,
+			{},
+			{
+				limitBudget: inputs.limitBudget,
+				onProgress: inputs.advance,
+				dispatchStub: () => ({}),
+				yieldHost: async () => {},
+			},
+		);
+		expect(releaseAt).toEqual([40]);
+	});
 	it('yields between slices, accounts actual scheduler progress, and finishes once', async () => {
 		const emulator = machine();
 		emulator.call_function_slice.mockReturnValueOnce(status('running'));

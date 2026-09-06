@@ -668,12 +668,25 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 	}
 
 	async function tapPhysical(code: number, holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) {
-		adapter.pressMatrixCode?.(code & 0xff);
+		code = physicalCode(code);
+		adapter.pressMatrixCode?.(code);
 		try {
 			if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));
 		} finally {
-			adapter.releaseMatrixCode?.(code & 0xff);
+			adapter.releaseMatrixCode?.(code);
 		}
+	}
+
+	function physicalCode(code: number): number {
+		if (!Number.isInteger(code) || code < 0 || code >= 128)
+			throw new Error('Physical matrix contact must be an integer in 0..127');
+		if (!adapter.pressMatrixCode || !adapter.releaseMatrixCode)
+			throw new Error('Physical contacts are unavailable in this runtime');
+		return code;
+	}
+
+	function requireOnKey() {
+		if (!adapter.pressOnKey || !adapter.releaseOnKey) throw new Error('ON contact is unavailable in this runtime');
 	}
 
 	function normalizeWaitOptions(options?: EvalWaitOptions) {
@@ -954,10 +967,12 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		},
 		keyboard: {
 			press: async (code: number) => {
-				adapter.pressMatrixCode?.(code & 0xff);
+				code = physicalCode(code);
+				adapter.pressMatrixCode!(code);
 			},
 			release: async (code: number) => {
-				adapter.releaseMatrixCode?.(code & 0xff);
+				code = physicalCode(code);
+				adapter.releaseMatrixCode!(code);
 			},
 			injectEvent: async (code: number, release: boolean) => {
 				adapter.injectMatrixEvent?.(code & 0xff, Boolean(release));
@@ -999,8 +1014,14 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 				tap: tapEvent,
 			},
 			phys: {
-				press: async (code) => adapter.pressMatrixCode?.(code & 0xff),
-				release: async (code) => adapter.releaseMatrixCode?.(code & 0xff),
+				press: async (code) => {
+					code = physicalCode(code);
+					adapter.pressMatrixCode!(code);
+				},
+				release: async (code) => {
+					code = physicalCode(code);
+					adapter.releaseMatrixCode!(code);
+				},
 				tap: tapPhysical,
 			},
 			app: {
@@ -1011,12 +1032,15 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 		},
 		onKey: {
 			press: async () => {
+				requireOnKey();
 				adapter.pressOnKey?.();
 			},
 			release: async () => {
+				requireOnKey();
 				adapter.releaseOnKey?.();
 			},
 			tap: async (holdInstructions = DEFAULT_VIRTUAL_HOLD_INSTRUCTIONS) => {
+				requireOnKey();
 				adapter.pressOnKey?.();
 				try {
 					if (holdInstructions > 0) await Promise.resolve(adapter.step(holdInstructions));

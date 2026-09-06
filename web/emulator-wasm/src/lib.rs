@@ -602,6 +602,26 @@ impl Sc62015Emulator {
         self.runtime.release_on_key();
     }
 
+    /// Side-effect-free actual Rust contacts, distinct from host ownership and
+    /// from firmware's debounced/translated input. Not an input-consumption ACK.
+    pub fn input_contacts(&self) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        struct Contacts {
+            matrix: Vec<u8>,
+            on: bool,
+        }
+        let contacts = Contacts {
+            matrix: self
+                .runtime
+                .keyboard
+                .as_ref()
+                .map_or_else(Vec::new, |keyboard| keyboard.pressed_matrix_codes()),
+            on: self.runtime.physical_on_key_pressed(),
+        };
+        serde_wasm_bindgen::to_value(&contacts)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     pub fn sio_enable_bridge(&mut self) {
         self.runtime.enable_sio_stub();
         if let Some(sio) = self.runtime.sio.as_mut() {
@@ -921,6 +941,49 @@ mod tests {
         emulator.load_rom(rom).expect("load");
         emulator.set_reg("S", 0xB9003).unwrap();
         emulator
+    }
+
+    #[wasm_bindgen_test]
+    fn input_observation_reports_actual_raw_contacts_without_executing_or_acknowledging_irq() {
+        #[derive(Deserialize)]
+        struct Contacts {
+            matrix: Vec<u8>,
+            on: bool,
+        }
+        for model in ["pc-e500", "iq-7000"] {
+            let mut emulator = Pce500Emulator::new();
+            emulator
+                .load_rom_with_model(include_bytes!("../testdata/pf1_demo_rom_window.rom"), model)
+                .unwrap();
+            let before = emulator.instruction_count();
+            emulator.press_matrix_code(0x56);
+            emulator.press_matrix_code(0x02);
+            let matrix_irq = emulator.isr();
+            let contacts: Contacts =
+                serde_wasm_bindgen::from_value(emulator.input_contacts().unwrap()).unwrap();
+            assert_eq!(contacts.matrix, [0x02, 0x56]);
+            assert!(!contacts.on);
+            assert_eq!(emulator.isr(), matrix_irq);
+            emulator.press_on_key();
+            let on_irq = emulator.isr();
+            let contacts: Contacts =
+                serde_wasm_bindgen::from_value(emulator.input_contacts().unwrap()).unwrap();
+            assert!(contacts.on);
+            assert_eq!(emulator.isr(), on_irq);
+            emulator.release_on_key();
+            emulator.release_matrix_code(0x56);
+            emulator.release_matrix_code(0x02);
+            let contacts: Contacts =
+                serde_wasm_bindgen::from_value(emulator.input_contacts().unwrap()).unwrap();
+            assert!(contacts.matrix.is_empty());
+            assert!(!contacts.on);
+            assert_eq!(emulator.instruction_count(), before);
+            assert_eq!(
+                emulator.isr(),
+                on_irq,
+                "release must not acknowledge latched ONKI"
+            );
+        }
     }
 
     #[wasm_bindgen_test]

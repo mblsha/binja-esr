@@ -1,5 +1,5 @@
 import type { CallArtifacts } from '../debug/sc62015_eval_api';
-import { checkBoundaryBudget, ExecutionCancelled, HOST_SLICE_MS, yieldToHost } from './bounded_step';
+import { checkBoundaryBudget, ExecutionCancelled, HOST_SLICE_MS, limitedBudget, yieldToHost } from './bounded_step';
 
 export type FunctionStubRequest = {
 	id: number;
@@ -34,6 +34,7 @@ export async function callBounded(
 	callOptions: unknown,
 	controls: {
 		signal?: AbortSignal;
+		limitBudget?: (requested: number) => number;
 		dispatchStub?: (request: FunctionStubRequest) => unknown | Promise<unknown>;
 		onProgress?: (schedulerBoundaries: number, slice: FunctionCallSlice) => void;
 		yieldHost?: () => Promise<void>;
@@ -53,7 +54,7 @@ export async function callBounded(
 				owned = false; // Rust restores scaffolding even if artifact encoding fails.
 				return JSON.parse(emulator.call_function_cancel(id));
 			}
-			const slice = emulator.call_function_slice(id, 200_000, HOST_SLICE_MS);
+			const slice = emulator.call_function_slice(id, limitedBudget(200_000, controls.limitBudget), HOST_SLICE_MS);
 			controls.onProgress?.(slice.scheduler_boundaries - previousBoundaries, slice);
 			previousBoundaries = slice.scheduler_boundaries;
 			if (slice.state === 'complete') {

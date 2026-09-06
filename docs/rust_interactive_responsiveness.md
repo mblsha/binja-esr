@@ -32,7 +32,10 @@ proof of physically calibrated instruction timing.
    processing and broader runtime fault classification remain pending.
 3. **Reliable input:** correct release/repress/focus-loss behavior, complete
    model-specific controls, and distinct raw-contact versus timed synthetic-tap
-   contracts. Never conflate scheduler boundaries with retired instructions.
+   contracts. Browser ownership, cleanup, raw/assisted timing and an initial
+   model-specific control subset are implemented; full character mapping and
+   native terminal input still need qualification. Never conflate scheduler
+   boundaries with retired instructions.
 4. **Pacing and presentation:** explicit interactive/turbo/deterministic modes,
    bounded catch-up policy, latest-frame delivery, and cheap normal-play status.
 5. **Qualification:** actual browser input against both ROMs; HALT/OFF/wake,
@@ -152,7 +155,7 @@ Local validation:
   The observations do **not** consistently meet the initial sub-50 ms target.
   Test attachments include the sample list and host/browser identification.
 
-The public PR workflow runs only eighteen short synthetic browser-control
+The public PR workflow initially ran eighteen short synthetic browser-control
 regressions, excluding the repeated latency measurements; the full browser
 suite runs on pushes. Both reuse CI's explicitly built app. Private ROM and
 hardware runs are not new mandatory CI requirements.
@@ -294,18 +297,102 @@ Validation:
   result processing in the machine owner are not host-time bounded yet.
 - The no-Worker fallback has bounded stepping but is not a qualified isolated
   production frontend; Function Runner is now refused there.
-- Virtual-key release timing, repress/focus-loss handling and model-specific
-  controls still need the input stage. Pause latency does not measure a key
-  reaching the matrix or being consumed by ROM firmware. Scripted taps execute
-  their owner-side release cleanup on cancellation, but explicit raw key-downs
-  remain explicit state, including across a cancelled script; source-aware
-  contact ownership/release still needs work.
-  The browser adapter also still needs explicit `onKey` press/release wiring
-  to the existing WASM exports (the optional adapter methods currently permit a
-  silent no-op); cover ON wake with the input-stage regression tests.
+- Browser ownership and ON contact wiring are implemented below. Complete
+  model-specific text input and native terminal input remain unfinished. Pause
+  latency does not measure a key being consumed by ROM firmware. ON contact
+  assertions are tested, but sustained OFF/wake UI qualification remains open.
 - Rendering/debug snapshots can still delay subsequent controls; latest-only
   frame delivery and measured rendering overhead remain pending.
 - Pacing/turbo/deterministic modes, long-instruction and fault stress tests,
   native terminal input/render isolation, and sustained app-input testing are
   not finished. The core's 64-boundary polling is cooperative, not a hard
   upper bound on any individual instruction or callback.
+
+## Browser contact ownership (2026-09-06)
+
+The machine owner now arbitrates separate physical-keyboard, virtual-pointer,
+script-physical and legacy diagnostic sources. Multiple host keys/pointers may
+own one contact; releasing one source cannot release another. Rust's raw matrix
+and ON setters remain the only normal-input path: no FIFO insertion, forced
+KEYI or altered CPU scheduling. `input_contacts()` is a side-effect-free view
+of actual Rust contacts, distinct from the host ownership record.
+
+Virtual controls offer two explicit contracts:
+
+- **Raw:** DOWN/UP change contacts immediately when the owner handles them.
+- **Assisted (default):** a contact stays down for at least 40,000 submitted
+  scheduler boundaries **from DOWN**, not another 40,000 after UP. This is a
+  convenience policy, not physical keyboard timing or an instruction count.
+  It advances only with requested machine execution, including inert OFF
+  boundary budgets. Normal runs, explicit steps and debugger calls all stop
+  their slices at pending input deadlines. Debugger stub actions do not count.
+
+A repress cancels its old delayed release. If no electrical UP occurred, it is
+one continuous contact, not proof of two typed characters. Several assisted
+taps made while paused may overlap when execution resumes; this interface is
+not a queued text-entry protocol. Full character-entry sequencing is still a
+separate qualification item.
+
+Pointer capture keeps a drag held until UP; cancellation, lost capture, blur,
+hidden documents, disabling controls and model replacement release contacts
+without running the guest. Distinct pointer/key identities survive overlapping
+presses. Host keyboard events do not type into the guest while editing a text
+field, using host shortcuts or composing text. Both Shift keys are independent
+owners of one guest contact. UI input requests have finite acknowledgements and
+machine-generation checks. An acknowledgement explicitly does **not** claim the
+ROM consumed the key.
+
+Browser scripts own their explicit matrix/ON presses **only for one script
+invocation**. Success, cancellation, exceptions and unawaited-operation cleanup
+all release those contacts after pending machine work drains; another host
+owner remains held. This changes the earlier cross-script raw-hold behaviour.
+Use one script invocation for a multi-step held-key experiment. Legacy
+`keys.event` / `keyboard.injectEvent` deliberately still perturb debounce/FIFO
+state, unlike `keys.phys`; their compatibility path restores the composed raw
+contact level after injection. They are not normal-UI or silicon input proof.
+Physical input codes reject invalid values instead of silently wrapping to a
+different byte. Missing physical/ON adapters report an error instead of no-op.
+
+Initial model-specific controls replace the PC-only six-button layout:
+PC-E500 PF1–PF5, cursor, SHIFT/CAPS/ENTER/ON; IQ-7000 app keys,
+SHIFT/CAPS/Search/Return/ENTER/ON. Full alpha/numeric/navigation mapping remains
+pending. PC LEFT is corrected to physical `0x1F` (old `0x27` was ENTER).
+IQ SHIFT is physical `0x02`; CAPS is `0x24`, not physical HOME `0x09`.
+The initial IQ map follows ROM scanner/app evidence, not a complete independently
+hardware-traced keyboard matrix.
+
+Validation for this stage:
+
+- 103 frontend unit/component tests passed; Svelte reported zero errors or
+  warnings, and Prettier checks passed. Chunked-input tests cover direct steps
+  and resumable calls, including debugger actions that must not advance holds.
+- 25 Rust/WASM tests passed, including actual matrix/ON observation without
+  guest execution or implicit interrupt acknowledgement.
+- The native Rust suite passed 547 tests, with six existing ignored cases and
+  the separately opt-in two-ROM chunking test ignored in this invocation.
+  Native core Clippy passed.
+- The final full public Chromium suite passed 34 tests, with four opt-in ROM
+  cases skipped (49.4 seconds including the app rebuild). WASM-crate Clippy
+  passed; its 18 pre-existing feature-gated core dependency warnings remain.
+- Eleven compiled-browser tests passed in the focused input/physical-keyboard
+  run, with one private-ROM test explicitly skipped. Both models covered
+  overlapping owners, repress timing, focus/text-field cleanup, script success
+  and runaway-script cancellation, ON ownership and stale-generation rejection.
+- Four opt-in actual-ROM browser checks passed separately. The new IQ test
+  clicks the real browser MEMO and CAPS controls, executes the Rust/WASM ROM,
+  observes `MEMO ?` and the ROM-driven CAPS change, and captures the live LCD.
+  It uses no input-FIFO or framebuffer injection. Earlier PC-E500 PF1/trace and
+  IQ annunciator checks also passed. This is not a claim of all-app completeness.
+- The short PR browser guard now includes the ten synthetic input tests;
+  real-ROM and repeated latency measurement runs remain opt-in, not new
+  mandatory private-data/hour-long CI jobs.
+
+Reproduce the new private-ROM input check from `web/`:
+
+```bash
+CI=1 PCE500_E2E_PORT=4197 IQ7000_E2E_REAL_ROM=1 \
+  npm run e2e -- e2e/input_ownership.spec.ts --workers=1 --grep 'real IQ'
+```
+
+This stage does not qualify native TUI input, full text entry, end-to-end OFF
+wake, or a p99 input-to-firmware latency target. Those remain active goal work.

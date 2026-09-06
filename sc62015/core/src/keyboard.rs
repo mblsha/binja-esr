@@ -331,6 +331,16 @@ impl KeyboardMatrix {
         })
     }
 
+    /// Debugger observation of raw contacts, without scanning, debounce or bus reads.
+    /// Matrix indices are model-independent; PC-E500 key names are not valid IQ labels.
+    pub fn pressed_matrix_codes(&self) -> Vec<u8> {
+        self.states
+            .iter()
+            .filter(|state| state.pressed)
+            .map(KeyState::matrix_code)
+            .collect()
+    }
+
     fn enqueue_event(&mut self, code: u8, release: bool, count_irq: bool) -> usize {
         let mut value = code & 0x7F;
         if release {

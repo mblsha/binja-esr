@@ -1059,6 +1059,12 @@ impl CoreRuntime {
         }));
     }
 
+    /// The host ON contact, excluding an independently asserted RTC alarm level.
+    /// This debugger observation does not sample or acknowledge an interrupt.
+    pub fn physical_on_key_pressed(&self) -> bool {
+        self.onk_level
+    }
+
     /// Set the ON-key level high and apply the provisional machine-level ONKI
     /// latch contract. Stock ROM use supports the bit assignment and explicit
     /// acknowledgement path; exact assertion/re-latch latency is not yet a

@@ -3,6 +3,23 @@ import { describe, expect, it } from 'vitest';
 import { createEvalApi } from './sc62015_eval_api';
 
 describe('createEvalApi', () => {
+	it('rejects invalid physical contacts without byte wrapping, and never silently ignores missing inputs', async () => {
+		const contacts: number[] = [];
+		const api = createEvalApi({
+			pressMatrixCode: (code: number) => contacts.push(code),
+			releaseMatrixCode: () => {},
+		} as any);
+		for (const code of [-1, 128, 256, 1.5, NaN, Infinity]) {
+			await expect(api.keyboard.press(code)).rejects.toThrow('Physical matrix');
+			await expect(api.keys.phys.tap(code)).rejects.toThrow('Physical matrix');
+		}
+		expect(contacts).toEqual([]);
+		const missing = createEvalApi({} as any);
+		await expect(missing.keys.phys.press(1)).rejects.toThrow('unavailable');
+		await expect(missing.keyboard.release(1)).rejects.toThrow('unavailable');
+		await expect(missing.onKey.press()).rejects.toThrow('unavailable');
+		await expect(missing.onKey.tap()).rejects.toThrow('unavailable');
+	});
 	it('rejects overlapping calls before register assignment and releases the guard after failure', async () => {
 		const writes: number[] = [];
 		let rejectCall!: (error: Error) => void;
