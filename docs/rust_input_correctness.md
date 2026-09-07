@@ -25,11 +25,13 @@ application selectors. Rust and TypeScript consume this same table.
 
 ### Browser keyboard
 
-Choose **⋯ → Keyboard focus** to enable physical input and move
+Click the device (or choose **⋯ → Keyboard focus**) to enable physical input and move
 focus to the device. Click **Resume** for live typing; paused key events never
 secretly advance the CPU. Advanced contains the capture checkbox and raw mapping controls. Hover a
-device key for host bindings; cyan outlines show host-held contacts, not proof
-that the ROM has consumed them. Laptop function keys may require **Fn**.
+device key for host bindings; cyan outlines show host-held contacts while
+depressed keycaps reflect contacts reported by Rust. Neither is proof that the
+ROM has consumed them. **⋯ → Shortcuts** provides a compact reference.
+Laptop function keys may require **Fn**.
 
 - **Letters & symbols (buffered)** (default): follows `KeyboardEvent.key`, so letters match
   the host layout rather than QWERTY positions. Host Shift selects punctuation:

@@ -2,9 +2,24 @@ import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import VirtualKeyboard from './VirtualKeyboard.svelte';
 import { deviceLayout } from '../device_layout';
+import { virtualKeysForModel } from '../keymap';
 
 describe('VirtualKeyboard', () => {
 	afterEach(() => cleanup());
+
+	it('distinguishes host-held keys from contacts delivered to Rust', () => {
+		const { getByTestId } = render(VirtualKeyboard, {
+			model: 'iq-7000',
+			onPress: vi.fn(),
+			onRelease: vi.fn(),
+			physicalHighlights: new Set([0x1c]),
+			deliveredContacts: new Set([virtualKeysForModel('iq-7000').find((key) => key.testId === 'vk-b')!.code]),
+		});
+		expect(getByTestId('vk-a').classList.contains('host-held')).toBe(true);
+		expect(getByTestId('vk-a').classList.contains('delivered')).toBe(false);
+		expect(getByTestId('vk-b').classList.contains('delivered')).toBe(true);
+		expect(getByTestId('vk-b').classList.contains('host-held')).toBe(false);
+	});
 
 	it('device geometry retains physical actions and disables unqualified keycaps', async () => {
 		const onPress = vi.fn();

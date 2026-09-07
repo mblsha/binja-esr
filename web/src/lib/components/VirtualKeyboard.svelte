@@ -11,6 +11,7 @@
 	export let layout: DeviceLayout | null = null;
 	export let hostKeyboardMode: HostKeyboardMode = 'symbols';
 	export let physicalHighlights = new Set<InputContact>();
+	export let deliveredContacts = new Set<InputContact>();
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
 	export let onCancelAll: () => void = () => {};
@@ -80,6 +81,7 @@
 				class="key"
 				class:unmapped={key.code === null}
 				class:host-held={key.code !== null && physicalHighlights.has(key.code)}
+				class:delivered={key.code !== null && deliveredContacts.has(key.code)}
 				class:mode={'tone' in key && key.tone === 'mode'}
 				class:shift={'tone' in key && key.tone === 'shift'}
 				class:clear={'tone' in key && key.tone === 'clear'}
@@ -145,8 +147,7 @@
 	.key:disabled {
 		opacity: 0.5;
 	}
-	.key:active,
-	.key.host-held {
+	.key.delivered {
 		background: #121722;
 	}
 	.key:focus-visible {
@@ -178,8 +179,7 @@
 			600 clamp(10px, 1.55cqw, 20px) / 1 Arial,
 			sans-serif;
 	}
-	.physical .key:active:not(:disabled),
-	.physical .key.host-held {
+	.physical .key.delivered {
 		transform: translateY(2px);
 		box-shadow: inset 0 2px 4px #070c0e;
 		background: #101e24;

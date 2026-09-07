@@ -3,6 +3,7 @@
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
+	import { lcdPng, downloadBlob } from '$lib/lcd_export';
 	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
 	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
@@ -38,6 +39,7 @@
 		typeof window !== 'undefined' && typeof Worker !== 'undefined' && !Boolean((import.meta as any)?.env?.VITEST);
 
 	let lcdPixels: Uint8Array | null = null;
+	let lcdFrameGeneration = -1;
 	let lcdAnnunciatorBytes: Uint8Array | null = null;
 	let lcdChipPixels: Uint8Array | null = null;
 	let lcdCols = LCD_COLS;
@@ -76,6 +78,10 @@
 	const pressedCodes = new Set<number>();
 	const physicalHeldCodes = new Map<string, InputContact[]>();
 	let physicalHighlights = new Set<InputContact>();
+	let deliveredContacts = new Set<InputContact>();
+	let shortcutsOpen = false;
+	let lastCapture: { filename: string; metadata: object } | null = null;
+	let exportingLcd = false;
 	let typingStatus = { pending: 0, blocked: false, capacity: 128 };
 	let typingCatchUp = false;
 	let advancedOpen = false;
@@ -128,11 +134,13 @@
 
 	function applyWorkerFrame(frame: any) {
 		if (typeof frame?.generation === 'number' && frame.generation !== romLoadGeneration) return;
+		if (frame.inputContacts) updateDeliveredContacts(frame.inputContacts);
 		if (frame.typing) typingStatus = frame.typing;
 		if (frame?.model && frame.model !== romModel) return;
 		try {
 			if (frame?.lcdPixels instanceof ArrayBuffer) {
 				lcdPixels = new Uint8Array(frame.lcdPixels);
+				lcdFrameGeneration = frame.generation;
 			}
 			if (frame?.lcdChipPixels instanceof ArrayBuffer) {
 				lcdChipPixels = new Uint8Array(frame.lcdChipPixels);
@@ -247,7 +255,10 @@
 				running = false;
 				lastError = data.error;
 			}
-			if (data.type === 'input_status' && data.generation === romLoadGeneration) typingStatus = data.typing;
+			if (data.type === 'input_status' && data.generation === romLoadGeneration) {
+				typingStatus = data.typing;
+				if (data.inputContacts) updateDeliveredContacts(data.inputContacts);
+			}
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
 		};
 		worker.onerror = (event) => {
@@ -432,6 +443,7 @@
 				if (error instanceof InputBufferOverflow) void stop();
 			} finally {
 				typingStatus = fallbackInputs.typingStatus();
+				updateDeliveredContacts(emulator.input_contacts());
 			}
 		}
 	}
@@ -452,6 +464,7 @@
 		else if (emulator) {
 			fallbackInputs.releaseSource(source);
 			typingStatus = fallbackInputs.typingStatus();
+			updateDeliveredContacts(emulator.input_contacts());
 		}
 	}
 
@@ -468,6 +481,53 @@
 		keyboardNotice = '';
 		await tick();
 		keyboardTarget?.focus({ preventScroll: true });
+	}
+
+	function updateDeliveredContacts(contacts: { matrix: number[]; on: boolean }) {
+		deliveredContacts = new Set<InputContact>(contacts.matrix);
+		if (contacts.on) deliveredContacts.add('on');
+	}
+
+	async function exportLcd() {
+		if (!lcdPixels || exportingLcd || !romLoaded || lcdFrameGeneration !== romLoadGeneration) return;
+		exportingLcd = true;
+		const filename = `${romModel}-lcd-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+		// Copy a single observed frame before awaiting PNG encoding. The machine
+		// can keep running; a later frame must not relabel this capture's metadata.
+		const pixels = lcdPixels.slice();
+		const cols = lcdCols;
+		const rows = lcdRows;
+		const metadata = {
+			format: 'sc62015-lcd-observation-v1',
+			model: romModel,
+			romSource,
+			build: buildInfo,
+			cols,
+			rows,
+			pixelFormat: 'gray8',
+			pixelScale: lcdPixelScale,
+			pc: pcReg,
+			instructionCount,
+			annunciatorBytes: Array.from(lcdAnnunciatorBytes ?? []),
+			accuracy:
+				'Actual observed emulator LCD including implemented annunciators; physical mappings and timing retain documented provisional limits. Not a machine snapshot.',
+		};
+		try {
+			downloadBlob(await lcdPng(pixels, cols, rows), `${filename}.png`);
+			lastCapture = { filename, metadata };
+		} catch (error) {
+			lastError = `LCD export failed: ${String(error)}`;
+		} finally {
+			exportingLcd = false;
+		}
+	}
+
+	function exportCaptureMetadata() {
+		if (lastCapture)
+			downloadBlob(
+				new Blob([JSON.stringify(lastCapture.metadata, null, 2)], { type: 'application/json' }),
+				`${lastCapture.filename}.json`,
+			);
 	}
 
 	function installPhysicalKeyboardHook() {
@@ -610,6 +670,7 @@
 	function refreshFast() {
 		if (worker) return;
 		if (!emulator) return;
+		updateDeliveredContacts(emulator.input_contacts());
 		typingStatus = fallbackInputs.typingStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
@@ -623,6 +684,7 @@
 				lcdPixelScale = geometry.pixel_scale;
 				if (typeof rows === 'number') lcdRows = rows;
 				lcdPixels = new Uint8Array(geometry.pixels);
+				lcdFrameGeneration = romLoadGeneration;
 			}
 		} catch {
 			// ignore
@@ -1143,6 +1205,21 @@
 			</label>
 			<button on:click={focusDeviceKeyboard} disabled={!romLoaded}>Keyboard focus</button>
 			<button
+				data-testid="export-lcd"
+				on:click={exportLcd}
+				disabled={!lcdPixels || exportingLcd || !romLoaded || lcdFrameGeneration !== romLoadGeneration}
+				>Save LCD PNG</button
+			>
+			{#if lastCapture}<button data-testid="export-lcd-metadata" on:click={exportCaptureMetadata}
+					>Last capture metadata</button
+				>{/if}
+			<button
+				on:click={() => {
+					shortcutsOpen = !shortcutsOpen;
+					menuOpen = false;
+				}}>Shortcuts</button
+			>
+			<button
 				on:click={() => {
 					advancedOpen = !advancedOpen;
 					menuOpen = false;
@@ -1150,6 +1227,26 @@
 			>
 			<p class="hint">
 				Device pace is nominal, not hardware-calibrated. Responsive accelerates buffered typing and the RTC together.
+			</p>
+		</section>
+	{/if}
+	{#if shortcutsOpen}
+		<section class="quick-options" aria-label="Keyboard shortcuts" data-testid="keyboard-shortcuts">
+			<strong>Keyboard shortcuts</strong>
+			<button on:click={() => (shortcutsOpen = false)}>Close shortcuts</button>
+			<p class="hint">
+				Click the device to type. F9 = device SHIFT · F10 = CAPS · F12 = ON. Device CAPS controls letter case; host
+				Shift selects mapped punctuation.
+			</p>
+			<p class="hint">
+				{romModel === 'iq-7000'
+					? 'F1–F8: Calendar, Schedule, TEL, MEMO, Calc, Card, World, Home. Enter stores; F11 or Shift+Enter inserts a newline. Page Up/Down searches.'
+					: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
+			</p>
+			<p class="hint">
+				Letters, digits, Space, arrows, Backspace, Delete and Insert use device keys. Hover a key for its host binding.
+				Depressed keys show delivered contacts; cyan outlines show host-held keys, not ROM acknowledgement. Browser
+				shortcuts and text fields stay with the host.
 			</p>
 		</section>
 	{/if}
@@ -1181,6 +1278,10 @@
 		aria-describedby="keyboard-help"
 		data-testid="keyboard-target"
 		bind:this={keyboardTarget}
+		on:pointerup={(event) => {
+			if (romLoaded && !(event.target instanceof Element && event.target.matches('[data-host-scroll]')))
+				void focusDeviceKeyboard();
+		}}
 	>
 		{#if lcdOnly}
 			<div class="lcd-only" aria-label="Emulated LCD including fixed segments">
@@ -1192,6 +1293,7 @@
 				disabled={!romLoaded || workerHealth !== 'ready'}
 				{hostKeyboardMode}
 				{physicalHighlights}
+				{deliveredContacts}
 				onPress={virtualPress}
 				onRelease={virtualRelease}
 				onCancelAll={() => releaseInputSource('virtual')}

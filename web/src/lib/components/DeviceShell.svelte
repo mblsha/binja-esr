@@ -9,6 +9,7 @@
 	export let disabled = false;
 	export let hostKeyboardMode: HostKeyboardMode = 'symbols';
 	export let physicalHighlights = new Set<InputContact>();
+	export let deliveredContacts = new Set<InputContact>();
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
 	export let onCancelAll: () => void;
@@ -67,6 +68,7 @@
 				{disabled}
 				{hostKeyboardMode}
 				{physicalHighlights}
+				{deliveredContacts}
 				{onPress}
 				{onRelease}
 				{onCancelAll}

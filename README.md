@@ -171,11 +171,14 @@ serialized assisted keycap stream, not a faithful host-key hold/release stream.
 The status line shows all thirteen candidate flags and preserves unknown bits.
 See [Rust input correctness](docs/rust_input_correctness.md) for controls,
 real-ROM acceptance, the PC-E500 BASIC blocker, and remaining limitations.
-In the browser, choose **⋯ → Keyboard focus**, then **Resume** for live
+In the browser, click the device or choose **⋯ → Keyboard focus**, then **Resume** for live
 input. **Letters & symbols** follows your keyboard layout and accepts shifted
 operators without a numeric keypad; **Device keycaps** preserves positional
 keys and raw host Shift. F9 always operates device SHIFT; device CAPS owns case.
 Hover a key for its host bindings. Host shortcuts and text fields are excluded.
+**⋯ → Shortcuts** shows a compact reference. Depressed keys follow delivered
+Rust contacts; cyan outlines indicate host-held keys. **Save LCD PNG** exports
+actual display pixels; optional matching metadata is available separately.
 Fast typing is buffered in order through real contacts. **Device pace** is the
 non-accelerated default; **Responsive** briefly accelerates scan/release work
 (including emulated RTC time). Pausing freezes the queue; **Cancel queued keys** cancels

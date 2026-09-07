@@ -24,6 +24,34 @@ for (const model of ['pc-e500', 'iq-7000']) {
 		const readPixels = (canvas: HTMLCanvasElement) =>
 			Array.from(canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data);
 		const pixels = await page.locator('.keyboard-target canvas').evaluate(readPixels);
+		const pngDownload = page.waitForEvent('download');
+		await page.getByTestId('export-lcd').click();
+		const png = await pngDownload;
+		expect(png.suggestedFilename()).toMatch(new RegExp(`^${model}-lcd-.*\\.png$`));
+		const pngBytes = await readFile((await png.path())!);
+		const decoded = await page.evaluate(async (bytes) => {
+			const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
+			const canvas = document.createElement('canvas');
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			const context = canvas.getContext('2d')!;
+			context.drawImage(bitmap, 0, 0);
+			bitmap.close();
+			return {
+				cols: canvas.width,
+				rows: canvas.height,
+				pixels: Array.from(context.getImageData(0, 0, canvas.width, canvas.height).data),
+			};
+		}, Array.from(pngBytes));
+		expect(decoded.pixels).toEqual(pixels);
+		const metadataDownload = page.waitForEvent('download');
+		await page.getByTestId('export-lcd-metadata').click();
+		const metadata = await metadataDownload;
+		expect(metadata.suggestedFilename()).toBe(png.suggestedFilename().replace('.png', '.json'));
+		const provenance = JSON.parse(await readFile((await metadata.path())!, 'utf8'));
+		expect(provenance.model).toBe(model);
+		expect([provenance.cols, provenance.rows]).toEqual([decoded.cols, decoded.rows]);
+		expect(provenance.accuracy).toContain('Not a machine snapshot');
 		await page.getByTestId('display-view').selectOption({ label: 'LCD only' });
 		await expect(page.getByTestId('device-shell')).toHaveCount(0);
 		expect(await page.locator('.lcd-only canvas').evaluate(readPixels)).toEqual(pixels);

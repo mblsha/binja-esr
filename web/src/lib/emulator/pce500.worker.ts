@@ -72,6 +72,7 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	inputContacts: { matrix: number[]; on: boolean };
 	typing: ReturnType<HostInputs['typingStatus']>;
 	pacing: PacingStatus;
 	model: RomModel;
@@ -503,6 +504,7 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		inputContacts: emulator.input_contacts(),
 		typing: inputs.typingStatus(),
 		pacing: emulator.pacing_status(),
 		model: romModel,
@@ -728,6 +730,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				(self as any).postMessage({
 					type: 'input_status',
 					generation: machineGeneration,
+					inputContacts: emulator.input_contacts(),
 					typing: inputs.typingStatus(),
 				});
 				replyOk(msg.id, {
@@ -747,6 +750,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				(self as any).postMessage({
 					type: 'input_status',
 					generation: machineGeneration,
+					inputContacts: emulator.input_contacts(),
 					typing: inputs.typingStatus(),
 				});
 				replyOk(msg.id, { generation: machineGeneration, applied: true });

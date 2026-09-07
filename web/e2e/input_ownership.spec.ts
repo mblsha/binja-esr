@@ -44,6 +44,28 @@ const request = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__inputRequest(type, payload), { type, payload });
 const contacts = (page: Page) => request(page, 'input_state').then((state) => state.rust);
 
+test('clicking the device enables focus and buffered feedback follows delivered contacts', async ({ page }) => {
+	await open(page, 'iq-7000');
+	await page.locator('.iq-brand').click();
+	await expect(page.getByTestId('physical-keyboard-toggle')).toBeChecked();
+	await expect(page.getByTestId('keyboard-target')).toBeFocused();
+	await page.keyboard.type('ab', { delay: 0 });
+	await expect(page.getByTestId('vk-a')).toHaveClass(/delivered/);
+	await expect(page.getByTestId('vk-a')).not.toHaveClass(/host-held/);
+	await expect(page.getByTestId('vk-b')).not.toHaveClass(/delivered/);
+	await request(page, 'step', { instructions: 80_000 });
+	await expect(page.getByTestId('vk-a')).not.toHaveClass(/delivered/);
+	await expect(page.getByTestId('vk-b')).toHaveClass(/delivered/);
+	await page.getByTestId('clear-typing').click();
+	await expect(page.getByTestId('vk-b')).not.toHaveClass(/delivered/);
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await page.getByRole('button', { name: 'More options' }).click();
+	await page.getByRole('button', { name: 'Shortcuts', exact: true }).click();
+	await expect(page.getByTestId('keyboard-shortcuts')).toContainText('Enter stores');
+	await page.getByRole('button', { name: 'Close shortcuts' }).click();
+	await expect(page.getByTestId('keyboard-shortcuts')).toHaveCount(0);
+});
+
 async function pointDown(page: Page, id: string) {
 	const button = page.getByTestId(id);
 	await button.scrollIntoViewIfNeeded();
@@ -356,6 +378,8 @@ test('real IQ ROM: browser letter/digit/editor input stores and reopens edited M
 	expect(await contacts(page)).toEqual({ matrix: [], on: false });
 	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-iq-edited-memo.png') });
 	await page.getByTestId('device-shell').screenshot({ path: info.outputPath('real-iq-device-edited-memo.png') });
+	await page.getByTestId('advanced-panel').locator('> summary').click();
+	await page.screenshot({ path: info.outputPath('real-iq-device-first-page.png'), fullPage: true });
 });
 
 test('real ROM: PC-E500 browser calculator consumes physical and virtual expression input', async ({ page }, info) => {
@@ -385,6 +409,8 @@ test('real ROM: PC-E500 browser calculator consumes physical and virtual express
 	expect(await contacts(page)).toEqual({ matrix: [], on: false });
 	await page.locator('.lcd-display').screenshot({ path: info.outputPath('real-pc-calculator-12.png') });
 	await page.getByTestId('device-shell').screenshot({ path: info.outputPath('real-pc-device-calculator-12.png') });
+	await page.getByTestId('advanced-panel').locator('> summary').click();
+	await page.screenshot({ path: info.outputPath('real-pc-device-first-page.png'), fullPage: true });
 });
 
 test('real ROM: PC-E500 zero-delay repeated digits reach a fresh calculator through physical contacts', async ({
