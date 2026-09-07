@@ -602,6 +602,18 @@ impl Sc62015Emulator {
         self.runtime.state.is_halted()
     }
 
+    /// Architectural power state, independent of the host's Pause/Run control.
+    pub fn power_state(&self) -> String {
+        if self.runtime.state.is_off() {
+            "off"
+        } else if self.runtime.state.is_halted() {
+            "halted"
+        } else {
+            "running"
+        }
+        .into()
+    }
+
     pub fn get_reg(&self, name: &str) -> u32 {
         self.runtime.get_reg(name)
     }
@@ -1010,6 +1022,29 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;
+
+    #[wasm_bindgen_test]
+    fn power_observation_distinguishes_off_halt_and_host_execution_modes() {
+        use sc62015_core::llama::state::PowerState;
+        for model in ["pc-e500", "iq-7000"] {
+            let mut emulator = Pce500Emulator::new();
+            emulator
+                .load_rom_with_model(include_bytes!("../testdata/pf1_demo_rom_window.rom"), model)
+                .unwrap();
+            for (state, label) in [
+                (PowerState::Running, "running"),
+                (PowerState::Halted, "halted"),
+                (PowerState::Off, "off"),
+            ] {
+                emulator.runtime.state.set_power_state(state);
+                let count = emulator.instruction_count();
+                assert_eq!(emulator.power_state(), label);
+                emulator.set_execution_mode("turbo").unwrap();
+                assert_eq!(emulator.power_state(), label);
+                assert_eq!(emulator.instruction_count(), count);
+            }
+        }
+    }
 
     #[wasm_bindgen(module = "/tests/stub_dispatch.js")]
     extern "C" {

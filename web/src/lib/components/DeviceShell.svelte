@@ -17,9 +17,6 @@
 </script>
 
 <section class="bench" aria-label={`${model.toUpperCase()} device view`}>
-	<div class="bench-caption">
-		<span>DEVICE VIEW / {model.toUpperCase()}</span><span>REFERENCE-BASED · NOT SCAN-DERIVED</span>
-	</div>
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex (The scroll region needs focus for keyboard panning.) -->
 	<div
 		class="pan"
@@ -48,8 +45,6 @@
 				>
 					<span>IC CARD</span>
 					<div class="card-rule"></div>
-					<strong>REPLACEABLE<br />CARD AREA</strong>
-					<small>Artwork placeholder<br />Not a second display</small>
 				</div>
 				<div class="latch" aria-hidden="true">LOCK<br /><i></i><br />RELEASE<br /><br />EJECT</div>
 			{:else}
@@ -75,48 +70,15 @@
 			/>
 		</div>
 	</div>
-	<div class="bench-foot">
-		<span>Actual emulated LCD · Physical key contacts</span><span
-			><i></i> Dotted keys are not mapped. Smaller screen? Pan the case.</span
-		>
-	</div>
 </section>
 
 <style>
 	.bench {
 		border: 1px solid #35434a;
 		border-radius: 16px;
-		background: radial-gradient(ellipse at 50% 25%, #3a4b51, #202c32 70%);
-		padding: 19px 22px 16px;
+		background: #202c32;
+		padding: 20px;
 		box-shadow: inset 0 1px #ffffff0a;
-	}
-	.bench-caption,
-	.bench-foot {
-		display: flex;
-		justify-content: space-between;
-		gap: 10px;
-		flex-wrap: wrap;
-		color: #b8c6ca;
-		font:
-			10px/1.5 ui-monospace,
-			monospace;
-		letter-spacing: 1px;
-	}
-	.bench-caption {
-		margin-bottom: 26px;
-	}
-	.bench-foot {
-		margin-top: 25px;
-		letter-spacing: 0;
-		color: #acb9bd;
-	}
-	.bench-foot i {
-		display: inline-block;
-		width: 5px;
-		height: 5px;
-		border-radius: 50%;
-		background: #c89260;
-		margin-right: 5px;
 	}
 	.pan {
 		overflow-x: auto;
@@ -298,14 +260,6 @@
 			sans-serif;
 		letter-spacing: 1px;
 	}
-	.card-bay strong {
-		font-size: 1.6cqw;
-		font-weight: 400;
-	}
-	.card-bay small {
-		font-size: 0.95cqw;
-		color: #e5e7de;
-	}
 	.card-rule {
 		height: 1px;
 		width: 70%;
@@ -346,9 +300,6 @@
 	@media (max-width: 700px) {
 		.bench {
 			padding: 14px 10px 12px;
-		}
-		.bench-caption {
-			margin-bottom: 17px;
 		}
 	}
 </style>

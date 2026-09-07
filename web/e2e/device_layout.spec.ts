@@ -4,11 +4,15 @@ for (const model of ['pc-e500', 'iq-7000']) {
 	test(`${model}: device geometry is legible and horizontally pans on narrow screens`, async ({ page }) => {
 		await page.goto('/');
 		await page.getByTestId('advanced-panel').locator('> summary').click();
+		page.on('dialog', (dialog) => dialog.accept());
 		await page.getByTestId('rom-model').selectOption(model);
 		const shell = page.getByTestId('device-shell');
 		await expect(shell).toHaveClass(new RegExp(model));
 		await expect(shell.getByRole('button', { name: 'OFF (unmapped)' })).toBeDisabled();
-		await expect(page.getByText('REFERENCE-BASED · NOT SCAN-DERIVED')).toBeVisible();
+		await page.getByRole('button', { name: 'More options' }).click();
+		await page.getByTestId('accuracy-toggle').click();
+		await expect(page.getByTestId('accuracy-panel')).toContainText('not measured or scan-derived');
+		await page.getByRole('button', { name: 'Close accuracy notes' }).click();
 		const screen = await page.locator('.lcd-window').boundingBox();
 		const a = await page.getByTestId('vk-a').boundingBox();
 		expect(screen).not.toBeNull();

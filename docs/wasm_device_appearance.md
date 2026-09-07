@@ -11,7 +11,7 @@ or the unresolved input findings in [Rust input correctness](rust_input_correctn
 | --- | --- |
 | Both devices used the same generic six-column key grid | IQ book-style layout with ABCDEF rows and a lower numeric pad; PC wide case with QWERTY, PF, scientific and numeric groups |
 | The disconnected LCD and keys did not resemble a device | Actual framebuffer sits in a case-mounted viewport, with the IQ fixed-segment area still part of the emulator's image |
-| Long timing/build paragraphs displaced the device below the first screen | Compact host toolbar; session/timing disclosure below the case; errors remain above the case |
+| Long timing/build paragraphs displaced the device below the first screen | Compact host toolbar; session details in Advanced and on-demand accuracy panel; actionable errors remain visible |
 | Many physical keycaps were missing from the visual surface | Show reference-photo keycaps, but disable unqualified contacts and mark them with an amber dot and explanatory accessible name/title |
 | Generic key reflow lost physical relationships | Preserve the reference layout, allow horizontal panning on narrow screens instead of squeezing all keys into tiny targets |
 | No clear upgrade path to scanned cases | Versioned geometry, stable semantic key IDs, and presentation-only shell components |
@@ -44,8 +44,9 @@ legends and regional/model revisions still need comparison to our actual units.
   preserving aspect ratio. No text replacement, color filter or synthetic app
   screen. LCD-only proof captures and full-device proof captures are distinct.
 
-The IQ card bay is explicitly labelled as an artwork placeholder, not a second
-display or a claim about which card is emulated. It must remain replaceable;
+The IQ card bay's accessible label and on-demand accuracy panel identify it as
+an artwork placeholder, not a second display or a claim about which card is
+emulated. The visible bay is uncluttered. It must remain replaceable;
 scanning a particular inserted card must not bake that card into the base case.
 
 Unmapped case buttons (including OFF and currently unqualified scientific or
@@ -104,6 +105,11 @@ mesh and texture budgets only after testing on the intended devices; full
 resolution source scans should not become mandatory runtime downloads.
 
 ## Acceptance and remaining work
+
+The subsequent [device-first UI delivery](wasm_device_first_ui.md) removes bench
+captions and footnotes from the normal surface while retaining these stable
+geometries. It records current verification and session/accuracy boundaries.
+The counts below describe the original appearance milestone only.
 
 Local validation: 116 frontend unit/integration tests, 38 bounded Chromium
 regressions and six selected private-ROM browser checks passed; Svelte reported

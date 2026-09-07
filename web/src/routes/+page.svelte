@@ -60,8 +60,10 @@
 	let debugState: any = null;
 	let lastError: string | null = null;
 	let romSource: string | null = null;
+	let installedRom: { bytes: Uint8Array; model: RomModel; source: string | null } | null = null;
 	let pcReg: number | null = null;
 	let halted = false;
+	let powerState = 'unknown';
 	let instructionCount: string | null = null;
 	let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 	let romLoaded = false;
@@ -81,6 +83,7 @@
 	let physicalHighlights = new Set<InputContact>();
 	let deliveredContacts = new Set<InputContact>();
 	let shortcutsOpen = false;
+	let accuracyOpen = false;
 	let lastCapture: { filename: string; metadata: object } | null = null;
 	let exportingLcd = false;
 	let typingStatus = { pending: 0, blocked: false, capacity: 128 };
@@ -168,6 +171,7 @@
 			debugState = frame?.debugState ?? null;
 			pcReg = frame?.pc ?? pcReg;
 			halted = Boolean(frame?.halted);
+			powerState = frame?.powerState ?? 'unknown';
 			instructionCount = frame?.instructionCount ?? instructionCount;
 			// Frames are observations, not control acknowledgements. An older
 			// in-flight frame must never revert an acknowledged mode selection.
@@ -203,7 +207,7 @@
 	}
 
 	function failWorker(message: string) {
-		lastError = `${message}. Reload the page to replace the worker; unsaved emulator state will be lost.`;
+		lastError = `${message}. Use Reset machine to replace the worker; unsaved emulator state will be lost.`;
 		workerHealth = 'faulted';
 		running = false;
 		romLoaded = false;
@@ -225,11 +229,13 @@
 	async function ensureWorker(): Promise<void> {
 		if (!canUseWorker || worker) return;
 		worker = new Worker(new URL('../lib/emulator/pce500.worker.ts', import.meta.url), { type: 'module' });
+		const thisWorker = worker;
 		workerRequests = new WorkerRequests(workerPost, (error) => {
 			lastError = error.message;
 			workerHealth = 'unresponsive';
 		});
 		worker.onmessage = async (event: MessageEvent<any>) => {
+			if (worker !== thisWorker) return;
 			const data = event.data;
 			if (!data) return;
 			if (data.type === 'reply') {
@@ -243,7 +249,7 @@
 				} catch (error) {
 					lastError = `Display update failed: ${String(error)}`;
 				} finally {
-					if (typeof data.sequence === 'number')
+					if (worker === thisWorker && typeof data.sequence === 'number')
 						workerPost({ id: workerNextId++, type: 'frame_consumed', sequence: data.sequence });
 				}
 				return;
@@ -271,11 +277,14 @@
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
 		};
 		worker.onerror = (event) => {
+			if (worker !== thisWorker) return;
 			failWorker(
 				`Worker crashed: ${event.message || 'failed to load or execute worker'} (${event.filename || 'unknown source'})`,
 			);
 		};
-		worker.onmessageerror = () => failWorker('Worker message could not be decoded');
+		worker.onmessageerror = () => {
+			if (worker === thisWorker) failWorker('Worker message could not be decoded');
+		};
 		pushWorkerOptions();
 	}
 
@@ -425,9 +434,10 @@
 		down: boolean,
 		owner = String(code),
 		cancel = false,
+		holdOverride?: number,
 	) {
 		const generation = romLoadGeneration;
-		const minimumHold = source === 'virtual' && assistedTaps ? 40_000 : 0;
+		const minimumHold = holdOverride ?? (source === 'virtual' && assistedTaps ? 40_000 : 0);
 		const buffered = source === 'physical' && hostKeyboardMode === 'symbols' && code !== 'on';
 		const label = code === 'on' ? 'ON' : hex(code, 2);
 		if (down && (!romLoaded || workerHealth !== 'ready')) return;
@@ -711,6 +721,7 @@
 	}
 
 	async function installRom(bytes: Uint8Array, model: RomModel, source: string | null, generation: number) {
+		const originalBytes = bytes.slice();
 		if (generation !== romLoadGeneration) return;
 		if (!(await stop())) throw new Error('Pause was not acknowledged; ROM was not replaced');
 		if (generation !== romLoadGeneration) return;
@@ -728,6 +739,7 @@
 		}
 		if (generation !== romLoadGeneration) return;
 		romSource = source;
+		installedRom = { bytes: originalBytes, model, source };
 		romLoaded = true;
 		lastError = null;
 		if (callStackOpen) void ensureSymbols();
@@ -737,6 +749,7 @@
 		if (worker) return;
 		if (!emulator) return;
 		updateDeliveredContacts(emulator.input_contacts());
+		powerState = emulator.power_state();
 		typingStatus = fallbackInputs.typingStatus();
 		pasteStatus = fallbackInputs.pasteStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
@@ -1031,6 +1044,15 @@
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
+		if (
+			installedRom &&
+			!window.confirm(
+				'Replace the current ROM and discard this session? Browser sessions cannot currently be restored.',
+			)
+		) {
+			input.value = '';
+			return;
+		}
 		const generation = ++romLoadGeneration;
 		const model = romModel;
 		loadingRom = true;
@@ -1042,6 +1064,107 @@
 			await installRom(bytes, model, file.name, generation);
 		} catch (err) {
 			if (generation === romLoadGeneration) lastError = String(err);
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
+		}
+	}
+
+	function selectModel(event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const model = normalizeRomModel(select.value);
+		if (!model || model === romModel) return;
+		if (
+			installedRom &&
+			!window.confirm('Change device model and discard this session? Browser sessions cannot currently be restored.')
+		) {
+			select.value = romModel;
+			return;
+		}
+		romModelWasPersisted = true;
+		$romModelStore = model;
+		pasteOpen = false;
+		pasteText = '';
+		void tryAutoLoadRom(true);
+	}
+
+	function diagnosticReport() {
+		return safeJson({
+			format: 'sc62015-ui-diagnostics-v1',
+			model: installedRom?.model ?? romModel,
+			romSource,
+			build: buildInfo,
+			error: lastError,
+			workerHealth,
+			running,
+			powerState,
+			lastObserved: { pc: pcReg, instructionCount, regs, debugState, typingStatus, pasteStatus, pacingStatus },
+			limitations:
+				'Diagnostic observations only, possibly preceding the fault. Not a restorable session. No complete RAM/peripheral/RTC snapshot is exported.',
+		});
+	}
+
+	async function copyDiagnostics() {
+		try {
+			await navigator.clipboard.writeText(diagnosticReport());
+		} catch {
+			keyboardNotice = 'Clipboard unavailable. Use Download diagnostics instead.';
+		}
+	}
+
+	function exportDiagnostics() {
+		downloadBlob(
+			new Blob([diagnosticReport()], { type: 'application/json' }),
+			`${installedRom?.model ?? romModel}-diagnostics.json`,
+		);
+	}
+
+	async function resetSession() {
+		if (!installedRom || loadingRom) return;
+		if (
+			!window.confirm(
+				'Reset the machine and discard all session changes? This reloads the last successfully loaded ROM, not a saved session.',
+			)
+		)
+			return;
+		const savedRom = installedRom;
+		if (workerHealth === 'ready' && !(await stop())) return;
+		if (!worker && (stepBusy || functionRunnerBusy)) {
+			lastError = 'Wait for the cancelled operation to finish before resetting.';
+			return;
+		}
+		const generation = ++romLoadGeneration;
+		workerRequests?.fail(new Error('Machine reset by user'));
+		worker?.terminate();
+		worker = null;
+		workerRequests = null;
+		if (emulator) {
+			fallbackInputs.clear();
+			emulator.free?.();
+		}
+		emulator = null;
+		emulatorReady = null;
+		workerHealth = 'ready';
+		running = false;
+		stepBusy = false;
+		functionRunnerBusy = false;
+		controlPending = null;
+		executionMode = 'interactive';
+		typingCatchUp = false;
+		romLoaded = false;
+		loadingRom = true;
+		pasteOpen = false;
+		pasteText = '';
+		typingStatus = { pending: 0, blocked: false, capacity: 128 };
+		pasteStatus = { pending: 0, total: 0 };
+		deliveredContacts = new Set();
+		physicalHeldCodes.clear();
+		physicalHighlights = new Set();
+		$romModelStore = savedRom.model;
+		try {
+			await ensureWorker();
+			await installRom(savedRom.bytes.slice(), savedRom.model, savedRom.source, generation);
+		} catch (error) {
+			if (generation === romLoadGeneration) lastError = `Reset failed: ${String(error)}`;
 		} finally {
 			if (generation === romLoadGeneration) loadingRom = false;
 		}
@@ -1232,8 +1355,8 @@
 			<button
 				disabled={!romLoaded || workerHealth !== 'ready'}
 				on:click={() => {
-					virtualPress('on', 'toolbar-on');
-					virtualRelease('on', 'toolbar-on');
+					setContact('virtual', 'on', true, 'toolbar-on', false, 40_000);
+					setContact('virtual', 'on', false, 'toolbar-on', false, 40_000);
 				}}
 				title="Press the device ON key; does not reset or toggle emulator pause"
 				data-testid="power-on">Power / ON</button
@@ -1274,6 +1397,16 @@
 			</label>
 			<button on:click={focusDeviceKeyboard} disabled={!romLoaded}>Keyboard focus</button>
 			<button data-testid="open-paste" on:click={() => openPaste()} disabled={!romLoaded}>Paste text…</button>
+			<button
+				data-testid="accuracy-toggle"
+				on:click={() => {
+					accuracyOpen = !accuracyOpen;
+					menuOpen = false;
+				}}>Accuracy & controls</button
+			>
+			<button data-testid="reset-session" on:click={resetSession} disabled={!installedRom || loadingRom}
+				>Reset machine…</button
+			>
 			<button
 				data-testid="export-lcd"
 				on:click={exportLcd}
@@ -1320,18 +1453,54 @@
 			</p>
 		</section>
 	{/if}
-	{#if !romLoaded || !running || controlPending || functionRunnerBusy || stepBusy || workerHealth !== 'ready'}
+	{#if !romLoaded || !running || controlPending || functionRunnerBusy || stepBusy || workerHealth !== 'ready' || powerState === 'off'}
 		<p class="hint" role="status" data-testid="device-status">
-			{loadingRom
-				? 'Loading ROM…'
-				: !romLoaded
-					? 'No ROM loaded — open Advanced to select a ROM.'
-					: !running && workerHealth === 'ready'
-						? 'Paused — device time is frozen. Resume to use the device.'
-						: statusLabel}
+			{workerHealth !== 'ready'
+				? statusLabel
+				: controlPending === 'mode'
+					? 'Changing execution mode…'
+					: controlPending || functionRunnerBusy || stepBusy
+						? statusLabel
+						: loadingRom
+							? 'Loading ROM…'
+							: !romLoaded
+								? 'No ROM loaded — open Advanced to select a ROM.'
+								: !running && workerHealth === 'ready'
+									? `Paused${powerState === 'off' ? ' (device OFF)' : ''} — device time is frozen. Resume to use the device.`
+									: powerState === 'off' && running
+										? `Device OFF — emulator running. Power / ON wakes the device.${romModel === 'iq-7000' ? ' Emulated RTC time still advances.' : ''}`
+										: statusLabel}
 		</p>
 	{/if}
-	{#if lastError}<p class="error" role="alert">{lastError}</p>{/if}
+	{#if lastError}
+		<section class="fault-actions" aria-label="Emulator problem">
+			<p class="error" role="alert">{lastError}</p>
+			<button on:click={copyDiagnostics}>Copy diagnostics</button>
+			<button data-testid="download-diagnostics" on:click={exportDiagnostics}>Download diagnostics</button>
+			<button on:click={resetSession} disabled={!installedRom || loadingRom}>Reset machine…</button>
+			<p class="hint">Diagnostics are observations, not a restorable session. Reset discards unsaved device data.</p>
+		</section>
+	{/if}
+	{#if accuracyOpen}
+		<section class="quick-options" aria-label="Accuracy and controls" data-testid="accuracy-panel">
+			<strong>Accuracy & controls</strong><button on:click={() => (accuracyOpen = false)}>Close accuracy notes</button>
+			<p class="hint">
+				Reference-based 2D case and key proportions, not measured or scan-derived. Card artwork is a replaceable
+				placeholder, not a second display. Dotted, disabled keys have no qualified input mapping. On narrow screens, pan
+				the case or choose LCD only.
+			</p>
+			<p class="hint">
+				LCD pixels come directly from emulator display state. IQ fixed segments use LCD state; BATT, CARD, beep, alarm
+				and arrows remain provisional physical assignments. SHIFT/CAPS mapping has stronger ROM evidence. No screenshot
+				text is reconstructed or patched.
+			</p>
+			<p class="hint">
+				Device pace is not hardware-calibrated. IQ timing uses a provisional PC-compatible timebase. Responsive
+				accelerates RTC time too; Pause freezes it. OFF is a device state, not a pause. Full session restoration is
+				unavailable; see Advanced → Session safety & recovery.
+			</p>
+		</section>
+	{/if}
 	{#if pasteOpen}
 		<section class="paste-preview" aria-label="Paste preview" data-testid="paste-preview">
 			<label for="paste-editor">Text to type through device keys (up to {MAX_PASTE_CHARACTERS} characters)</label>
@@ -1431,6 +1600,19 @@
 	</div>
 	<details class="advanced" bind:open={advancedOpen} data-testid="advanced-panel">
 		<summary>Advanced</summary>
+		<details data-testid="session-safety">
+			<summary>Session safety & recovery</summary>
+			<p class="hint">
+				Browser sessions are held in memory only. Reload, reset or ROM/model replacement loses device RAM changes.
+				Complete WASM snapshot restoration is not available: native snapshot routines are not exposed here, and they
+				reject active RTC/peripheral/serial state they cannot represent. We do not silently save a partial snapshot.
+			</p>
+			<p class="hint">
+				LCD PNGs and diagnostics can preserve evidence, not a resumable machine. Device OFF is not emulator Pause: the
+				IQ RTC continues when the emulator runs, even with the device OFF. Pausing freezes all emulated time.
+			</p>
+			<button on:click={exportDiagnostics}>Download diagnostic observations</button>
+		</details>
 		<header class="page-header">
 			<div>
 				<p class="eyebrow">SC62015 / RUST + WASM</p>
@@ -1439,14 +1621,7 @@
 			<div class="source-controls">
 				<label>
 					ROM preset:
-					<select
-						bind:value={$romModelStore}
-						on:change={() => {
-							romModelWasPersisted = true;
-							void tryAutoLoadRom(true);
-						}}
-						data-testid="rom-model"
-					>
+					<select value={$romModelStore} on:change={selectModel} data-testid="rom-model">
 						<option value="iq-7000">IQ-7000</option>
 						<option value="pc-e500">PC-E500</option>
 					</select>

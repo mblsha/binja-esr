@@ -114,6 +114,7 @@ test('Pause stays pending until the actual worker acknowledgement arrives', asyn
 	});
 	await page.getByRole('button', { name: 'Stop', exact: true }).click();
 	await expect(page.getByTestId('emu-status')).toContainText('PAUSE REQUESTED');
+	await expect(page.getByTestId('device-status')).toContainText('PAUSE REQUESTED');
 	await expect(run).toBeDisabled();
 	await page.waitForFunction(() => (window as any).__controlTest.release !== null);
 	await page.evaluate(() => {
@@ -133,6 +134,7 @@ test('Stop cancels a huge Function Runner step and the machine remains usable', 
 	await page.getByTestId('fnr-editor').fill('await e.step(4_000_000_000);');
 	await page.getByTestId('fnr-run').click();
 	await expect(page.getByTestId('emu-status')).toContainText('EXECUTING SCRIPT');
+	await expect(page.getByTestId('device-status')).toContainText('EXECUTING SCRIPT');
 	await page.getByRole('button', { name: 'Stop', exact: true }).click();
 	await expect(page.getByTestId('emu-status')).toContainText(/STOPPED|HALTED/);
 	await expect(page.getByTestId('fnr-error')).toContainText('Execution cancelled');

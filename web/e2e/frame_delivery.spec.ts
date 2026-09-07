@@ -102,6 +102,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 		expect((await rpc(page, 'input_state')).rust.on).toBe(true);
 		await rpc(page, 'physical_key', { owner: 'display-test', code: 'on', down: false });
 		const replacement = model === 'pc-e500' ? 'iq-7000' : 'pc-e500';
+		page.once('dialog', (dialog) => dialog.accept());
 		await page.getByTestId('rom-model').selectOption(replacement);
 		await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 		const generation = (await rpc(page, 'input_state')).generation;

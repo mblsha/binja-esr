@@ -90,6 +90,7 @@ type Frame = {
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
+	powerState: string;
 	buildInfo: { version: string; git_commit: string; build_timestamp: string } | null;
 	lcdText: string[] | null;
 	regs: any | null;
@@ -509,6 +510,7 @@ function captureFrame(forceText: boolean): Frame {
 		lcdPixels: pixelsCopy.buffer,
 		paste: inputs.pasteStatus(),
 		inputContacts: emulator.input_contacts(),
+		powerState: emulator.power_state(),
 		typing: inputs.typingStatus(),
 		pacing: emulator.pacing_status(),
 		model: romModel,

@@ -13,6 +13,7 @@ async function open(page: Page, model: string, realRom = false) {
 		window.Worker = class extends NativeWorker {
 			constructor(url: string | URL, options?: WorkerOptions) {
 				super(url, options);
+				(window as any).__inputWorker = this;
 				let nextId = 1_000_000;
 				// Inspect the actual compiled machine worker, never a fake emulator.
 				(window as any).__inputRequest = (type: string, payload: any = {}) =>
@@ -43,6 +44,77 @@ async function open(page: Page, model: string, realRom = false) {
 const request = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__inputRequest(type, payload), { type, payload });
 const contacts = (page: Page) => request(page, 'input_state').then((state) => state.rust);
+
+test('cancelled model/file replacement preserves the machine; confirmed reset replaces it', async ({ page }) => {
+	await open(page, 'iq-7000');
+	const before = await request(page, 'input_state');
+	page.once('dialog', (dialog) => dialog.dismiss());
+	await page.getByTestId('rom-model').selectOption('pc-e500');
+	await expect(page.getByTestId('rom-model')).toHaveValue('iq-7000');
+	expect((await request(page, 'input_state')).generation).toBe(before.generation);
+	page.once('dialog', (dialog) => dialog.dismiss());
+	await page
+		.locator('input[type=file]')
+		.setInputFiles(resolve(process.cwd(), 'emulator-wasm/testdata/pf1_demo_rom_window.rom'));
+	expect((await request(page, 'input_state')).generation).toBe(before.generation);
+	await request(page, 'physical_key', { code: 0x1c, down: true, owner: 'test' });
+	await page.getByRole('button', { name: 'More options' }).click();
+	page.once('dialog', (dialog) => dialog.dismiss());
+	await page.getByTestId('reset-session').click();
+	expect((await contacts(page)).matrix).toEqual([0x1c]);
+	page.once('dialog', (dialog) => dialog.accept());
+	await page.getByTestId('reset-session').click();
+	await expect(page.getByTestId('pause-resume')).toBeEnabled();
+	expect((await request(page, 'input_state')).generation).toBeGreaterThan(before.generation);
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await expect(page.getByTestId('device-status')).toContainText('Paused');
+});
+
+test('a worker failure offers honest diagnostic export and confirmed recovery without page reload', async ({
+	page,
+}) => {
+	await open(page, 'pc-e500');
+	await page.evaluate(() =>
+		(window as any).__inputWorker.dispatchEvent(new ErrorEvent('error', { message: 'Injected transport failure' })),
+	);
+	await expect(page.getByRole('alert')).toContainText('Injected transport failure');
+	const download = page.waitForEvent('download');
+	await page.getByTestId('download-diagnostics').click();
+	const report = JSON.parse(await readFile((await (await download).path())!, 'utf8'));
+	expect(report.error).toContain('Injected transport failure');
+	expect(report.limitations).toContain('Not a restorable session');
+	page.once('dialog', (dialog) => dialog.accept());
+	await page.getByRole('region', { name: 'Emulator problem' }).getByRole('button', { name: 'Reset machine…' }).click();
+	await expect(page.getByTestId('pause-resume')).toBeEnabled();
+	await expect(page.getByRole('alert')).toHaveCount(0);
+	await page.getByRole('button', { name: 'Step 1k' }).click();
+	await expect(page.getByRole('button', { name: 'Step 1k' })).toBeEnabled();
+});
+
+test('device OFF remains distinct from Pause, and toolbar ON retains its wake hold in raw tap mode', async ({
+	page,
+}) => {
+	await open(page, 'iq-7000');
+	// Deliberate OFF instruction fixture in writable RAM, not an app screenshot claim.
+	await script(
+		page,
+		`await e.memory.write(0xB8000, 1, 0xDF); await e.call(0xB8000, { S: 0xB9003, IMR: 0 }, { maxInstructions: 1 });`,
+	);
+	await expect(page.getByTestId('device-status')).toContainText('Paused (device OFF)');
+	const before = await request(page, 'pacing_status');
+	await request(page, 'step', { instructions: 1000 });
+	const after = await request(page, 'pacing_status');
+	expect(BigInt(after.elapsed_timing_units)).toBeGreaterThan(BigInt(before.elapsed_timing_units));
+	await expect(page.getByTestId('device-status')).toContainText('Paused (device OFF)');
+	await page.getByTestId('pause-resume').click();
+	await expect(page.getByTestId('device-status')).toContainText('Device OFF — emulator running');
+	await page.getByTestId('pause-resume').click();
+	await page.getByTestId('assisted-taps-toggle').uncheck();
+	await page.getByTestId('power-on').click();
+	expect((await contacts(page)).on).toBe(true);
+	await request(page, 'release_inputs', { source: 'virtual' });
+	expect((await contacts(page)).on).toBe(false);
+});
 
 async function previewPaste(page: Page, text: string) {
 	await page.getByRole('button', { name: 'More options' }).click();

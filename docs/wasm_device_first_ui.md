@@ -1,7 +1,7 @@
 # Device-first WASM UI
 
-Work in progress, 2026-09-07. This document tracks implementation against the
-full UI goal; it is not a claim that all milestones have passed validation.
+Completed bounded UI deliverable, 2026-09-07. Hardware-dependent accuracy and
+unsupported snapshot restoration remain explicitly outside the verified claims.
 
 ## Interaction contract
 
@@ -25,14 +25,52 @@ full UI goal; it is not a claim that all milestones have passed validation.
 - [x] Move existing bench controls into a collapsed Advanced section.
 - [x] Add a compact toolbar and menu with pacing presets and Device/LCD-only views.
 - [x] Default both host paths to non-accelerated Device pace.
-- [ ] Complete power-state reporting and priority ON interaction tests.
+- [x] Complete power-state reporting and priority ON interaction tests.
 - [x] Focus-on-device, delivered-contact feedback, shortcut overlay.
 - [x] Qualified, cancellable paste with explicit unsupported-character handling.
-- [ ] Destructive-action confirmation, supported restoration/export and fault actions.
+- [x] Destructive-action confirmation, snapshot-scope disclosure, observation export and fault actions.
 - [x] Native-resolution LCD screenshot export with optional provenance metadata.
-- [ ] Refine visible shell clutter and consolidate accuracy disclosures.
-- [ ] Full bounded browser regression and real-ROM checks for both models.
-- [ ] Visual review and coherent public/private commits.
+- [x] Refine visible shell clutter and consolidate accuracy disclosures.
+- [x] Full bounded browser regression and real-ROM checks for both models.
+- [x] Visual review and coherent public/private commits.
+
+## Final acceptance and limits
+
+Final validation: 139 frontend tests, 27 WASM tests, 54 bounded Chromium checks
+(13 opt-in cases skipped), and 12 selected private-ROM browser checks passed.
+Svelte/TypeScript reported zero errors/warnings; formatting and production build
+passed. Both final browser runs recorded `passed` with no failed tests. Real-ROM
+full-page IQ MEMO and PC calculator captures were visually inspected.
+
+| Requirement | Verification |
+| --- | --- |
+| Minimal toolbar, Advanced, Device/LCD-only, shortcut and accuracy panels | Device layout and input-ownership browser tests |
+| Device OFF distinct from host Pause; real ON input | Rust power-state test and browser OFF fixture, including explicit paused stepping and ON hold |
+| Focus, delivered contacts, cancellable qualified paste | Host-input unit tests, browser ownership tests, real-ROM MEMO and calculator input |
+| Nominal default and disclosed Responsive acceleration | Pacing/input tests and real-ROM repeated-character checks with acceleration off/on |
+| Actual LCD/annunciator export and matching metadata | Decoded downloaded PNG equality for both models; no DOM or text reconstruction |
+| Reset/ROM/model protection and fault recovery | Cancellation preserves the session; confirmed reset replaces the worker; injected transport fault exports diagnostics and recovers |
+| Snapshot scope | Explicit session-safety disclosure; no unsupported restoration or hidden partial autosave |
+
+Power / ON submits the real contact with a minimum assisted hold even when raw
+virtual taps are selected. It does not implicitly resume the host or reset the
+machine. Fault recovery reloads the last successfully installed ROM in a fresh
+worker only after confirmation; old-worker messages cannot mutate the new session.
+
+**Full browser session restoration is not implemented.** Native Core snapshot
+save/load is excluded from WASM, and its snapshot guards reject unrepresented
+runtime/peripheral state, including the IQ RTC profile. The browser's debug
+`snapshot` is not a complete backup. Current browser data is memory-only; reload,
+reset or replacement can lose it. Diagnostics explicitly contain last-observed
+state, potentially preceding a fault, not restorable RAM/peripheral/RTC state.
+
+Remaining follow-ups require separate scope/evidence: measured/photo-scanned
+cases, qualification of disabled physical keys and provisional annunciator bits,
+hardware pacing calibration (IQ still uses a compatibility fallback), full
+snapshot serialization/restoration, and broader character/IME composition.
+Paste preserves actual CAPS/application semantics and rejects unsupported
+characters instead of silently inserting or dropping them. This UI work does
+not resolve existing ROM/input or silicon-correctness gaps by changing artwork.
 
 The UI-structure regression uses a labelled synthetic ROM, not app proof. The
 real-ROM checks must separately exercise actual application input and capture
@@ -49,8 +87,8 @@ external evidence gaps, not grounds to fabricate a more complete device.
   IQ MEMO edit/store/reopen, CAPS/SHIFT annunciators, cursor editing and live
   zero-delay repeated-character typing with acceleration both off and on.
 
-These results cover this first layout/preset change, not the unfinished
-milestones above. Decoded pixel equality is tested rather than equality of PNG
+These results cover this first layout/preset change, not the later
+milestones below. Decoded pixel equality is tested rather than equality of PNG
 encoder output, which can differ while representing identical RGBA pixels.
 
 ## Input feedback and capture milestone
