@@ -16,6 +16,7 @@ type DebugOptions = {
 	lcdTextOpen: boolean;
 	debugStateOpen: boolean;
 	keyboardDebugOpen: boolean;
+	lcdChipsOpen: boolean;
 };
 
 type WorkerRequest =
@@ -80,13 +81,13 @@ type Frame = {
 	pacing: PacingStatus;
 	model: RomModel;
 	generation: number;
-	lcdPixels: ArrayBuffer;
+	lcdPixels?: ArrayBuffer;
 	lcdAnnunciatorBytes: ArrayBuffer;
-	lcdChipPixels: ArrayBuffer;
-	lcdCols: number;
-	lcdPixelScale: number;
-	lcdRows: number;
-	lcdKind: LcdKind;
+	lcdChipPixels?: ArrayBuffer;
+	lcdCols?: number;
+	lcdPixelScale?: number;
+	lcdRows?: number;
+	lcdKind?: LcdKind;
 	pc: number | null;
 	instructionCount: string | null;
 	halted: boolean;
@@ -128,6 +129,7 @@ let debugOptions: DebugOptions = {
 	lcdTextOpen: false,
 	debugStateOpen: false,
 	keyboardDebugOpen: false,
+	lcdChipsOpen: false,
 };
 
 let runLoopId = 0;
@@ -452,18 +454,16 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 	}
 }
 
-function captureFrame(forceText: boolean): Frame {
-	const geometry = emulator.lcd_capture();
-	const lcdCols = typeof geometry?.cols === 'number' ? geometry.cols : 240;
-	const lcdRows = typeof geometry?.rows === 'number' ? geometry.rows : 32;
-	const lcdKind = normalizeLcdKind(geometry?.kind) ?? 'unknown';
-
-	const pixels = geometry.pixels;
-	const pixelsCopy = new Uint8Array(pixels);
+function captureFrame(forceText: boolean, forceDisplay = false): Frame {
+	const geometry = emulator.lcd_capture_if_changed(forceDisplay);
+	// Rust returns an owned JS Uint8Array, safe to transfer without another copy.
+	const pixels = geometry?.pixels as Uint8Array | undefined;
+	const lcdCols = geometry?.cols;
+	const lcdRows = geometry?.rows;
+	const lcdKind = normalizeLcdKind(geometry?.kind) ?? undefined;
 	const annunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? new Uint8Array(4);
 	const annunciatorBytesCopy = new Uint8Array(annunciatorBytes);
-	const chipPixels = emulator.lcd_chip_pixels();
-	const chipPixelsCopy = new Uint8Array(chipPixels);
+	const chipPixels = debugOptions.lcdChipsOpen ? emulator.lcd_chip_pixels() : undefined;
 	const nowMs = performance.now();
 
 	const pc = (() => {
@@ -507,7 +507,7 @@ function captureFrame(forceText: boolean): Frame {
 
 	const kb = snapshotKeyboard();
 	return {
-		lcdPixels: pixelsCopy.buffer,
+		lcdPixels: pixels?.buffer as ArrayBuffer | undefined,
 		paste: inputs.pasteStatus(),
 		inputContacts: emulator.input_contacts(),
 		powerState: emulator.power_state(),
@@ -516,9 +516,9 @@ function captureFrame(forceText: boolean): Frame {
 		model: romModel,
 		generation: machineGeneration,
 		lcdAnnunciatorBytes: annunciatorBytesCopy.buffer,
-		lcdChipPixels: chipPixelsCopy.buffer,
+		lcdChipPixels: chipPixels?.buffer,
 		lcdCols,
-		lcdPixelScale: geometry.pixel_scale,
+		lcdPixelScale: geometry?.pixel_scale,
 		lcdRows,
 		lcdKind,
 		pc,
@@ -536,17 +536,28 @@ function captureFrame(forceText: boolean): Frame {
 
 const frames = new LatestFrame<Frame>(
 	(frame, sequence) => {
-		(self as any).postMessage({ type: 'frame', frame, sequence }, [
-			frame.lcdPixels,
-			frame.lcdAnnunciatorBytes,
-			frame.lcdChipPixels,
-		]);
+		(self as any).postMessage(
+			{ type: 'frame', frame, sequence },
+			[frame.lcdPixels, frame.lcdAnnunciatorBytes, frame.lcdChipPixels].filter(
+				(buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer,
+			),
+		);
 	},
-	(error) => self.postMessage({ type: 'render_error', error: String(error) }),
+	(error) => {
+		forceDisplayPending = true; // A failed transfer must not consume the pixel cache.
+		self.postMessage({ type: 'render_error', error: String(error) });
+	},
 );
 
-function requestFrame(forceText: boolean) {
-	frames.request(() => captureFrame(forceText));
+let forceDisplayPending = false;
+function requestFrame(forceText: boolean, forceDisplay = false) {
+	// A newer coalesced refresh must not erase an explicit capture request.
+	forceDisplayPending ||= forceDisplay;
+	frames.request(() => {
+		const frame = captureFrame(forceText, forceDisplayPending);
+		forceDisplayPending = false;
+		return frame;
+	});
 }
 
 function pumpEmulator(id: number) {
@@ -589,6 +600,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (typeof msg.typingCatchUp === 'boolean') typingCatchUp = msg.typingCatchUp;
 				if (typeof msg.targetFps === 'number') targetFps = msg.targetFps;
 				if (msg.debug) debugOptions = { ...debugOptions, ...msg.debug };
+				if (emulator?.has_rom()) requestFrame(true);
 				replyOk(msg.id);
 				return;
 			}
@@ -629,7 +641,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			}
 			case 'snapshot': {
 				await ensureEmulator();
-				requestFrame(true);
+				requestFrame(true, true);
 				replyOk(msg.id);
 				return;
 			}

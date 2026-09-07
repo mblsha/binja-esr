@@ -307,6 +307,38 @@ pub struct Sc62015Emulator {
     iq7000_rtc_seed: Option<String>,
     call_session: Option<function_call::FunctionCallSession>,
     next_call_id: u32,
+    last_lcd_source: Option<LcdSource>,
+}
+
+/// Compare the exact logical display, not a hash or a write-hook generation.
+/// This also catches debugger writes and controller changes that affect pixels.
+#[derive(PartialEq)]
+struct LcdSource {
+    kind: LcdKind,
+    matrix: Vec<Vec<u8>>,
+    annunciators: Option<Iq7000Annunciators>,
+}
+
+struct PixelBytes<'a>(&'a [u8]);
+
+impl Serialize for PixelBytes<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // serde-wasm-bindgen copies serialize_bytes into an owned Uint8Array,
+        // unlike Vec's per-element JS array serialization. Never expose a view
+        // into growable WASM memory to the host or transfer that memory itself.
+        serializer.serialize_bytes(self.0)
+    }
+}
+
+#[derive(Serialize)]
+struct WasmLcdCapture<'a> {
+    kind: LcdKind,
+    cols: usize,
+    rows: usize,
+    pixel_format: &'static str,
+    pixel_scale: usize,
+    pixels: PixelBytes<'a>,
+    annunciators: &'a Option<Iq7000Annunciators>,
 }
 
 impl Default for Sc62015Emulator {
@@ -328,6 +360,7 @@ impl Sc62015Emulator {
             iq7000_rtc_seed: None,
             call_session: None,
             next_call_id: 0,
+            last_lcd_source: None,
         }
     }
 
@@ -525,6 +558,7 @@ impl Sc62015Emulator {
         let rom = self.rom_image.clone();
         self.runtime = CoreRuntime::for_model(self.model, &rom)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.last_lcd_source = None;
         self.pacer = Pacer::for_model(self.model, self.pacer.mode());
         if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
             self.runtime
@@ -884,7 +918,42 @@ impl Sc62015Emulator {
         } else {
             LcdCapture::read(self.runtime.lcd.as_deref(), &self.runtime.memory)
         };
-        serde_wasm_bindgen::to_value(&capture).map_err(|e| JsValue::from_str(&e.to_string()))
+        serde_wasm_bindgen::to_value(&WasmLcdCapture {
+            kind: capture.kind,
+            cols: capture.cols,
+            rows: capture.rows,
+            pixel_format: capture.pixel_format,
+            pixel_scale: capture.pixel_scale,
+            pixels: PixelBytes(&capture.pixels),
+            annunciators: &capture.annunciators,
+        })
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Return null when the logical display has not changed since this polling
+    /// API last returned pixels. Explicit lcd_capture calls are independent.
+    /// This read-only observation does not consume bus reads or advance time.
+    pub fn lcd_capture_if_changed(&mut self, force: bool) -> Result<JsValue, JsValue> {
+        let kind = self
+            .runtime
+            .lcd
+            .as_deref()
+            .map_or(LcdKind::Unknown, |lcd| lcd.kind());
+        let source = LcdSource {
+            kind,
+            matrix: self.runtime.lcd.as_deref().map_or_else(
+                || vec![vec![0; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS],
+                sc62015_core::lcd_capture::lcd_matrix_pixels,
+            ),
+            annunciators: (kind == LcdKind::Iq7000Vram)
+                .then(|| Iq7000Annunciators::read(&self.runtime.memory)),
+        };
+        if !force && self.last_lcd_source.as_ref() == Some(&source) {
+            return Ok(JsValue::NULL);
+        }
+        let capture = self.lcd_capture(None)?;
+        self.last_lcd_source = Some(source);
+        Ok(capture)
     }
 
     /// Four off-framebuffer LCD bytes driving the IQ-7000 fixed glass symbols.
@@ -1022,6 +1091,124 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;
+
+    fn capture_pixels(value: &JsValue) -> Uint8Array {
+        js_sys::Reflect::get(value, &JsValue::from_str("pixels"))
+            .unwrap()
+            .dyn_into::<Uint8Array>()
+            .expect("bulk owned Uint8Array, not a JS array")
+    }
+
+    #[wasm_bindgen_test]
+    fn lcd_bulk_capture_matches_core_and_owns_bytes_at_every_scale() {
+        for model in ["pc-e500", "iq-7000"] {
+            let mut emulator = function_test_emulator();
+            emulator
+                .load_rom_with_model(include_bytes!("../testdata/pf1_demo_rom_window.rom"), model)
+                .unwrap();
+            emulator.runtime.memory.write_external_byte(0x6160, 0xff);
+            emulator.runtime.memory.write_external_byte(0x6161, 7);
+            emulator.runtime.memory.write_external_byte(0x61e0, 0x80);
+            emulator.runtime.memory.write_external_byte(0x61e1, 0x80);
+            for scale in [1, 4] {
+                let expected = sc62015_core::lcd_capture::LcdCapture::read_at_scale(
+                    emulator.runtime.lcd.as_deref(),
+                    &emulator.runtime.memory,
+                    scale,
+                )
+                .unwrap();
+                let reads = emulator.runtime.memory.memory_read_count();
+                let count = emulator.instruction_count();
+                let value = emulator.lcd_capture(Some(scale as u32)).unwrap();
+                let pixels = capture_pixels(&value);
+                assert_eq!(pixels.to_vec(), expected.pixels);
+                pixels.set_index(0, 73);
+                let next = capture_pixels(&emulator.lcd_capture(Some(scale as u32)).unwrap());
+                assert_eq!(next.to_vec(), expected.pixels);
+                assert_eq!(emulator.runtime.memory.memory_read_count(), reads);
+                assert_eq!(emulator.instruction_count(), count);
+            }
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn lcd_poll_suppresses_unchanged_but_preserves_force_reset_and_explicit_capture() {
+        let mut emulator = function_test_emulator();
+        for model in ["pc-e500", "iq-7000", "pc-e500"] {
+            emulator
+                .load_rom_with_model(include_bytes!("../testdata/pf1_demo_rom_window.rom"), model)
+                .unwrap();
+            // A standalone screenshot must not consume the UI's first frame.
+            emulator.lcd_capture(None).unwrap();
+            assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
+            let count = emulator.instruction_count();
+            let reads = emulator.runtime.memory.memory_read_count();
+            assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+            assert!(!emulator.lcd_capture_if_changed(true).unwrap().is_null());
+            assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+            assert_eq!(emulator.instruction_count(), count);
+            assert_eq!(emulator.runtime.memory.memory_read_count(), reads);
+            emulator.reset().unwrap();
+            assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn lcd_poll_detects_iq_matrix_and_all_annunciator_sources() {
+        let mut emulator = function_test_emulator();
+        emulator
+            .load_rom_with_model(
+                include_bytes!("../testdata/pf1_demo_rom_window.rom"),
+                "iq-7000",
+            )
+            .unwrap();
+        emulator.lcd_capture_if_changed(false).unwrap();
+        emulator.runtime.lcd.as_mut().unwrap().write(0x405a, 0x80);
+        let changed = emulator.lcd_capture_if_changed(false).unwrap();
+        assert_eq!(
+            capture_pixels(&changed).to_vec(),
+            capture_pixels(&emulator.lcd_capture(None).unwrap()).to_vec()
+        );
+        assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+        for address in [
+            0x6160, 0x6161, 0x61e0, 0x61e1, 0x1fda3, 0x1fda4, 0x1fda5, 0x1fda6,
+        ] {
+            emulator.write_u8(address, 0xff).unwrap();
+            assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
+            assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+            emulator.write_u8(address, 0).unwrap();
+            assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn lcd_poll_detects_pc_data_start_line_and_snapshot_restore() {
+        let mut emulator = function_test_emulator();
+        emulator.lcd_capture_if_changed(false).unwrap();
+        let (meta, payload) = emulator.runtime.lcd.as_ref().unwrap().export_snapshot();
+        let lcd = emulator.runtime.lcd.as_mut().unwrap();
+        lcd.write(0xa000, 0x40); // column 0, both chips
+        lcd.write(0xa000, 0xb8); // page 0
+        lcd.write(0xa002, 0xfe);
+        let first = capture_pixels(&emulator.lcd_capture_if_changed(false).unwrap()).to_vec();
+        assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+        emulator.runtime.lcd.as_mut().unwrap().write(0xa000, 0xc1); // start line 1
+        let rotated = capture_pixels(&emulator.lcd_capture_if_changed(false).unwrap()).to_vec();
+        assert_ne!(first, rotated);
+        assert_eq!(
+            rotated,
+            capture_pixels(&emulator.lcd_capture(None).unwrap()).to_vec()
+        );
+        emulator
+            .runtime
+            .lcd
+            .as_mut()
+            .unwrap()
+            .load_snapshot(&meta, &payload)
+            .unwrap();
+        assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
+        assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());
+    }
 
     #[wasm_bindgen_test]
     fn power_observation_distinguishes_off_halt_and_host_execution_modes() {

@@ -93,6 +93,50 @@ encoder output, which can differ while representing identical RGBA pixels.
 
 ## Input feedback and capture milestone
 
+### Display-path optimization follow-up (2026-09-07)
+
+The WASM `lcd_capture()` export now returns an owned `Uint8Array` using bulk
+byte serialization rather than one JavaScript assignment per pixel. Its geometry,
+gray levels and annunciator metadata are unchanged. The Function Runner's
+`e.lcd.capture()` explicitly converts this to an owned plain JSON array, preserving
+that scripting API. No view into growable WASM memory is retained or transferred.
+
+Normal presentation uses `lcd_capture_if_changed(false)`. It compares the exact
+logical matrix, LCD kind and annunciator sources before rendering, without hashes
+or new mutation hooks. This small comparison catches debugger writes, rendered
+controller changes and restored LCD contents. Reset/model replacement clears the
+cache. Explicit captures remain independent, and an explicit worker `snapshot`
+forces pixels even if unchanged. Forced requests survive frame coalescing, and
+transfer/capture failures force a retry. Existing one-frame credit remains intact.
+
+Unchanged frames still report fresh PC/instruction, input, power and pacing
+observations; the UI retains the matching pixels. Chip-debug images are generated
+only while their panel is open. Canvas presentation skips unchanged immutable
+pixel references and reuses ImageData for changed frames of the same geometry.
+Pixel generation, CPU execution, RTC progression and screenshot provenance are
+not replaced by guessed text, host clocks or direct application state writes.
+
+Chromium 143 release-WASM microbenchmarks, median of three repeated batches:
+
+| Display operation | PC-E500 | IQ-7000 |
+| --- | ---: | ---: |
+| Full capture before | 0.507 ms | 7.611 ms |
+| Full capture after | 0.070 ms | 0.634 ms |
+| Unchanged-display check after | 0.010 ms | 0.0069 ms |
+
+These are isolated display timings, not whole-emulator speedups. The idle cache
+avoids rendering and transferring pixels; lightweight status updates continue.
+The comparison still allocates a small logical matrix, and changed displays still
+render the full glass at its original resolution. No CPU optimization or pacing
+change is included.
+
+Validation: 142 frontend tests, 31 WASM tests, 54 bounded Chromium checks (13
+opt-in cases skipped), and 12 selected private-ROM browser checks passed. Tests
+cover owned bulk pixels against the unchanged core renderer, all annunciator
+source bytes, PC start-line/restore, forced capture/reset/model replacement,
+suppressed pixel payloads with fresh status, debug-panel gating, PNG equivalence,
+real-ROM input/paste and bounded cancellation. Type checks and formatting passed.
+
 Clicking the device focuses keyboard input without stealing the dedicated pan
 region's keyboard navigation. The menu exposes a compact shortcut reference.
 Host-held cyan outlines remain distinct from depressed keycaps, which follow

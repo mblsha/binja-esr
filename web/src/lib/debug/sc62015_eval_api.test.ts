@@ -142,6 +142,15 @@ describe('createEvalApi', () => {
 		const broken = createEvalApi({ lcdCapture: () => ({ cols: 122, rows: 64, pixels: [] }) } as any);
 		await expect(broken.lcd.capture()).rejects.toThrow('Invalid LCD capture geometry');
 	});
+	it('normalizes bulk WASM pixels into an owned JSON screenshot array', async () => {
+		const pixels = new Uint8Array([0, 73, 192]);
+		const api = createEvalApi({ lcdCapture: () => ({ cols: 3, rows: 1, pixels }) } as any);
+		const capture = await api.lcd.capture();
+		expect(Array.isArray(capture.pixels)).toBe(true);
+		expect(capture.pixels).toEqual([0, 73, 192]);
+		pixels.fill(1);
+		expect(capture.pixels).toEqual([0, 73, 192]);
+	});
 	it('calls adapter.callFunction and builds last-value memory blocks', async () => {
 		const regWrites: Array<{ name: string; value: number }> = [];
 		const calls: Array<{ address: number; maxInstructions: number; options: any }> = [];

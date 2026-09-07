@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { LCD_COLS, LCD_ROWS, pixelsToRgba, grayscaleToRgba } from './lcd';
 
 describe('pixelsToRgba', () => {
+	it('reuses supplied RGBA storage and validates its geometry', () => {
+		const destination = new Uint8ClampedArray(8);
+		expect(grayscaleToRgba(new Uint8Array([73, 192]), 2, 1, destination)).toBe(destination);
+		expect(Array.from(destination)).toEqual([73, 73, 73, 255, 192, 192, 192, 255]);
+		expect(() => grayscaleToRgba(new Uint8Array(2), 2, 1, new Uint8ClampedArray(4))).toThrow('RGBA geometry');
+	});
 	it('preserves grayscale antialiasing and opaque LCD background', () => {
 		expect(Array.from(grayscaleToRgba(new Uint8Array([0, 73, 192]), 3, 1))).toEqual([
 			0, 0, 0, 255, 73, 73, 73, 255, 192, 192, 192, 255,

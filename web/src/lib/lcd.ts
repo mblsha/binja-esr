@@ -5,9 +5,15 @@ export const LCD_CHIP_COLS = 64;
 
 export type Rgba = readonly [number, number, number, number];
 
-export function grayscaleToRgba(pixels: Uint8Array, cols: number, rows: number): Uint8ClampedArray {
+export function grayscaleToRgba(
+	pixels: Uint8Array,
+	cols: number,
+	rows: number,
+	destination?: Uint8ClampedArray,
+): Uint8ClampedArray {
 	if (pixels.length !== cols * rows) throw new Error('grayscale geometry mismatch');
-	const out = new Uint8ClampedArray(pixels.length * 4);
+	const out = destination ?? new Uint8ClampedArray(pixels.length * 4);
+	if (out.length !== pixels.length * 4) throw new Error('RGBA geometry mismatch');
 	for (let i = 0; i < pixels.length; i++) {
 		out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = pixels[i];
 		out[i * 4 + 3] = 255;

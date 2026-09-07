@@ -57,6 +57,10 @@ for (const model of ['pc-e500', 'iq-7000']) {
 								generation: data.frame.generation,
 								lcdText: data.frame.lcdText,
 								callStack: data.frame.callStack,
+								pixelBytes: data.frame.lcdPixels?.byteLength ?? 0,
+								chipBytes: data.frame.lcdChipPixels?.byteLength ?? 0,
+								powerState: data.frame.powerState,
+								instructionCount: data.frame.instructionCount,
 							});
 					});
 				}
@@ -75,6 +79,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 		for (const frame of frames) {
 			expect(frame.lcdText).toBeNull();
 			expect(frame.callStack).toBeNull();
+			expect(frame.chipBytes).toBe(0);
 		}
 		await page.evaluate(() => {
 			const h = (window as any).__displayHarness;
@@ -113,5 +118,26 @@ for (const model of ['pc-e500', 'iq-7000']) {
 			.toMatchObject({ model: replacement, generation });
 		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.inFlight)).toBeNull();
 		expect(await page.evaluate(() => (window as any).__displayHarness.received.length)).toBe(2);
+
+		// Ordinary refreshes retain the displayed pixels but still publish status.
+		let sequence = (await rpc(page, 'frame_delivery_state')).sequence;
+		await rpc(page, 'step', { instructions: 0 });
+		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.sequence)).toBeGreaterThan(sequence);
+		let last = await page.evaluate(() => (window as any).__displayHarness.received.at(-1));
+		expect(last.pixelBytes).toBe(0);
+		expect(last.chipBytes).toBe(0);
+		expect(last.powerState).toMatch(/running|halted|off/);
+		expect(last.instructionCount).toMatch(/^\d+$/);
+		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.inFlight)).toBeNull();
+		sequence = (await rpc(page, 'frame_delivery_state')).sequence;
+		// Explicit observation forces a complete pixel payload even if unchanged.
+		await rpc(page, 'snapshot');
+		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.sequence)).toBeGreaterThan(sequence);
+		last = await page.evaluate(() => (window as any).__displayHarness.received.at(-1));
+		expect(last.pixelBytes).toBe(replacement === 'iq-7000' ? 488 * 256 : 240 * 32);
+		await rpc(page, 'set_options', { debug: { lcdChipsOpen: true } });
+		await expect.poll(() => page.evaluate(() => (window as any).__displayHarness.received.at(-1).chipBytes)).toBe(8192);
+		await rpc(page, 'set_options', { debug: { lcdChipsOpen: false } });
+		await expect.poll(() => page.evaluate(() => (window as any).__displayHarness.received.at(-1).chipBytes)).toBe(0);
 	});
 }

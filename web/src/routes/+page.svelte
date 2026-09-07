@@ -109,6 +109,7 @@
 	let keyboardTarget: HTMLDivElement;
 	let keyboardNotice = '';
 	let keyboardDebugOpen = false;
+	let lcdChipsOpen = false;
 	let regsOpen = false;
 	let callStackOpen = false;
 	let lcdTextOpen = false;
@@ -222,7 +223,7 @@
 			type: 'set_options',
 			targetFps,
 			typingCatchUp,
-			debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen },
+			debug: { regsOpen, callStackOpen, lcdTextOpen, debugStateOpen, keyboardDebugOpen, lcdChipsOpen },
 		});
 	}
 
@@ -754,7 +755,7 @@
 		pasteStatus = fallbackInputs.pasteStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
-			const geometry = emulator.lcd_capture();
+			const geometry = emulator.lcd_capture_if_changed(false);
 			if (geometry && typeof geometry === 'object') {
 				const kind = normalizeLcdKind((geometry as any).kind);
 				const cols = (geometry as any).cols;
@@ -763,14 +764,14 @@
 				if (typeof cols === 'number') lcdCols = cols;
 				lcdPixelScale = geometry.pixel_scale;
 				if (typeof rows === 'number') lcdRows = rows;
-				lcdPixels = new Uint8Array(geometry.pixels);
+				lcdPixels = geometry.pixels;
 				lcdFrameGeneration = romLoadGeneration;
 			}
 		} catch {
 			// ignore
 		}
 		lcdAnnunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? null;
-		lcdChipPixels = emulator.lcd_chip_pixels();
+		if (lcdChipsOpen) lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
 		} catch {
@@ -966,6 +967,7 @@
 		lcdTextOpen;
 		debugStateOpen;
 		keyboardDebugOpen;
+		lcdChipsOpen;
 		pushWorkerOptions();
 	}
 
@@ -1791,7 +1793,12 @@
 		{/if}
 
 		{#if lcdKind === 'hd61202'}
-			<details>
+			<details
+				bind:open={lcdChipsOpen}
+				on:toggle={() => {
+					if (lcdChipsOpen) refreshAllNow();
+				}}
+			>
 				<summary>LCD controller (64×64 chips)</summary>
 				<div class="lcd-chips">
 					<div class="lcd-chip">

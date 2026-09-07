@@ -228,7 +228,7 @@ export interface EmulatorAdapter {
 	write8(addr: number, value: number): void;
 	lcdText?(): string[] | null;
 	lcdPixels?(): Uint8Array | number[] | null;
-	lcdCapture?(scale?: number): LcdCapture;
+	lcdCapture?(scale?: number): Omit<LcdCapture, 'pixels'> & { pixels: number[] | Uint8Array };
 	pressMatrixCode?(code: number): void;
 	releaseMatrixCode?(code: number): void;
 	injectMatrixEvent?(code: number, release: boolean): void;
@@ -922,7 +922,7 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					throw new Error('Invalid LCD capture geometry');
 				}
 				// Capture owns its arrays: later execution must not change screenshot evidence.
-				return JSON.parse(JSON.stringify(frame));
+				return JSON.parse(JSON.stringify({ ...frame, pixels: Array.from(frame.pixels) }));
 			},
 			assertCalendarMonth: async (options) => {
 				const { year, month } = options;
