@@ -2689,8 +2689,7 @@ impl CoreRuntime {
         if metadata.interrupts.irq_bit_watch.is_none() {
             metadata.interrupts.irq_bit_watch = self
                 .timer
-                .irq_bit_watch
-                .clone()
+                .irq_bit_watch_json()
                 .map(serde_json::Value::Object);
         }
         let regs = collect_registers(&self.state);
@@ -4084,9 +4083,8 @@ mod tests {
         rt.memory
             .write_internal_byte(crate::memory::IMEM_IMR_OFFSET, 0xAA);
         assert_eq!(rt.timer.irq_imr, 0xAA, "IMR mirror should update via hook");
-        let watch = rt
-            .timer
-            .irq_bit_watch
+        let watch_json = rt.timer.irq_bit_watch_json();
+        let watch = watch_json
             .as_ref()
             .and_then(|map| map.get("IMR"))
             .and_then(|v| v.as_object())
@@ -4108,9 +4106,8 @@ mod tests {
         rt.memory
             .write_internal_byte(crate::memory::IMEM_ISR_OFFSET, 0x04);
         assert_eq!(rt.timer.irq_isr, 0x04, "ISR mirror should update via hook");
-        let isr_watch = rt
-            .timer
-            .irq_bit_watch
+        let isr_watch_json = rt.timer.irq_bit_watch_json();
+        let isr_watch = isr_watch_json
             .as_ref()
             .and_then(|map| map.get("ISR"))
             .and_then(|v| v.as_object())
@@ -6229,9 +6226,8 @@ mod tests {
             "irq_source should clear on RESET"
         );
         // Bit-watch tables should remain populated.
-        let imr_watch = rt
-            .timer
-            .irq_bit_watch
+        let imr_watch_json = rt.timer.irq_bit_watch_json();
+        let imr_watch = imr_watch_json
             .as_ref()
             .and_then(|m| m.get("IMR"))
             .and_then(|v| v.as_object())

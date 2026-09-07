@@ -157,6 +157,9 @@ pub struct KeyboardMatrix {
     repeat_enabled: bool,
     scan_enabled: bool,
     states: Vec<KeyState>,
+    // Electrical contacts indexed by row; each bit is a column. Derived from
+    // pressed state, never from debounce/FIFO state, and rebuilt on restore.
+    physical_columns_by_row: [u16; 8],
     fifo_storage: [u8; FIFO_SIZE],
     fifo_head: usize,
     fifo_tail: usize,
@@ -233,6 +236,7 @@ impl KeyboardMatrix {
             repeat_enabled: true,
             scan_enabled: true,
             states: Vec::new(),
+            physical_columns_by_row: [0; 8],
             fifo_storage: [0; FIFO_SIZE],
             fifo_head: 0,
             fifo_tail: 0,
@@ -322,13 +326,12 @@ impl KeyboardMatrix {
     /// participate.
     pub fn compute_physical_kil(&self) -> u8 {
         let active = self.active_column_mask();
-        self.states.iter().fold(0u8, |value, state| {
-            if state.pressed && active & (1 << state.location.column) != 0 {
-                value | (1 << (state.location.row & 0x07))
-            } else {
-                value
-            }
-        })
+        self.physical_columns_by_row
+            .iter()
+            .enumerate()
+            .fold(0, |value, (row, columns)| {
+                value | (u8::from(active & columns != 0) << row)
+            })
     }
 
     /// Debugger observation of raw contacts, without scanning, debounce or bus reads.
@@ -389,12 +392,14 @@ impl KeyboardMatrix {
     ) -> usize {
         if let Some(state) = self.states.get_mut(code as usize) {
             if release {
+                self.physical_columns_by_row[(code & 7) as usize] &= !(1 << (code >> 3));
                 state.pressed = false;
                 state.debounced = false;
                 state.press_ticks = 0;
                 state.release_ticks = 0;
                 state.repeat_ticks = 0;
             } else {
+                self.physical_columns_by_row[(code & 7) as usize] |= 1 << (code >> 3);
                 state.pressed = true;
                 state.debounced = true;
                 state.press_ticks = self.press_threshold;
@@ -523,6 +528,7 @@ impl KeyboardMatrix {
         self.scan_enabled = true;
         self.keyi_latch = false;
         self.kil_read_count = 0;
+        self.physical_columns_by_row = [0; 8];
         for state in &mut self.states {
             state.pressed = false;
             state.debounced = false;
@@ -772,6 +778,13 @@ impl KeyboardMatrix {
             }
         }
         self.keyi_latch = snapshot.keyi_latch;
+        self.physical_columns_by_row = [0; 8];
+        for state in &self.states {
+            if state.pressed {
+                self.physical_columns_by_row[state.location.row as usize] |=
+                    1 << state.location.column;
+            }
+        }
         Ok(())
     }
 
@@ -791,6 +804,7 @@ impl KeyboardMatrix {
         let _ = memory;
         if let Some(state) = self.states.get_mut(code as usize) {
             let was_pressed = state.pressed;
+            self.physical_columns_by_row[(code & 7) as usize] |= 1 << (code >> 3);
             state.pressed = true;
             state.debounced = false;
             state.press_ticks = 0;
@@ -810,6 +824,7 @@ impl KeyboardMatrix {
     pub fn release_matrix_code(&mut self, code: u8, memory: &mut MemoryImage) {
         let _ = memory;
         if let Some(state) = self.states.get_mut(code as usize) {
+            self.physical_columns_by_row[(code & 7) as usize] &= !(1 << (code >> 3));
             state.pressed = false;
             state.debounced = false;
             state.press_ticks = 0;
@@ -945,6 +960,52 @@ fn read_u24(memory: &MemoryImage, addr: u32) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::memory::MemoryImage;
+
+    #[test]
+    fn physical_row_masks_match_contact_walk_across_mutations_and_restore() {
+        fn check(kb: &KeyboardMatrix) {
+            let active = kb.active_column_mask();
+            let expected = kb.states.iter().fold(0, |v, state| {
+                if state.pressed && active & (1 << state.location.column) != 0 {
+                    v | (1 << state.location.row)
+                } else {
+                    v
+                }
+            });
+            assert_eq!(kb.compute_physical_kil(), expected);
+        }
+        let mut kb = KeyboardMatrix::new();
+        let mut mem = MemoryImage::new();
+        let mut seed = 0x62015u32;
+        for i in 0..2048 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let code = (seed & 127) as u8;
+            match i % 4 {
+                0 => kb.press_matrix_code(code, &mut mem),
+                1 => kb.release_matrix_code(code, &mut mem),
+                _ => {
+                    kb.inject_matrix_event(code, i % 4 == 3, &mut mem, false);
+                }
+            }
+            kb.handle_write(0xF0, (seed >> 8) as u8, &mut mem);
+            kb.handle_write(0xF1, (seed >> 16) as u8, &mut mem);
+            kb.set_columns_active_high(i % 2 == 0);
+            check(&kb);
+            check(&kb.clone());
+            if i % 17 == 0 {
+                let snapshot = kb.snapshot_state();
+                kb.load_snapshot_state(&snapshot).unwrap();
+                check(&kb);
+            }
+            if i % 127 == 0 {
+                kb.reset(&mut mem);
+                check(&kb);
+                assert_eq!(kb.compute_physical_kil(), 0);
+            }
+        }
+    }
 
     #[test]
     fn kil_read_includes_pending_press() {

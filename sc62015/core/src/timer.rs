@@ -38,7 +38,7 @@ pub struct TimerContext {
     pub last_irq_src: Option<String>,
     pub last_irq_pc: Option<u32>,
     pub last_irq_vector: Option<u32>,
-    pub irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
+    irq_bit_watch: Option<BitWatch>,
     pub delivered_masks: Vec<u8>,
     instruction_start_cycle: u64,
     last_mti_fire_cycle: Option<u64>,
@@ -104,6 +104,90 @@ fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
                 .entry("clear".to_string())
                 .or_insert_with(|| json!([]));
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PcHistory {
+    pcs: [u32; 10],
+    len: usize,
+}
+
+impl PcHistory {
+    fn record(&mut self, pc: u32) {
+        if self.len > 0 && self.pcs[self.len - 1] == pc {
+            return;
+        }
+        if self.len == self.pcs.len() {
+            self.pcs.rotate_left(1);
+            self.pcs[self.len - 1] = pc;
+        } else {
+            self.pcs[self.len] = pc;
+            self.len += 1;
+        }
+    }
+}
+
+/// Fixed-size normal execution state; permissive legacy imports retain their
+/// original JSON behavior instead of silently discarding unknown fields.
+#[derive(Clone, Debug, Default)]
+struct BitWatch {
+    histories: [[[PcHistory; 2]; 8]; 2],
+    legacy: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl BitWatch {
+    fn from_json(table: serde_json::Map<String, serde_json::Value>) -> Self {
+        let mut watch = Self::default();
+        let parsed = (|| {
+            if table.len() != 2 {
+                return None;
+            }
+            for (r, name) in ["IMR", "ISR"].iter().enumerate() {
+                let bits = table.get(*name)?.as_object()?;
+                if bits.len() != 8 {
+                    return None;
+                }
+                for b in 0..8 {
+                    let actions = bits.get(&b.to_string())?.as_object()?;
+                    if actions.len() != 2 {
+                        return None;
+                    }
+                    for (a, name) in ["set", "clear"].iter().enumerate() {
+                        let pcs = actions.get(*name)?.as_array()?;
+                        if pcs.len() > 10 {
+                            return None;
+                        }
+                        let history = &mut watch.histories[r][b][a];
+                        for (i, pc) in pcs.iter().enumerate() {
+                            history.pcs[i] = u32::try_from(pc.as_u64()?).ok()?;
+                        }
+                        history.len = pcs.len();
+                    }
+                }
+            }
+            Some(())
+        })();
+        if parsed.is_none() {
+            watch.legacy = Some(table);
+        }
+        watch
+    }
+
+    fn to_json(&self) -> serde_json::Map<String, serde_json::Value> {
+        if let Some(table) = &self.legacy {
+            return table.clone();
+        }
+        let mut table = default_bit_watch_table();
+        for (r, name) in ["IMR", "ISR"].iter().enumerate() {
+            for b in 0..8 {
+                for (a, action) in ["set", "clear"].iter().enumerate() {
+                    let h = &self.histories[r][b][a];
+                    table[*name][b.to_string()][*action] = json!(&h.pcs[..h.len]);
+                }
+            }
+        }
+        table
     }
 }
 
@@ -421,8 +505,7 @@ impl TimerContext {
             preserve_phase: self.preserve_phase,
         };
         let mut watch = self
-            .irq_bit_watch
-            .clone()
+            .irq_bit_watch_json()
             .unwrap_or_else(default_bit_watch_table);
         normalize_bit_watch(&mut watch);
         let interrupts = InterruptInfo {
@@ -484,7 +567,8 @@ impl TimerContext {
             .irq_bit_watch
             .as_ref()
             .and_then(|value| value.as_object())
-            .cloned();
+            .cloned()
+            .map(BitWatch::from_json);
         self.delivered_masks = interrupts.delivered_masks.clone();
         self.last_fired = interrupts.last_fired.clone();
         // Restore IRQ counters/last info if present; otherwise zero them.
@@ -539,7 +623,7 @@ impl TimerContext {
         self.next_interrupt_id = next_interrupt_id;
         self.last_fired = None;
         self.key_irq_latched = false;
-        self.irq_bit_watch = irq_bit_watch;
+        self.irq_bit_watch = irq_bit_watch.map(BitWatch::from_json);
         self.delivered_masks.clear();
     }
 
@@ -551,9 +635,37 @@ impl TimerContext {
         new_val: u8,
         pc: u32,
     ) {
-        let table = self
-            .irq_bit_watch
-            .get_or_insert_with(default_bit_watch_table);
+        let watch = self.irq_bit_watch.get_or_insert_with(BitWatch::default);
+        if let Some(table) = watch.legacy.as_mut() {
+            Self::record_legacy_bit_watch_transition(table, reg_name, prev_val, new_val, pc);
+            return;
+        }
+        let r = match reg_name {
+            "IMR" => 0,
+            "ISR" => 1,
+            _ => return,
+        };
+        let changed = prev_val ^ new_val;
+        for b in 0..8 {
+            if changed & (1 << b) != 0 {
+                let action = usize::from(new_val & (1 << b) == 0);
+                watch.histories[r][b][action].record(pc);
+            }
+        }
+    }
+
+    /// Materialize diagnostic JSON only for an explicit observer/snapshot.
+    pub fn irq_bit_watch_json(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        self.irq_bit_watch.as_ref().map(BitWatch::to_json)
+    }
+
+    fn record_legacy_bit_watch_transition(
+        table: &mut serde_json::Map<String, serde_json::Value>,
+        reg_name: &str,
+        prev_val: u8,
+        new_val: u8,
+        pc: u32,
+    ) {
         normalize_bit_watch(table);
         let Some(reg_entry) = table.get_mut(reg_name) else {
             return;
@@ -1253,8 +1365,8 @@ mod tests {
         // First fire at cycle 1 should set ISR bit 0 and record a transition.
         let pc = 0x123u32;
         timer.tick_timers(&mut mem, 1, Some(pc));
-        let watch = timer
-            .irq_bit_watch
+        let watch_json = timer.irq_bit_watch_json();
+        let watch = watch_json
             .as_ref()
             .and_then(|w| w.get("ISR"))
             .and_then(|v| v.as_object())
@@ -1274,6 +1386,62 @@ mod tests {
     }
 
     #[test]
+    fn typed_bit_watch_matches_legacy_and_roundtrips() {
+        let mut timer = TimerContext::new(true, 0, 0);
+        let mut reference = default_bit_watch_table();
+        let mut seed = 0x62015u32;
+        for i in 0..1024 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let name = if i % 2 == 0 { "IMR" } else { "ISR" };
+            let before = seed as u8;
+            let after = (seed >> 8) as u8;
+            // Repeated PCs exercise adjacent deduplication; long runs wrap histories.
+            let pc = i / 3;
+            timer.record_bit_watch_transition(name, before, after, pc);
+            TimerContext::record_legacy_bit_watch_transition(
+                &mut reference,
+                name,
+                before,
+                after,
+                pc,
+            );
+            assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
+            if i % 127 == 0 {
+                let (t, irq) = timer.snapshot_info();
+                timer.apply_snapshot_info(&t, &irq, 0);
+                assert!(timer.irq_bit_watch.as_ref().unwrap().legacy.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn unusual_bit_watch_import_preserves_legacy_behavior() {
+        let mut reference = serde_json::Map::from_iter([
+            ("extra".to_string(), json!({"preserve": true})),
+            (
+                "IMR".to_string(),
+                json!({"7": {"set": "bad", "clear": [1, 1, 2]}}),
+            ),
+        ]);
+        let mut timer = TimerContext::new(true, 0, 0);
+        timer.irq_bit_watch = Some(BitWatch::from_json(reference.clone()));
+        assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
+        for (before, after) in [(0, 0), (0, 128), (128, 0)] {
+            timer.record_bit_watch_transition("IMR", before, after, 0x12345);
+            TimerContext::record_legacy_bit_watch_transition(
+                &mut reference,
+                "IMR",
+                before,
+                after,
+                0x12345,
+            );
+            assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
+        }
+    }
+
+    #[test]
     fn host_event_latch_does_not_emit_raw_keyi_bit_watch() {
         let mut timer = TimerContext::new(true, 0, 0);
         let mut mem = MemoryImage::new();
@@ -1285,7 +1453,7 @@ mod tests {
         let _ =
             timer.tick_timers_with_keyboard(&mut mem, 0, |_mem| (0, true, None), None, Some(pc));
         assert_eq!(mem.read_internal_byte(ISR_OFFSET).unwrap_or(0) & 0x04, 0);
-        assert!(timer.irq_bit_watch.as_ref().is_none_or(|watch| {
+        assert!(timer.irq_bit_watch_json().as_ref().is_none_or(|watch| {
             watch
                 .get("ISR")
                 .and_then(|value| value.as_object())

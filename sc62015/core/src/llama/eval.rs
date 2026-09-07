@@ -1103,11 +1103,13 @@ impl LlamaExecutor {
         kind: &str,
         instr_index: u64,
         pc: u32,
-        payload: HashMap<String, AnnotationValue>,
+        payload: impl FnOnce() -> HashMap<String, AnnotationValue>,
     ) {
         let mut guard = PERFETTO_TRACER.enter();
         guard.with_some(|tracer| {
-            let mut payload = payload;
+            // Most execution is untraced. Do not allocate diagnostic strings
+            // or maps until a recording actually consumes this event.
+            let mut payload = payload();
             payload.insert(
                 "cf_kind".to_string(),
                 AnnotationValue::Str(kind.to_string()),
@@ -3060,25 +3062,28 @@ impl LlamaExecutor {
                 let stack_s_after = state.get_reg(RegName::S) & mask_for(RegName::S);
                 let stack_u_after = state.get_reg(RegName::U) & mask_for(RegName::U);
                 if stack_s_before != stack_s_after {
-                    let mut payload = HashMap::new();
-                    payload.insert(
-                        "stack_reg".to_string(),
-                        AnnotationValue::Str("S".to_string()),
-                    );
-                    payload.insert(
-                        "stack_before".to_string(),
-                        AnnotationValue::Pointer(stack_s_before as u64),
-                    );
-                    payload.insert(
-                        "stack_after".to_string(),
-                        AnnotationValue::Pointer(stack_s_after as u64),
-                    );
-                    if let Some(name) = entry_name {
+                    let payload = || {
+                        let mut payload = HashMap::new();
                         payload.insert(
-                            "mnemonic".to_string(),
-                            AnnotationValue::Str(name.to_string()),
+                            "stack_reg".to_string(),
+                            AnnotationValue::Str("S".to_string()),
                         );
-                    }
+                        payload.insert(
+                            "stack_before".to_string(),
+                            AnnotationValue::Pointer(stack_s_before as u64),
+                        );
+                        payload.insert(
+                            "stack_after".to_string(),
+                            AnnotationValue::Pointer(stack_s_after as u64),
+                        );
+                        if let Some(name) = entry_name {
+                            payload.insert(
+                                "mnemonic".to_string(),
+                                AnnotationValue::Str(name.to_string()),
+                            );
+                        }
+                        payload
+                    };
                     Self::emit_control_flow_event(
                         "STACK_REG_WRITE",
                         "stack_write",
@@ -3088,25 +3093,28 @@ impl LlamaExecutor {
                     );
                 }
                 if stack_u_before != stack_u_after {
-                    let mut payload = HashMap::new();
-                    payload.insert(
-                        "stack_reg".to_string(),
-                        AnnotationValue::Str("U".to_string()),
-                    );
-                    payload.insert(
-                        "stack_before".to_string(),
-                        AnnotationValue::Pointer(stack_u_before as u64),
-                    );
-                    payload.insert(
-                        "stack_after".to_string(),
-                        AnnotationValue::Pointer(stack_u_after as u64),
-                    );
-                    if let Some(name) = entry_name {
+                    let payload = || {
+                        let mut payload = HashMap::new();
                         payload.insert(
-                            "mnemonic".to_string(),
-                            AnnotationValue::Str(name.to_string()),
+                            "stack_reg".to_string(),
+                            AnnotationValue::Str("U".to_string()),
                         );
-                    }
+                        payload.insert(
+                            "stack_before".to_string(),
+                            AnnotationValue::Pointer(stack_u_before as u64),
+                        );
+                        payload.insert(
+                            "stack_after".to_string(),
+                            AnnotationValue::Pointer(stack_u_after as u64),
+                        );
+                        if let Some(name) = entry_name {
+                            payload.insert(
+                                "mnemonic".to_string(),
+                                AnnotationValue::Str(name.to_string()),
+                            );
+                        }
+                        payload
+                    };
                     Self::emit_control_flow_event(
                         "STACK_REG_WRITE",
                         "stack_write",
@@ -3642,27 +3650,30 @@ impl LlamaExecutor {
                     tracer.record_irq_event("IRQ_Enter", payload);
                 });
                 let vector = vec & mask_for(RegName::PC);
-                let mut cf_payload = HashMap::new();
-                cf_payload.insert(
-                    "pc_next".to_string(),
-                    AnnotationValue::Pointer(vector as u64),
-                );
-                cf_payload.insert(
-                    "pc_target".to_string(),
-                    AnnotationValue::Pointer(vector as u64),
-                );
-                cf_payload.insert(
-                    "pc_fallthrough".to_string(),
-                    AnnotationValue::Pointer(fallthrough as u64),
-                );
-                cf_payload.insert(
-                    "ret_addr".to_string(),
-                    AnnotationValue::Pointer(saved_pc as u64),
-                );
-                cf_payload.insert(
-                    "instr_len".to_string(),
-                    AnnotationValue::UInt(instr_len as u64),
-                );
+                let cf_payload = || {
+                    let mut cf_payload = HashMap::new();
+                    cf_payload.insert(
+                        "pc_next".to_string(),
+                        AnnotationValue::Pointer(vector as u64),
+                    );
+                    cf_payload.insert(
+                        "pc_target".to_string(),
+                        AnnotationValue::Pointer(vector as u64),
+                    );
+                    cf_payload.insert(
+                        "pc_fallthrough".to_string(),
+                        AnnotationValue::Pointer(fallthrough as u64),
+                    );
+                    cf_payload.insert(
+                        "ret_addr".to_string(),
+                        AnnotationValue::Pointer(saved_pc as u64),
+                    );
+                    cf_payload.insert(
+                        "instr_len".to_string(),
+                        AnnotationValue::UInt(instr_len as u64),
+                    );
+                    cf_payload
+                };
                 Self::emit_control_flow_event(
                     entry.name,
                     "irq",
@@ -3729,48 +3740,51 @@ impl LlamaExecutor {
                 };
                 state.set_pc(dest);
 
-                let mut payload = HashMap::new();
-                payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
-                payload.insert(
-                    "pc_fallthrough".to_string(),
-                    AnnotationValue::Pointer(fallthrough as u64),
-                );
-                payload.insert(
-                    "instr_len".to_string(),
-                    AnnotationValue::UInt(decoded.len as u64),
-                );
-                if let Some(cond) = entry.cond {
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
                     payload.insert(
-                        "cf_cond".to_string(),
-                        AnnotationValue::Str(cond.to_string()),
+                        "pc_fallthrough".to_string(),
+                        AnnotationValue::Pointer(fallthrough as u64),
                     );
                     payload.insert(
-                        "cf_taken".to_string(),
-                        AnnotationValue::UInt(cond_ok as u64),
+                        "instr_len".to_string(),
+                        AnnotationValue::UInt(decoded.len as u64),
                     );
-                }
-                if let Some(value) = target {
+                    if let Some(cond) = entry.cond {
+                        payload.insert(
+                            "cf_cond".to_string(),
+                            AnnotationValue::Str(cond.to_string()),
+                        );
+                        payload.insert(
+                            "cf_taken".to_string(),
+                            AnnotationValue::UInt(cond_ok as u64),
+                        );
+                    }
+                    if let Some(value) = target {
+                        payload.insert(
+                            "pc_target".to_string(),
+                            AnnotationValue::Pointer(value as u64),
+                        );
+                    }
                     payload.insert(
-                        "pc_target".to_string(),
-                        AnnotationValue::Pointer(value as u64),
+                        "pc_target_src".to_string(),
+                        AnnotationValue::Str(target_src.to_string()),
                     );
-                }
-                payload.insert(
-                    "pc_target_src".to_string(),
-                    AnnotationValue::Str(target_src.to_string()),
-                );
-                if let Some(addr) = target_addr {
-                    payload.insert(
-                        "pc_target_addr".to_string(),
-                        AnnotationValue::Pointer(addr as u64),
-                    );
-                }
-                if let Some(reg) = target_reg {
-                    payload.insert(
-                        "pc_target_reg".to_string(),
-                        AnnotationValue::Str(reg.to_string()),
-                    );
-                }
+                    if let Some(addr) = target_addr {
+                        payload.insert(
+                            "pc_target_addr".to_string(),
+                            AnnotationValue::Pointer(addr as u64),
+                        );
+                    }
+                    if let Some(reg) = target_reg {
+                        payload.insert(
+                            "pc_target_reg".to_string(),
+                            AnnotationValue::Str(reg.to_string()),
+                        );
+                    }
+                    payload
+                };
                 let kind = if entry.cond.is_some() {
                     "cond_branch"
                 } else {
@@ -3798,30 +3812,33 @@ impl LlamaExecutor {
                 let dest = if cond_ok { target } else { fallthrough };
                 state.set_pc(dest);
 
-                let mut payload = HashMap::new();
-                payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
-                payload.insert(
-                    "pc_fallthrough".to_string(),
-                    AnnotationValue::Pointer(fallthrough as u64),
-                );
-                payload.insert(
-                    "pc_target".to_string(),
-                    AnnotationValue::Pointer(target as u64),
-                );
-                payload.insert(
-                    "instr_len".to_string(),
-                    AnnotationValue::UInt(decoded.len as u64),
-                );
-                if let Some(cond) = entry.cond {
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert("pc_next".to_string(), AnnotationValue::Pointer(dest as u64));
                     payload.insert(
-                        "cf_cond".to_string(),
-                        AnnotationValue::Str(cond.to_string()),
+                        "pc_fallthrough".to_string(),
+                        AnnotationValue::Pointer(fallthrough as u64),
                     );
                     payload.insert(
-                        "cf_taken".to_string(),
-                        AnnotationValue::UInt(cond_ok as u64),
+                        "pc_target".to_string(),
+                        AnnotationValue::Pointer(target as u64),
                     );
-                }
+                    payload.insert(
+                        "instr_len".to_string(),
+                        AnnotationValue::UInt(decoded.len as u64),
+                    );
+                    if let Some(cond) = entry.cond {
+                        payload.insert(
+                            "cf_cond".to_string(),
+                            AnnotationValue::Str(cond.to_string()),
+                        );
+                        payload.insert(
+                            "cf_taken".to_string(),
+                            AnnotationValue::UInt(cond_ok as u64),
+                        );
+                    }
+                    payload
+                };
                 let kind = if entry.cond.is_some() {
                     "cond_branch"
                 } else {
@@ -3864,35 +3881,38 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "pc_next".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert(
-                    "pc_target".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert(
-                    "pc_fallthrough".to_string(),
-                    AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
-                );
-                payload.insert(
-                    "ret_addr".to_string(),
-                    AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
-                );
-                payload.insert(
-                    "call_target".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert(
-                    "instr_len".to_string(),
-                    AnnotationValue::UInt(decoded.len as u64),
-                );
-                payload.insert(
-                    "call_depth".to_string(),
-                    AnnotationValue::Int(state.call_depth() as i64),
-                );
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "pc_next".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "pc_target".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "pc_fallthrough".to_string(),
+                        AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "ret_addr".to_string(),
+                        AnnotationValue::Pointer((ret_addr & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "call_target".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "instr_len".to_string(),
+                        AnnotationValue::UInt(decoded.len as u64),
+                    );
+                    payload.insert(
+                        "call_depth".to_string(),
+                        AnnotationValue::Int(state.call_depth() as i64),
+                    );
+                    payload
+                };
                 Self::emit_control_flow_event(
                     entry.name,
                     "call",
@@ -3925,20 +3945,23 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "pc_next".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert(
-                    "ret_target".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
-                payload.insert(
-                    "call_depth".to_string(),
-                    AnnotationValue::Int(state.call_depth() as i64),
-                );
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "pc_next".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "ret_target".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
+                    payload.insert(
+                        "call_depth".to_string(),
+                        AnnotationValue::Int(state.call_depth() as i64),
+                    );
+                    payload
+                };
                 Self::emit_control_flow_event(
                     entry.name,
                     "ret",
@@ -3965,20 +3988,23 @@ impl LlamaExecutor {
                         state.call_depth(),
                     );
                 });
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "pc_next".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert(
-                    "ret_target".to_string(),
-                    AnnotationValue::Pointer((dest & pc_mask) as u64),
-                );
-                payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
-                payload.insert(
-                    "call_depth".to_string(),
-                    AnnotationValue::Int(state.call_depth() as i64),
-                );
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "pc_next".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "ret_target".to_string(),
+                        AnnotationValue::Pointer((dest & pc_mask) as u64),
+                    );
+                    payload.insert("instr_len".to_string(), AnnotationValue::UInt(1));
+                    payload.insert(
+                        "call_depth".to_string(),
+                        AnnotationValue::Int(state.call_depth() as i64),
+                    );
+                    payload
+                };
                 Self::emit_control_flow_event(
                     entry.name,
                     "ret",
@@ -4019,23 +4045,26 @@ impl LlamaExecutor {
                 state.set_pc(ret);
                 state.call_depth_dec();
                 let instr_len = 1 + prefix_len;
-                let mut payload = HashMap::new();
-                payload.insert(
-                    "pc_next".to_string(),
-                    AnnotationValue::Pointer((ret & pc_mask) as u64),
-                );
-                payload.insert(
-                    "ret_target".to_string(),
-                    AnnotationValue::Pointer((ret & pc_mask) as u64),
-                );
-                payload.insert(
-                    "instr_len".to_string(),
-                    AnnotationValue::UInt(instr_len as u64),
-                );
-                payload.insert(
-                    "call_depth".to_string(),
-                    AnnotationValue::Int(state.call_depth() as i64),
-                );
+                let payload = || {
+                    let mut payload = HashMap::new();
+                    payload.insert(
+                        "pc_next".to_string(),
+                        AnnotationValue::Pointer((ret & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "ret_target".to_string(),
+                        AnnotationValue::Pointer((ret & pc_mask) as u64),
+                    );
+                    payload.insert(
+                        "instr_len".to_string(),
+                        AnnotationValue::UInt(instr_len as u64),
+                    );
+                    payload.insert(
+                        "call_depth".to_string(),
+                        AnnotationValue::Int(state.call_depth() as i64),
+                    );
+                    payload
+                };
                 Self::emit_control_flow_event(
                     entry.name,
                     "reti",
@@ -4376,6 +4405,34 @@ mod tests {
     use super::*;
     use crate::llama::opcodes::OPCODES;
     use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn untraced_control_flow_does_not_build_payload() {
+        let _perfetto_lock = crate::perfetto::perfetto_test_guard();
+        assert!(PERFETTO_TRACER.enter().with_some(|_| ()).is_none());
+        LlamaExecutor::emit_control_flow_event("JR", "jump", 0, 0x10000, || {
+            panic!("disabled tracing must not allocate or construct payloads")
+        });
+    }
+
+    #[cfg(feature = "perfetto")]
+    #[test]
+    fn traced_control_flow_builds_payload_once() {
+        let _perfetto_lock = crate::perfetto::perfetto_test_guard();
+        let calls = Cell::new(0);
+        PERFETTO_TRACER
+            .enter()
+            .replace(Some(crate::PerfettoTracer::new(std::path::PathBuf::from(
+                "unused-lazy-trace.perfetto-trace",
+            ))));
+        LlamaExecutor::emit_control_flow_event("JR", "jump", 0, 0x10000, || {
+            calls.set(calls.get() + 1);
+            HashMap::from([("pc_target".to_string(), AnnotationValue::Pointer(0x12345))])
+        });
+        let trace = PERFETTO_TRACER.enter().take().expect("active trace");
+        assert_eq!(calls.get(), 1);
+        assert!(!trace.serialize().expect("serialized trace").is_empty());
+    }
 
     #[test]
     fn bcd_sub_invalid_positive_digits_follow_silicon_correction() {
