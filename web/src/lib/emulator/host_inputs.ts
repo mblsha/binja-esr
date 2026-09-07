@@ -45,6 +45,8 @@ export class HostInputs {
 	private typingGap = 0;
 	private typingSequence = 0;
 	private typingBlocked = false;
+	private pastePlan: number[] | null = null;
+	private pasteCursor = 0;
 	constructor(private readonly sink: (contact: InputContact, down: boolean) => void) {}
 
 	private isHeld(contact: InputContact, except?: string): boolean {
@@ -58,6 +60,10 @@ export class HostInputs {
 		if (contact !== 'on' && (!Number.isInteger(contact) || contact < 0 || contact >= 128))
 			throw new Error('Physical matrix contact must be an integer in 0..127, or ON');
 		if (typeof down !== 'boolean' || typeof cancel !== 'boolean') throw new Error('Invalid contact transition');
+		if (this.pastePlan && down && !cancel) {
+			if (contact === 'on') this.clearTyping();
+			else throw new Error('Paste in progress; cancel queued keys before entering other input.');
+		}
 		checkBoundaryBudget(minimumHold);
 		if (typeof buffered !== 'boolean' || (buffered && (source !== 'physical' || contact === 'on')))
 			throw new Error('Buffered typing requires a physical matrix key');
@@ -134,6 +140,8 @@ export class HostInputs {
 	}
 
 	clearTyping() {
+		this.pastePlan = null;
+		this.pasteCursor = 0;
 		if (this.typingActive) this.remove(this.typingActive.id, this.typingActive);
 		this.typingActive = null;
 		this.typing = [];
@@ -144,6 +152,39 @@ export class HostInputs {
 
 	typingStatus() {
 		return { pending: this.typing.length, blocked: this.typingBlocked, capacity: TYPING_CAPACITY };
+	}
+
+	startPaste(contacts: number[]) {
+		if (
+			!Array.isArray(contacts) ||
+			contacts.length < 1 ||
+			contacts.length > 8192 ||
+			contacts.some((contact) => !Number.isInteger(contact) || contact < 0 || contact >= 128)
+		)
+			throw new Error('Invalid paste contact plan');
+		if (this.pastePlan || this.typing.length || this.held.size || this.typingBlocked)
+			throw new Error('Release held keys and clear queued input before pasting.');
+		this.pastePlan = contacts.slice();
+		this.pasteCursor = 0;
+		this.fillPaste();
+	}
+
+	pasteStatus() {
+		return {
+			pending: this.pastePlan ? this.pastePlan.length - this.pasteCursor + this.typing.length : 0,
+			total: this.pastePlan?.length ?? 0,
+		};
+	}
+
+	private fillPaste() {
+		if (!this.pastePlan) return;
+		while (this.pasteCursor < this.pastePlan.length && this.typing.length < TYPING_CAPACITY) {
+			const owner = `paste:${this.pasteCursor}`;
+			const contact = this.pastePlan[this.pasteCursor++];
+			this.setBuffered(owner, contact, true, false);
+			this.setBuffered(owner, contact, false, false);
+		}
+		if (!this.pasteStatus().pending) this.pastePlan = null;
 	}
 
 	/** Accelerate only scan/debounce work, not a user's sustained key hold. */
@@ -199,11 +240,13 @@ export class HostInputs {
 			}
 		}
 		this.startTyping();
+		this.fillPaste();
 	};
 
 	snapshot() {
 		const contacts = [...new Set([...this.held.values()].map((state) => state.contact))];
 		return {
+			paste: this.pasteStatus(),
 			typing: this.typingStatus(),
 			pressedCodes: contacts.filter((c): c is number => typeof c === 'number').sort((a, b) => a - b),
 			onHeld: contacts.includes('on'),

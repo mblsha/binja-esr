@@ -44,6 +44,59 @@ const request = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__inputRequest(type, payload), { type, payload });
 const contacts = (page: Page) => request(page, 'input_state').then((state) => state.rust);
 
+async function previewPaste(page: Page, text: string) {
+	await page.getByRole('button', { name: 'More options' }).click();
+	await page.getByTestId('open-paste').click();
+	await page.getByTestId('paste-editor').fill(text);
+}
+
+test('paste preview rejects unsupported text and streams a bounded, cancellable queue while paused', async ({
+	page,
+}) => {
+	await open(page, 'iq-7000');
+	await previewPaste(page, 'ABC:DEF');
+	const generation = (await request(page, 'input_state')).generation;
+	await expect(request(page, 'paste_text', { text: 'A', generation: generation - 1 })).rejects.toThrow(
+		'Stale paste generation',
+	);
+	await expect(page.getByTestId('paste-unsupported')).toContainText('nothing will be typed');
+	await expect(page.getByTestId('submit-paste')).toBeDisabled();
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	await page.getByTestId('paste-editor').fill('A'.repeat(300));
+	await page.getByTestId('submit-paste').click();
+	await expect(page.getByTestId('paste-preview')).toHaveCount(0);
+	let state = await request(page, 'input_state');
+	expect(state.paste).toEqual({ pending: 300, total: 300 });
+	expect(state.typing.pending).toBe(128);
+	await page.waitForTimeout(50);
+	expect((await request(page, 'input_state')).paste.pending).toBe(300);
+	await request(page, 'step', { instructions: 80_000 });
+	expect((await request(page, 'input_state')).paste.pending).toBe(299);
+	await page.getByRole('button', { name: 'Cancel queued keys', exact: true }).click();
+	state = await request(page, 'input_state');
+	expect(state.paste.pending).toBe(0);
+	expect(state.rust).toEqual({ matrix: [], on: false });
+	await request(page, 'step', { instructions: 80_000 });
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+});
+
+test('clipboard paste opens a preview without injecting text or stealing host editor paste', async ({ page }) => {
+	await open(page, 'iq-7000');
+	await page.getByTestId('keyboard-focus').click();
+	const intercepted = await page.getByTestId('keyboard-target').evaluate((target) => {
+		const data = new DataTransfer();
+		data.setData('text/plain', 'ABC,123');
+		return !target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+	});
+	expect(intercepted).toBe(true);
+	await expect(page.getByTestId('paste-editor')).toHaveValue('ABC,123');
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+	const editorIntercepted = await page
+		.getByTestId('paste-editor')
+		.evaluate((target) => !target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true })));
+	expect(editorIntercepted).toBe(false);
+});
+
 test('clicking the device enables focus and buffered feedback follows delivered contacts', async ({ page }) => {
 	await open(page, 'iq-7000');
 	await page.locator('.iq-brand').click();
@@ -432,6 +485,42 @@ test('real ROM: PC-E500 zero-delay repeated digits reach a fresh calculator thro
 	await expect(page.getByTestId('lcd-text')).toContainText('33.');
 	await expect.poll(async () => (await request(page, 'input_state')).typing.pending).toBe(0);
 	await page.getByRole('button', { name: 'Stop', exact: true }).click();
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+});
+
+test('real IQ ROM: previewed paste enters comma and newline through actual MEMO keys', async ({ page }) => {
+	test.skip(process.env.IQ7000_E2E_REAL_ROM !== '1', 'Requires private IQ-7000 ROM');
+	await open(page, 'iq-7000', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await request(page, 'step', { instructions: 500_000 });
+	await virtualTap(page, 'memo');
+	await expect(page.getByTestId('lcd-text')).toContainText('MEMO ?');
+	await previewPaste(page, 'PASTE ONE,2\nSECOND');
+	await page.getByTestId('submit-paste').click();
+	await page.getByTestId('pause-resume').click();
+	await expect(page.getByTestId('lcd-text')).toContainText('PASTE ONE,2');
+	await expect(page.getByTestId('lcd-text')).toContainText('SECOND');
+	await expect.poll(async () => (await request(page, 'input_state')).paste.pending).toBe(0);
+	await page.getByTestId('pause-resume').click();
+	expect(await contacts(page)).toEqual({ matrix: [], on: false });
+});
+
+test('real ROM: previewed PC paste executes an explicitly confirmed calculator expression', async ({ page }) => {
+	test.skip(process.env.PCE500_E2E_REAL_ROM !== '1', 'Requires private PC-E500 ROM');
+	await open(page, 'pc-e500', true);
+	await page.getByText('LCD (decoded text)', { exact: true }).click();
+	await request(page, 'step', { instructions: 500_000 });
+	await virtualTap(page, 'pf1', 800_000);
+	await virtualTap(page, 'pf1', 800_000);
+	await virtualTap(page, 'pf2', 800_000);
+	await expect(page.getByTestId('lcd-text')).toContainText('0.');
+	await previewPaste(page, '11+22\n');
+	await expect(page.getByTestId('paste-preview')).toContainText('may execute');
+	await page.getByTestId('submit-paste').click();
+	await page.getByTestId('pause-resume').click();
+	await expect(page.getByTestId('lcd-text')).toContainText('33.');
+	await expect.poll(async () => (await request(page, 'input_state')).paste.pending).toBe(0);
+	await page.getByTestId('pause-resume').click();
 	expect(await contacts(page)).toEqual({ matrix: [], on: false });
 });
 

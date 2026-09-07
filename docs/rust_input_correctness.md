@@ -60,7 +60,30 @@ changing mapping, and machine replacement clear held host contacts. Host
 auto-repeat does not send repeated DOWNs; the ROM owns key repeat. Raw keycap
 mode preserves immediate down/up, so extremely fast taps can miss firmware
 scanning/debounce. Buffered mode now preserves fast typing as described below.
-Paste/IME and automatic letter-case composition remain unsupported.
+IME and automatic letter-case composition remain unsupported. Qualified paste
+is available through the preview workflow below.
+
+### Previewed paste
+
+Choose **⋯ → Paste text…**, or paste while device keyboard input is enabled.
+Clipboard text opens a preview and never starts execution without the explicit
+**Type N device keys** action. Host text editors retain their own paste handling.
+The entire plan is rejected if any character is unsupported; the preview lists
+the offending characters and positions. Up to 4,096 characters are accepted.
+
+Letters/digits and qualified punctuation use the shared physical mapping. IQ
+comma expands to sequential SHIFT/release/K, and newlines use RETURN. PC newlines
+press ENTER, which can execute commands or expressions; this is disclosed before
+submission. **Device CAPS controls case**. This is not a desktop text composer
+and does not promise case conversion or application-independent text insertion.
+
+The full plan feeds the same 128-contact typing buffer in bounded batches. Long
+paste cannot overflow that buffer. A paused paste waits for explicit execution;
+it does not run the machine secretly. Cancel, ON, focus/lifecycle cleanup and
+machine replacement discard submitted and not-yet-submitted keys. Other input
+is rejected while paste is in progress to prevent interleaving. Counts describe
+pending contacts, not confirmed ROM-consumed characters. No RAM, FIFO or IRQ
+injection is used.
 
 ### Fast typing and optional catch-up
 

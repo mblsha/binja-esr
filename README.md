@@ -179,6 +179,9 @@ Hover a key for its host bindings. Host shortcuts and text fields are excluded.
 **⋯ → Shortcuts** shows a compact reference. Depressed keys follow delivered
 Rust contacts; cyan outlines indicate host-held keys. **Save LCD PNG** exports
 actual display pixels; optional matching metadata is available separately.
+**Paste text…** previews a qualified key sequence before submission. Unknown
+characters block the whole paste; CAPS controls case and PC newlines can execute
+commands. Long pastes are bounded and cancellable, with no RAM/FIFO injection.
 Fast typing is buffered in order through real contacts. **Device pace** is the
 non-accelerated default; **Responsive** briefly accelerates scan/release work
 (including emulated RTC time). Pausing freezes the queue; **Cancel queued keys** cancels

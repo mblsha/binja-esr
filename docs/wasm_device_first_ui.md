@@ -27,7 +27,7 @@ full UI goal; it is not a claim that all milestones have passed validation.
 - [x] Default both host paths to non-accelerated Device pace.
 - [ ] Complete power-state reporting and priority ON interaction tests.
 - [x] Focus-on-device, delivered-contact feedback, shortcut overlay.
-- [ ] Qualified, cancellable paste with explicit unsupported-character handling.
+- [x] Qualified, cancellable paste with explicit unsupported-character handling.
 - [ ] Destructive-action confirmation, supported restoration/export and fault actions.
 - [x] Native-resolution LCD screenshot export with optional provenance metadata.
 - [ ] Refine visible shell clutter and consolidate accuracy disclosures.
@@ -83,3 +83,26 @@ cases skipped), and 10 selected private-ROM checks passed. Svelte/TypeScript,
 formatting and production build passed. Full-page real-ROM captures of IQ MEMO
 and PC calculator were visually inspected; further shell decluttering and
 accuracy-panel consolidation remain on the checklist.
+
+## Paste milestone
+
+Paste is previewed and explicitly confirmed. Unsupported characters reject the
+whole plan without changing contacts. The same compiler validates the preview
+and worker submission against the selected model's qualified key map; stale
+machine generations are rejected. Up to 4,096 characters (up to 8,192 contacts
+for IQ comma composition) feed the existing 128-key buffer incrementally.
+Pause never advances the paste. Cancel/ON/lifecycle cleanup discard the full
+plan, and competing key-downs are rejected during delivery. CAPS/app-state and
+PC ENTER execution consequences are disclosed before submission.
+
+The real-ROM acceptance adds IQ MEMO `PASTE ONE,2` plus a newline and `SECOND`,
+and a fresh PC calculator receiving confirmed `11+22` plus ENTER and producing
+`33.`. These tests use preview UI and ordinary paced Run, not record writers or
+direct application calls. Details and limits are in
+[Rust input correctness](rust_input_correctness.md#previewed-paste).
+
+Validation: 139 frontend tests, 51 bounded Chromium checks (13 opt-in cases
+skipped), and 12 selected private-ROM tests passed. Type checks, formatting,
+and production build passed. Additional host tests verify clipboard preview
+without immediate input, preserved host-editor paste, and stale-generation
+rejection before any contact mutation.

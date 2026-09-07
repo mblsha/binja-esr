@@ -8,6 +8,7 @@ import { callBounded } from './bounded_call';
 import { runIsolatedScript } from './isolated_script';
 import { applyContact, HostInputs, InputBufferOverflow, type InputContact } from './host_inputs';
 import { LatestFrame } from './latest_frame';
+import { planPaste } from './paste_plan';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -49,6 +50,7 @@ type WorkerRequest =
 	  }
 	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
 	| { id: number; type: 'input_state' }
+	| { id: number; type: 'paste_text'; text: string; generation: number }
 	| { id: number; type: 'frame_consumed'; sequence: number }
 	| { id: number; type: 'frame_delivery_state' };
 
@@ -72,6 +74,7 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	paste: ReturnType<HostInputs['pasteStatus']>;
 	inputContacts: { matrix: number[]; on: boolean };
 	typing: ReturnType<HostInputs['typingStatus']>;
 	pacing: PacingStatus;
@@ -504,6 +507,7 @@ function captureFrame(forceText: boolean): Frame {
 	const kb = snapshotKeyboard();
 	return {
 		lcdPixels: pixelsCopy.buffer,
+		paste: inputs.pasteStatus(),
 		inputContacts: emulator.input_contacts(),
 		typing: inputs.typingStatus(),
 		pacing: emulator.pacing_status(),
@@ -731,6 +735,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					type: 'input_status',
 					generation: machineGeneration,
 					inputContacts: emulator.input_contacts(),
+					paste: inputs.pasteStatus(),
 					typing: inputs.typingStatus(),
 				});
 				replyOk(msg.id, {
@@ -751,9 +756,22 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					type: 'input_status',
 					generation: machineGeneration,
 					inputContacts: emulator.input_contacts(),
+					paste: inputs.pasteStatus(),
 					typing: inputs.typingStatus(),
 				});
 				replyOk(msg.id, { generation: machineGeneration, applied: true });
+				return;
+			}
+			case 'paste_text': {
+				if (operations.busy) throw new Error('Wait for the active machine operation before pasting.');
+				if (msg.generation !== machineGeneration) throw new Error('Stale paste generation');
+				if (!emulator || typeof msg.text !== 'string') throw new Error('Paste requires a loaded machine and text');
+				const plan = planPaste(msg.text, romModel);
+				if (plan.error || plan.unsupported.length)
+					throw new Error(plan.error ?? 'Paste contains unqualified characters');
+				inputs.startPaste(plan.contacts);
+				requestFrame(false);
+				replyOk(msg.id, inputs.pasteStatus());
 				return;
 			}
 			case 'input_state': {

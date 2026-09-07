@@ -16,6 +16,7 @@
 	import { automaticHostSlice, type ExecutionMode, type PacingStatus } from '$lib/emulator/host_pacing';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
 	import { HostInputs, InputBufferOverflow, applyContact, type InputContact } from '$lib/emulator/host_inputs';
+	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -83,6 +84,12 @@
 	let lastCapture: { filename: string; metadata: object } | null = null;
 	let exportingLcd = false;
 	let typingStatus = { pending: 0, blocked: false, capacity: 128 };
+	let pasteStatus = { pending: 0, total: 0 };
+	let pasteOpen = false;
+	let pasteText = '';
+	let pasteSubmitting = false;
+	let pasteEditor: HTMLTextAreaElement;
+	$: pastePlan = planPaste(pasteText, romModel);
 	let typingCatchUp = false;
 	let advancedOpen = false;
 	let menuOpen = false;
@@ -136,6 +143,7 @@
 		if (typeof frame?.generation === 'number' && frame.generation !== romLoadGeneration) return;
 		if (frame.inputContacts) updateDeliveredContacts(frame.inputContacts);
 		if (frame.typing) typingStatus = frame.typing;
+		if (frame.paste) pasteStatus = frame.paste;
 		if (frame?.model && frame.model !== romModel) return;
 		try {
 			if (frame?.lcdPixels instanceof ArrayBuffer) {
@@ -257,6 +265,7 @@
 			}
 			if (data.type === 'input_status' && data.generation === romLoadGeneration) {
 				typingStatus = data.typing;
+				if (data.paste) pasteStatus = data.paste;
 				if (data.inputContacts) updateDeliveredContacts(data.inputContacts);
 			}
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
@@ -422,6 +431,10 @@
 		const buffered = source === 'physical' && hostKeyboardMode === 'symbols' && code !== 'on';
 		const label = code === 'on' ? 'ON' : hex(code, 2);
 		if (down && (!romLoaded || workerHealth !== 'ready')) return;
+		if (down && pasteStatus.pending && code !== 'on') {
+			keyboardNotice = 'Paste in progress; cancel queued keys before entering other input.';
+			return;
+		}
 		const recordAck = () => {
 			if (generation !== romLoadGeneration) return;
 			lastInputAck = `${label} ${down ? 'down' : cancel ? 'cancelled' : 'up'} ${buffered ? 'accepted by typing buffer' : 'applied to input controller'}; ROM consumption not confirmed`;
@@ -443,6 +456,7 @@
 				if (error instanceof InputBufferOverflow) void stop();
 			} finally {
 				typingStatus = fallbackInputs.typingStatus();
+				pasteStatus = fallbackInputs.pasteStatus();
 				updateDeliveredContacts(emulator.input_contacts());
 			}
 		}
@@ -464,6 +478,7 @@
 		else if (emulator) {
 			fallbackInputs.releaseSource(source);
 			typingStatus = fallbackInputs.typingStatus();
+			pasteStatus = fallbackInputs.pasteStatus();
 			updateDeliveredContacts(emulator.input_contacts());
 		}
 	}
@@ -481,6 +496,57 @@
 		keyboardNotice = '';
 		await tick();
 		keyboardTarget?.focus({ preventScroll: true });
+	}
+
+	async function openPaste(text = '') {
+		pasteText = text;
+		pasteOpen = true;
+		menuOpen = false;
+		await tick();
+		pasteEditor?.focus();
+	}
+
+	function onPaste(event: ClipboardEvent) {
+		if (!physicalKeyboardEnabled || !romLoaded || isHostControl(event.target)) return;
+		event.preventDefault();
+		void openPaste(event.clipboardData?.getData('text/plain') ?? '');
+	}
+
+	async function submitPaste() {
+		if (
+			!romLoaded ||
+			loadingRom ||
+			pasteSubmitting ||
+			functionRunnerBusy ||
+			stepBusy ||
+			controlPending ||
+			workerHealth !== 'ready' ||
+			!pastePlan.contacts.length ||
+			pastePlan.error ||
+			pastePlan.unsupported.length
+		)
+			return;
+		pasteSubmitting = true;
+		const generation = romLoadGeneration;
+		try {
+			if (worker) {
+				const result = await workerCall('paste_text', { text: pasteText, generation });
+				if (generation !== romLoadGeneration) return;
+				pasteStatus = result;
+			} else {
+				fallbackInputs.startPaste(pastePlan.contacts);
+				pasteStatus = fallbackInputs.pasteStatus();
+				refreshFast();
+			}
+			if (generation !== romLoadGeneration) return;
+			pasteOpen = false;
+			pasteText = '';
+			await focusDeviceKeyboard();
+		} catch (error) {
+			if (generation === romLoadGeneration) lastError = `Paste not started: ${String(error)}`;
+		} finally {
+			pasteSubmitting = false;
+		}
 	}
 
 	function updateDeliveredContacts(contacts: { matrix: number[]; on: boolean }) {
@@ -672,6 +738,7 @@
 		if (!emulator) return;
 		updateDeliveredContacts(emulator.input_contacts());
 		typingStatus = fallbackInputs.typingStatus();
+		pasteStatus = fallbackInputs.pasteStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
 			const geometry = emulator.lcd_capture();
@@ -1156,6 +1223,8 @@
 	});
 </script>
 
+<svelte:window on:paste={onPaste} />
+
 <main>
 	<header class="device-toolbar">
 		<h1>{romModel.toUpperCase()}</h1>
@@ -1204,6 +1273,7 @@
 				</select>
 			</label>
 			<button on:click={focusDeviceKeyboard} disabled={!romLoaded}>Keyboard focus</button>
+			<button data-testid="open-paste" on:click={() => openPaste()} disabled={!romLoaded}>Paste text…</button>
 			<button
 				data-testid="export-lcd"
 				on:click={exportLcd}
@@ -1262,10 +1332,58 @@
 		</p>
 	{/if}
 	{#if lastError}<p class="error" role="alert">{lastError}</p>{/if}
-	{#if typingStatus.pending || typingStatus.blocked}
+	{#if pasteOpen}
+		<section class="paste-preview" aria-label="Paste preview" data-testid="paste-preview">
+			<label for="paste-editor">Text to type through device keys (up to {MAX_PASTE_CHARACTERS} characters)</label>
+			<textarea
+				id="paste-editor"
+				data-testid="paste-editor"
+				bind:this={pasteEditor}
+				bind:value={pasteText}
+				rows="5"
+				disabled={pasteSubmitting}
+			></textarea>
+			<p class="hint">
+				Device CAPS controls case. This is a key sequence, not direct text insertion. Check the current app and CAPS
+				state first. {romModel === 'iq-7000'
+					? 'Newlines use the newline key; comma uses SHIFT, release, K.'
+					: 'Newlines press ENTER and may execute a BASIC command or calculator expression.'} Paused paste waits for Resume.
+			</p>
+			{#if pastePlan.error}<p class="error" role="alert">{pastePlan.error}</p>{/if}
+			{#if pastePlan.unsupported.length}<p class="error" role="alert" data-testid="paste-unsupported">
+					Unsupported characters — nothing will be typed: {pastePlan.unsupported
+						.slice(0, 16)
+						.map((entry) => `${JSON.stringify(entry.character)} at ${entry.position}`)
+						.join(', ')}{pastePlan.unsupported.length > 16 ? ` (${pastePlan.unsupported.length} total)` : ''}
+				</p>{/if}
+			<button
+				data-testid="submit-paste"
+				on:click={submitPaste}
+				disabled={!romLoaded ||
+					pasteSubmitting ||
+					stepBusy ||
+					functionRunnerBusy ||
+					!!controlPending ||
+					workerHealth !== 'ready' ||
+					!!pastePlan.error ||
+					pastePlan.unsupported.length > 0 ||
+					!pastePlan.contacts.length}>Type {pastePlan.contacts.length} device keys</button
+			>
+			<button
+				on:click={() => {
+					pasteOpen = false;
+					pasteText = '';
+				}}
+				disabled={pasteSubmitting}>Close paste preview</button
+			>
+		</section>
+	{/if}
+	{#if typingStatus.pending || typingStatus.blocked || pasteStatus.pending}
 		<div class="queue-status" role="status">
-			{typingStatus.pending} keys pending{typingStatus.blocked ? ' — input buffer blocked' : ''}<button
-				on:click={releaseAllPhysicalHeldCodes}>Cancel queued keys</button
+			{pasteStatus.pending || typingStatus.pending} keys pending{pasteStatus.pending
+				? ' — paste; delivered contacts, not ROM acknowledgement'
+				: ''}{typingStatus.blocked ? ' — input buffer blocked' : ''}<button on:click={releaseAllPhysicalHeldCodes}
+				>Cancel queued keys</button
 			>
 		</div>
 	{/if}
@@ -1464,8 +1582,8 @@
 				Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
 				operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9 for
 				device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is not
-				mapped. Unsupported punctuation is reported, not substituted. IME, paste and automatic case conversion are not
-				supported.
+				mapped. Unsupported punctuation is reported, not substituted. Paste opens a preview and supports only qualified
+				key sequences; IME and automatic case conversion are not supported.
 			</p>
 			<p class="hint">
 				Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
@@ -1690,6 +1808,18 @@
 </main>
 
 <style>
+	.paste-preview {
+		padding: 16px;
+		border: 1px solid #526169;
+		border-radius: 8px;
+	}
+	.paste-preview textarea {
+		display: block;
+		box-sizing: border-box;
+		width: 100%;
+		margin: 10px 0;
+		font: inherit;
+	}
 	.device-toolbar,
 	.toolbar-actions,
 	.quick-options,
