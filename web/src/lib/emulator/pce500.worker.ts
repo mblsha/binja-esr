@@ -116,7 +116,7 @@ let machineGeneration = 0;
 
 let running = false;
 let targetFps = 30;
-let typingCatchUp = true;
+let typingCatchUp = false;
 let debugOptions: DebugOptions = {
 	regsOpen: false,
 	callStackOpen: false,

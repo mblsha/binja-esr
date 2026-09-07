@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('PF1 click changes decoded LCD text', async ({ page }) => {
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 
 	await page.getByTestId('rom-model').selectOption('pc-e500');
 

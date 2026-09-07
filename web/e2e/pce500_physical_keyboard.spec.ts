@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test('physical keyboard: holding F1 changes decoded LCD text', async ({ page }) => {
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 
 	await page.getByTestId('rom-model').selectOption('pc-e500');
 

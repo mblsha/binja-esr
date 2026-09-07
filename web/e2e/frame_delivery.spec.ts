@@ -67,6 +67,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 			};
 		}, model);
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeEnabled();
 		await expect.poll(() => rpc(page, 'frame_delivery_state').then((s) => s.inFlight)).toBeNull();
 		const frames = await page.evaluate(() => (window as any).__displayHarness.received);

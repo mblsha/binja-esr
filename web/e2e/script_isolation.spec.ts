@@ -8,6 +8,7 @@ async function prepare(page: Page, model: string) {
 	await page.route(`**/api/rom?model=${model}`, (route) => route.fulfill({ status: 200, body: rom }));
 	await page.addInitScript((value) => localStorage.setItem('sc62015:rom-model', value), model);
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 	await page.getByTestId('fnr-panel').evaluate((element: HTMLDetailsElement) => { element.open = true; });
 }

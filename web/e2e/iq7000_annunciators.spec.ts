@@ -14,6 +14,7 @@ async function openIq(page: Page) {
 	// the initial ROM/WASM load is still in flight.
 	await page.addInitScript(() => localStorage.setItem('sc62015:rom-model', 'iq-7000'));
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 	await expect(page.locator('.lcd-display canvas')).toHaveAttribute('width', '488');
 }

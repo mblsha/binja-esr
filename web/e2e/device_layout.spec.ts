@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 for (const model of ['pc-e500', 'iq-7000']) {
 	test(`${model}: device geometry is legible and horizontally pans on narrow screens`, async ({ page }) => {
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		await page.getByTestId('rom-model').selectOption(model);
 		const shell = page.getByTestId('device-shell');
 		await expect(shell).toHaveClass(new RegExp(model));

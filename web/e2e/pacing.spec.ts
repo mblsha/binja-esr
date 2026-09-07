@@ -38,6 +38,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 			};
 		}, model);
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		const mode = page.getByTestId('execution-mode');
 		const run = page.getByRole('button', { name: 'Run', exact: true });
 		const stop = page.getByRole('button', { name: 'Stop', exact: true });

@@ -25,9 +25,9 @@ application selectors. Rust and TypeScript consume this same table.
 
 ### Browser keyboard
 
-Click **Type on device** above the device case to enable physical input and move
-focus to the device. Click **Run** for live typing; paused key events never
-secretly advance the CPU. The adjacent checkbox disables capture. Hover a
+Choose **⋯ → Keyboard focus** to enable physical input and move
+focus to the device. Click **Resume** for live typing; paused key events never
+secretly advance the CPU. Advanced contains the capture checkbox and raw mapping controls. Hover a
 device key for host bindings; cyan outlines show host-held contacts, not proof
 that the ROM has consumed them. Laptop function keys may require **Fn**.
 
@@ -74,7 +74,8 @@ hold stays held for the ROM's ordinary repeat behavior. No FIFO/IRQ/record write
 or translated input events are used. The same queue serves worker and fallback
 frontends and advances only when Rust executes scheduler boundaries.
 
-**Speed up while typing** is enabled by default. In interactive Run it executes
+**Device pace** is the default and disables typing acceleration. The **Responsive**
+preset (or Advanced's **Speed up while typing**) enables it. In interactive Run it executes
 just the remaining buffered scan/gap work unthrottled, in slices bounded to four
 milliseconds of host work. Every slice still yields to input and Stop. It then
 rebases pacing so the user does not wait for an artificial time debt. A sustained

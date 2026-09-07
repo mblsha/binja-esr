@@ -4,6 +4,7 @@ test('function runner: reset + PF1 tap + traced call does not trigger wasm-bindg
 	page,
 }) => {
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 
 	await page.getByTestId('rom-model').selectOption('pc-e500');
 

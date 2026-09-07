@@ -34,6 +34,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 			};
 		}, model);
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		const run = page.getByRole('button', { name: 'Run', exact: true });
 		await expect(run).toBeEnabled();
 		await page.evaluate(() => {
@@ -103,6 +104,7 @@ test('Pause stays pending until the actual worker acknowledgement arrives', asyn
 		};
 	});
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	const run = page.getByRole('button', { name: 'Run', exact: true });
 	await expect(run).toBeEnabled();
 	await run.click();
@@ -123,6 +125,7 @@ test('Pause stays pending until the actual worker acknowledgement arrives', asyn
 
 test('Stop cancels a huge Function Runner step and the machine remains usable', async ({ page }) => {
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 	await page.getByTestId('fnr-panel').evaluate((panel: HTMLDetailsElement) => {
 		panel.open = true;
@@ -147,6 +150,7 @@ for (const model of ['pc-e500', 'iq-7000']) {
 		await page.route(`**/api/rom?model=${model}`, (route) => route.fulfill({ status: 200, body: rom }));
 		await page.addInitScript((model) => localStorage.setItem('sc62015:rom-model', model), model);
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 		await page.getByTestId('fnr-panel').evaluate((panel: HTMLDetailsElement) => {
 			panel.open = true;
@@ -178,6 +182,7 @@ await e.step(1);
 		await page.route(`**/api/rom?model=${model}`, (route) => route.fulfill({ status: 200, body: rom }));
 		await page.addInitScript((model) => localStorage.setItem('sc62015:rom-model', model), model);
 		await page.goto('/');
+		await page.getByTestId('advanced-panel').locator('> summary').click();
 		await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 		await page.getByTestId('fnr-panel').evaluate((panel: HTMLDetailsElement) => {
 			panel.open = true;
@@ -218,6 +223,7 @@ test('a delayed previous ROM fetch cannot replace the newly selected model', asy
 	});
 	await page.route('**/api/rom?model=iq-7000', (route) => route.fulfill({ status: 200, body: rom }));
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	await expect.poll(() => oldRequested).toBe(true);
 	await page.getByTestId('rom-model').selectOption('iq-7000');
 	await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();

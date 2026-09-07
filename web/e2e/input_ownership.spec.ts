@@ -36,6 +36,7 @@ async function open(page: Page, model: string, realRom = false) {
 		};
 	}, model);
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 	await expect(page.getByRole('button', { name: 'Step 20k' })).toBeEnabled();
 }
 

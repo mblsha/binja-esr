@@ -15,6 +15,7 @@ test('real ROM: PF1 changes boot menu', async ({ page }) => {
 	test.skip(!existsSync(process.env.PCE500_ROM_PATH), 'PCE500_ROM_PATH does not exist on disk');
 
 	await page.goto('/');
+	await page.getByTestId('advanced-panel').locator('> summary').click();
 
 	await page.getByTestId('rom-model').selectOption('pc-e500');
 	await page.getByText('LCD (decoded text)', { exact: true }).click();

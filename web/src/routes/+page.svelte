@@ -77,7 +77,10 @@
 	const physicalHeldCodes = new Map<string, InputContact[]>();
 	let physicalHighlights = new Set<InputContact>();
 	let typingStatus = { pending: 0, blocked: false, capacity: 128 };
-	let typingCatchUp = true;
+	let typingCatchUp = false;
+	let advancedOpen = false;
+	let menuOpen = false;
+	let lcdOnly = false;
 	const pendingVirtualRelease = new Map<number, number>();
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
 	let assistedTaps = true;
@@ -1092,161 +1095,83 @@
 </script>
 
 <main>
-	<header class="page-header">
-		<div>
-			<p class="eyebrow">SC62015 / RUST + WASM</p>
-			<h1>Pocket device bench</h1>
-		</div>
-		<div class="source-controls">
-			<label>
-				ROM preset:
-				<select
-					bind:value={$romModelStore}
-					on:change={() => {
-						romModelWasPersisted = true;
-						void tryAutoLoadRom(true);
-					}}
-					data-testid="rom-model"
-				>
-					<option value="iq-7000">IQ-7000</option>
-					<option value="pc-e500">PC-E500</option>
-				</select>
-			</label>
-
-			<label>
-				Load ROM file:
-				<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
-			</label>
+	<header class="device-toolbar">
+		<h1>{romModel.toUpperCase()}</h1>
+		<div class="toolbar-actions">
+			<button
+				disabled={!romLoaded || workerHealth !== 'ready'}
+				on:click={() => {
+					virtualPress('on', 'toolbar-on');
+					virtualRelease('on', 'toolbar-on');
+				}}
+				title="Press the device ON key; does not reset or toggle emulator pause"
+				data-testid="power-on">Power / ON</button
+			>
+			<button
+				data-testid="pause-resume"
+				disabled={!romLoaded ||
+					!!controlPending ||
+					workerHealth === 'faulted' ||
+					(!running && executionMode === 'deterministic')}
+				on:click={() =>
+					running || stepBusy || functionRunnerBusy || workerHealth === 'unresponsive' ? stop() : start()}
+				>{running || stepBusy || functionRunnerBusy ? 'Pause' : 'Resume'}</button
+			>
+			<button aria-label="More options" aria-expanded={menuOpen} on:click={() => (menuOpen = !menuOpen)}>⋯</button>
 		</div>
 	</header>
-
-	<div class="controls">
-		<label>
-			Execution mode:
-			<select
-				data-testid="execution-mode"
-				value={executionMode}
-				on:change={setExecutionMode}
-				disabled={!romLoaded ||
-					running ||
-					stepBusy ||
-					functionRunnerBusy ||
-					!!controlPending ||
-					workerHealth !== 'ready'}
+	{#if menuOpen}
+		<section class="quick-options" aria-label="Device options">
+			<label
+				>View <select bind:value={lcdOnly} data-testid="display-view"
+					><option value={false}>Device</option><option value={true}>LCD only</option></select
+				></label
 			>
-				<option value="interactive">Interactive (nominal)</option>
-				<option value="turbo">Turbo (unthrottled)</option>
-				<option value="deterministic">Deterministic (explicit budgets)</option>
-			</select>
-		</label>
-		<button
-			on:click={() => stepOnce(1_000)}
-			disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
-			>Step 1k</button
-		>
-		<button
-			on:click={() => stepOnce(20_000)}
-			disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
-			>Step 20k</button
-		>
-		<button
-			class="run-button"
-			on:click={start}
-			disabled={!romLoaded ||
-				executionMode === 'deterministic' ||
-				running ||
-				stepBusy ||
-				functionRunnerBusy ||
-				!!controlPending ||
-				workerHealth !== 'ready'}>Run</button
-		>
-		<button
-			on:click={stop}
-			disabled={workerHealth === 'faulted' ||
-				controlPending === 'stop' ||
-				(!running && !stepBusy && !functionRunnerBusy && controlPending !== 'start' && workerHealth !== 'unresponsive')}
-			>Stop</button
-		>
-		<label>
-			Target FPS:
-			<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
-		</label>
-	</div>
-
-	<p class="hint" data-testid="emu-status">Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}</p>
-	{#if executionMode === 'deterministic'}
-		<p class="hint">
-			Automatic Run is disabled. Repeatable results require the same ROM/state, a fixed RTC seed (the default seed comes
-			from host time), and identical inputs at identical scheduler boundaries. This selection does not reset your
-			machine or make live human input deterministic.
-		</p>
+			<label
+				>Pace
+				<select
+					data-testid="pace-preset"
+					value={typingCatchUp ? 'responsive' : 'device'}
+					disabled={executionMode !== 'interactive'}
+					on:change={(event) => {
+						typingCatchUp = event.currentTarget.value === 'responsive';
+						pushWorkerOptions();
+					}}
+				>
+					<option value="device">Device pace</option><option value="responsive">Responsive</option>
+				</select>
+			</label>
+			<button on:click={focusDeviceKeyboard} disabled={!romLoaded}>Keyboard focus</button>
+			<button
+				on:click={() => {
+					advancedOpen = !advancedOpen;
+					menuOpen = false;
+				}}>Advanced</button
+			>
+			<p class="hint">
+				Device pace is nominal, not hardware-calibrated. Responsive accelerates buffered typing and the RTC together.
+			</p>
+		</section>
 	{/if}
-	{#if functionRunnerBusy && functionProgress}
-		<p class="hint" data-testid="execution-progress">{functionProgress}</p>
+	{#if !romLoaded || !running || controlPending || functionRunnerBusy || stepBusy || workerHealth !== 'ready'}
+		<p class="hint" role="status" data-testid="device-status">
+			{loadingRom
+				? 'Loading ROM…'
+				: !romLoaded
+					? 'No ROM loaded — open Advanced to select a ROM.'
+					: !running && workerHealth === 'ready'
+						? 'Paused — device time is frozen. Resume to use the device.'
+						: statusLabel}
+		</p>
 	{/if}
 	{#if lastError}<p class="error" role="alert">{lastError}</p>{/if}
-	<div class="keyboard-controls">
-		<button data-testid="keyboard-focus" on:click={focusDeviceKeyboard} disabled={!romLoaded}>Type on device</button>
-		<label
-			><input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
-			Physical keyboard {physicalKeyboardEnabled ? 'enabled' : 'off'}</label
-		>
-		<label
-			>Mapping:
-			<select data-testid="physical-keyboard-mode" bind:value={hostKeyboardMode}>
-				<option value="symbols">Letters & symbols (buffered)</option>
-				<option value="keycaps">Device keycaps (raw Shift)</option>
-			</select></label
-		>
-		<button data-testid="clear-typing" on:click={releaseAllPhysicalHeldCodes}>Clear queued keys</button>
-		<label
-			><input
-				type="checkbox"
-				data-testid="typing-catch-up"
-				bind:checked={typingCatchUp}
-				on:change={pushWorkerOptions}
-			/>
-			Speed up while typing</label
-		>
-	</div>
-	<p class="hint" data-testid="typing-status">
-		Typing buffer: {typingStatus.pending}/{typingStatus.capacity}{typingStatus.blocked
-			? ' — blocked; clear queued keys to recover'
-			: ''}.
-		{hostKeyboardMode === 'symbols'
-			? 'Fast presses are delivered in order with a scan hold and release gap.'
-			: 'Raw keycaps: exact holds; short presses can miss ROM scanning.'}
-		{#if typingCatchUp}Catch-up advances emulated time/RTC faster during buffered input; paused and deterministic
-			execution are unchanged.{/if}
-	</p>
-	<p class="hint" id="keyboard-help">
-		Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT · F10
-		= CAPS · F12 = ON (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the browser.
-		Hover a device key for its host bindings.
-	</p>
-	<details class="keyboard-help">
-		<summary>Keyboard mappings & letter case</summary>
-		<p class="hint">
-			{#if romModel === 'iq-7000'}
-				F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
-				Store; F11 = newline (also Shift+Enter in Letters & symbols).
-			{:else}
-				F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
-			{/if}
-			Both: letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
-		</p>
-		<p class="hint">
-			Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
-			operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9 for
-			device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is not
-			mapped. Unsupported punctuation is reported, not substituted. IME, paste and automatic case conversion are not
-			supported.
-		</p>
-		<p class="hint">
-			Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
-			belong to the organizer, not your desktop keyboard. Use the numeric keypad or on-screen keys for operators.
-		</p>
-	</details>
+	{#if typingStatus.pending || typingStatus.blocked}
+		<div class="queue-status" role="status">
+			{typingStatus.pending} keys pending{typingStatus.blocked ? ' — input buffer blocked' : ''}<button
+				on:click={releaseAllPhysicalHeldCodes}>Cancel queued keys</button
+			>
+		</div>
+	{/if}
 	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
 	<div
 		class="keyboard-target"
@@ -1257,237 +1182,444 @@
 		data-testid="keyboard-target"
 		bind:this={keyboardTarget}
 	>
-		<DeviceShell
-			model={romModel}
-			disabled={!romLoaded || workerHealth !== 'ready'}
-			{hostKeyboardMode}
-			{physicalHighlights}
-			onPress={virtualPress}
-			onRelease={virtualRelease}
-			onCancelAll={() => releaseInputSource('virtual')}
-		>
-			<div class="lcd-display" aria-label="Emulated LCD including fixed segments">
+		{#if lcdOnly}
+			<div class="lcd-only" aria-label="Emulated LCD including fixed segments">
 				<LcdCanvas pixels={lcdPixels} cols={lcdCols} rows={lcdRows} scale={4 / lcdPixelScale} pixelFormat="gray8" fit />
 			</div>
-		</DeviceShell>
+		{:else}
+			<DeviceShell
+				model={romModel}
+				disabled={!romLoaded || workerHealth !== 'ready'}
+				{hostKeyboardMode}
+				{physicalHighlights}
+				onPress={virtualPress}
+				onRelease={virtualRelease}
+				onCancelAll={() => releaseInputSource('virtual')}
+			>
+				<div class="lcd-display" aria-label="Emulated LCD including fixed segments">
+					<LcdCanvas
+						pixels={lcdPixels}
+						cols={lcdCols}
+						rows={lcdRows}
+						scale={4 / lcdPixelScale}
+						pixelFormat="gray8"
+						fit
+					/>
+				</div>
+			</DeviceShell>
+		{/if}
 	</div>
-	{#if romLoaded}<p class="hint lcd-meta">
-			LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows}) · Case proportions, materials and key legends are provisional.
-		</p>{/if}
-	<details class="session-details">
-		<summary>Session & timing details</summary>
-		{#if romSource}<p class="hint">Loaded ROM ({romModel}) via {romSource}</p>{/if}
-		<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
-		<p class="hint" data-testid="pacing-status">
-			{executionMode}: Interactive pacing uses {pacingStatus?.nominal_timebase_hz ?? '—'} compatibility timing units/s, not
-			hardware-calibrated MHz. IQ-7000 currently uses the PC-E500 fallback timebase. The RTC follows emulated elapsed time;
-			paused wall time is not simulated. Catch-up is capped at 50 ms; dropped host backlog: {(
-				Number(pacingStatus?.dropped_host_ns ?? 0) / 1e6
-			).toFixed(1)} ms. Step and Function Runner use explicit, unthrottled budgets in every mode.
+	<details class="advanced" bind:open={advancedOpen} data-testid="advanced-panel">
+		<summary>Advanced</summary>
+		<header class="page-header">
+			<div>
+				<p class="eyebrow">SC62015 / RUST + WASM</p>
+				<h1>Pocket device bench</h1>
+			</div>
+			<div class="source-controls">
+				<label>
+					ROM preset:
+					<select
+						bind:value={$romModelStore}
+						on:change={() => {
+							romModelWasPersisted = true;
+							void tryAutoLoadRom(true);
+						}}
+						data-testid="rom-model"
+					>
+						<option value="iq-7000">IQ-7000</option>
+						<option value="pc-e500">PC-E500</option>
+					</select>
+				</label>
+
+				<label>
+					Load ROM file:
+					<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
+				</label>
+			</div>
+		</header>
+
+		<div class="controls">
+			<label>
+				Execution mode:
+				<select
+					data-testid="execution-mode"
+					value={executionMode}
+					on:change={setExecutionMode}
+					disabled={!romLoaded ||
+						running ||
+						stepBusy ||
+						functionRunnerBusy ||
+						!!controlPending ||
+						workerHealth !== 'ready'}
+				>
+					<option value="interactive">Interactive (nominal)</option>
+					<option value="turbo">Turbo (unthrottled)</option>
+					<option value="deterministic">Deterministic (explicit budgets)</option>
+				</select>
+			</label>
+			<button
+				on:click={() => stepOnce(1_000)}
+				disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
+				>Step 1k</button
+			>
+			<button
+				on:click={() => stepOnce(20_000)}
+				disabled={!romLoaded || stepBusy || functionRunnerBusy || !!controlPending || workerHealth !== 'ready'}
+				>Step 20k</button
+			>
+			<button
+				class="run-button"
+				on:click={start}
+				disabled={!romLoaded ||
+					executionMode === 'deterministic' ||
+					running ||
+					stepBusy ||
+					functionRunnerBusy ||
+					!!controlPending ||
+					workerHealth !== 'ready'}>Run</button
+			>
+			<button
+				on:click={stop}
+				disabled={workerHealth === 'faulted' ||
+					controlPending === 'stop' ||
+					(!running &&
+						!stepBusy &&
+						!functionRunnerBusy &&
+						controlPending !== 'start' &&
+						workerHealth !== 'unresponsive')}>Stop</button
+			>
+			<label>
+				Target FPS:
+				<input type="number" min="1" max="60" step="1" bind:value={targetFps} />
+			</label>
+		</div>
+
+		<p class="hint" data-testid="emu-status">
+			Status: {statusLabel} • PC: {hex(pc)} • Instr: {instructionCount ?? '—'}
 		</p>
-	</details>
-	{#if lcdKind === 'iq7000-vram'}
+		{#if executionMode === 'deterministic'}
+			<p class="hint">
+				Automatic Run is disabled. Repeatable results require the same ROM/state, a fixed RTC seed (the default seed
+				comes from host time), and identical inputs at identical scheduler boundaries. This selection does not reset
+				your machine or make live human input deterministic.
+			</p>
+		{/if}
+		{#if functionRunnerBusy && functionProgress}
+			<p class="hint" data-testid="execution-progress">{functionProgress}</p>
+		{/if}
+		<div class="keyboard-controls">
+			<button data-testid="keyboard-focus" on:click={focusDeviceKeyboard} disabled={!romLoaded}>Type on device</button>
+			<label
+				><input type="checkbox" data-testid="physical-keyboard-toggle" bind:checked={physicalKeyboardEnabled} />
+				Physical keyboard {physicalKeyboardEnabled ? 'enabled' : 'off'}</label
+			>
+			<label
+				>Mapping:
+				<select data-testid="physical-keyboard-mode" bind:value={hostKeyboardMode}>
+					<option value="symbols">Letters & symbols (buffered)</option>
+					<option value="keycaps">Device keycaps (raw Shift)</option>
+				</select></label
+			>
+			<button data-testid="clear-typing" on:click={releaseAllPhysicalHeldCodes}>Clear queued keys</button>
+			<label
+				><input
+					type="checkbox"
+					data-testid="typing-catch-up"
+					bind:checked={typingCatchUp}
+					on:change={pushWorkerOptions}
+				/>
+				Speed up while typing</label
+			>
+		</div>
+		<p class="hint" data-testid="typing-status">
+			Typing buffer: {typingStatus.pending}/{typingStatus.capacity}{typingStatus.blocked
+				? ' — blocked; clear queued keys to recover'
+				: ''}.
+			{hostKeyboardMode === 'symbols'
+				? 'Fast presses are delivered in order with a scan hold and release gap.'
+				: 'Raw keycaps: exact holds; short presses can miss ROM scanning.'}
+			{#if typingCatchUp}Catch-up advances emulated time/RTC faster during buffered input; paused and deterministic
+				execution are unchanged.{/if}
+		</p>
+		<p class="hint" id="keyboard-help">
+			Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT ·
+			F10 = CAPS · F12 = ON (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the
+			browser. Hover a device key for its host bindings.
+		</p>
+		<details class="keyboard-help">
+			<summary>Keyboard mappings & letter case</summary>
+			<p class="hint">
+				{#if romModel === 'iq-7000'}
+					F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
+					Store; F11 = newline (also Shift+Enter in Letters & symbols).
+				{:else}
+					F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
+				{/if}
+				Both: letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
+			</p>
+			<p class="hint">
+				Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
+				operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9 for
+				device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is not
+				mapped. Unsupported punctuation is reported, not substituted. IME, paste and automatic case conversion are not
+				supported.
+			</p>
+			<p class="hint">
+				Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
+				belong to the organizer, not your desktop keyboard. Use the numeric keypad or on-screen keys for operators.
+			</p>
+		</details>
+		{#if romLoaded}<p class="hint lcd-meta">
+				LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows}) · Case proportions, materials and key legends are provisional.
+			</p>{/if}
+		<details class="session-details">
+			<summary>Session & timing details</summary>
+			{#if romSource}<p class="hint">Loaded ROM ({romModel}) via {romSource}</p>{/if}
+			<p class="hint" data-testid="build-info">WASM: {formatBuildInfo(buildInfo)}</p>
+			<p class="hint" data-testid="pacing-status">
+				{executionMode}: Interactive pacing uses {pacingStatus?.nominal_timebase_hz ?? '—'} compatibility timing units/s,
+				not hardware-calibrated MHz. IQ-7000 currently uses the PC-E500 fallback timebase. The RTC follows emulated elapsed
+				time; paused wall time is not simulated. Catch-up is capped at 50 ms; dropped host backlog: {(
+					Number(pacingStatus?.dropped_host_ns ?? 0) / 1e6
+				).toFixed(1)} ms. Step and Function Runner use explicit, unthrottled budgets in every mode.
+			</p>
+		</details>
+		{#if lcdKind === 'iq7000-vram'}
+			<p class="hint">
+				Fixed segments: ROM-derived mapping; BATT/CARD/beep/alarm/arrows remain provisional. LCD bytes: {Array.from(
+					lcdAnnunciatorBytes ?? [],
+				)
+					.map((b) => hex(b, 2))
+					.join(' ')}
+			</p>
+		{/if}
+
+		{#if lcdKind === 'hd61202'}
+			<details>
+				<summary>LCD controller (64×64 chips)</summary>
+				<div class="lcd-chips">
+					<div class="lcd-chip">
+						<div class="hint">Left chip</div>
+						<LcdCanvas pixels={lcdLeftChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+					</div>
+					<div class="lcd-chip">
+						<div class="hint">Right chip</div>
+						<LcdCanvas pixels={lcdRightChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+					</div>
+				</div>
+			</details>
+		{/if}
+
+		<label>
+			<input
+				type="checkbox"
+				data-testid="assisted-taps-toggle"
+				bind:checked={assistedTaps}
+				on:change={() => releaseInputSource('virtual')}
+			/>
+			Assist virtual taps (minimum 40,000 scheduler boundaries from press; no execution while paused)
+		</label>
 		<p class="hint">
-			Fixed segments: ROM-derived mapping; BATT/CARD/beep/alarm/arrows remain provisional. LCD bytes: {Array.from(
-				lcdAnnunciatorBytes ?? [],
-			)
-				.map((b) => hex(b, 2))
-				.join(' ')}
+			Disable assistance for immediate raw contact releases. ON uses the power-key input, not a forced interrupt.
 		</p>
-	{/if}
+		{#if lastInputAck}<p class="hint" data-testid="input-ack">{lastInputAck}</p>{/if}
 
-	{#if lcdKind === 'hd61202'}
-		<details>
-			<summary>LCD controller (64×64 chips)</summary>
-			<div class="lcd-chips">
-				<div class="lcd-chip">
-					<div class="hint">Left chip</div>
-					<LcdCanvas pixels={lcdLeftChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
+		{#if romLoaded}
+			<details bind:open={keyboardDebugOpen}>
+				<summary>Debug (keyboard)</summary>
+				<div class="debug-row">
+					<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
+					<button type="button" on:click={() => dumpKeyboardState('ui')}>Dump to console</button>
+					<button type="button" on:click={() => (debugLog.length = 0)}>Clear log</button>
+					<button type="button" on:click={() => copyDebugJson()} disabled={!debugKioJson}>Copy JSON</button>
 				</div>
-				<div class="lcd-chip">
-					<div class="hint">Right chip</div>
-					<LcdCanvas pixels={lcdRightChipPixels} cols={LCD_CHIP_COLS} rows={LCD_CHIP_ROWS} scale={2} />
-				</div>
-			</div>
-		</details>
-	{/if}
-
-	<label>
-		<input
-			type="checkbox"
-			data-testid="assisted-taps-toggle"
-			bind:checked={assistedTaps}
-			on:change={() => releaseInputSource('virtual')}
-		/>
-		Assist virtual taps (minimum 40,000 scheduler boundaries from press; no execution while paused)
-	</label>
-	<p class="hint">
-		Disable assistance for immediate raw contact releases. ON uses the power-key input, not a forced interrupt.
-	</p>
-	{#if lastInputAck}<p class="hint" data-testid="input-ack">{lastInputAck}</p>{/if}
-
-	{#if romLoaded}
-		<details bind:open={keyboardDebugOpen}>
-			<summary>Debug (keyboard)</summary>
-			<div class="debug-row">
-				<button type="button" on:click={() => snapshotKeyboardState()}>Refresh</button>
-				<button type="button" on:click={() => dumpKeyboardState('ui')}>Dump to console</button>
-				<button type="button" on:click={() => (debugLog.length = 0)}>Clear log</button>
-				<button type="button" on:click={() => copyDebugJson()} disabled={!debugKioJson}>Copy JSON</button>
-			</div>
-			{#if debugKio}
-				<table class="regs" data-testid="keyboard-debug-table">
-					<tbody>
-						<tr>
-							<td class="name">PC</td>
-							<td class="val">{hex(debugKio.pc)}</td>
-						</tr>
-						<tr>
-							<td class="name">Instr</td>
-							<td class="val">{debugKio.instr?.toString?.() ?? '—'}</td>
-						</tr>
-						<tr>
-							<td class="name">IMR</td>
-							<td class="val">{hex(debugKio.imr, 2)}</td>
-						</tr>
-						<tr>
-							<td class="name">ISR</td>
-							<td class="val">{hex(debugKio.isr, 2)}</td>
-						</tr>
-						<tr>
-							<td class="name">KOL/KOH/KIL</td>
-							<td class="val">
-								{hex(debugKio.kol, 2)} / {hex(debugKio.koh, 2)} / {hex(debugKio.kil, 2)}
-							</td>
-						</tr>
-						<tr>
-							<td class="name">FIFO head/tail</td>
-							<td class="val">{hex(debugKio.fifoHead, 2)} / {hex(debugKio.fifoTail, 2)}</td>
-						</tr>
-						<tr>
-							<td class="name">FIFO[0..15]</td>
-							<td class="val">{debugKio.fifo.map((b) => hex(b, 2)).join(' ')}</td>
-						</tr>
-						<tr>
-							<td class="name">Pressed</td>
-							<td class="val"
-								>{Array.from(pressedCodes)
-									.map((c) => hex(c, 2))
-									.join(' ') || '—'}</td
-							>
-						</tr>
-						<tr>
-							<td class="name">Pending release</td>
-							<td class="val">
-								{Array.from(pendingVirtualRelease.entries())
-									.map(([c, n]) => `${hex(c, 2)}:${n}`)
-									.join(' ') || '—'}
-							</td>
-						</tr>
-					</tbody>
-				</table>
-				<details>
-					<summary>Debug JSON</summary>
-					<pre class="log" data-testid="keyboard-debug-json">{debugKioJson ?? ''}</pre>
-				</details>
-			{:else}
-				<p class="hint">No keyboard snapshot available yet.</p>
-			{/if}
-			{#if debugLog.length > 0}
-				<pre class="log" data-testid="keyboard-debug-log">{debugLog.join('\n')}</pre>
-			{:else}
-				<p class="hint">No events yet.</p>
-			{/if}
-		</details>
-	{/if}
-
-	{#if romLoaded}
-		<details
-			bind:open={callStackOpen}
-			on:toggle={() => {
-				if (callStackOpen) refreshAllNow();
-			}}
-		>
-			<summary>Call stack</summary>
-			{#if callStack && callStack.length > 0}
-				<ol class="stack" data-testid="call-stack">
-					{#each callStack as frame}
-						<li>{formatFunction(frame)} ({hex(frame)})</li>
-					{/each}
-				</ol>
-			{:else}
-				<p class="hint" data-testid="call-stack-empty">No frames</p>
-			{/if}
-		</details>
-
-		<details
-			bind:open={regsOpen}
-			on:toggle={() => {
-				if (regsOpen) refreshAllNow();
-			}}
-		>
-			<summary>Registers</summary>
-			{#if regs}
-				<table class="regs" data-testid="regs-table">
-					<tbody>
-						{#each sortedRegs(regs) as [name, value]}
+				{#if debugKio}
+					<table class="regs" data-testid="keyboard-debug-table">
+						<tbody>
 							<tr>
-								<td class="name">{name}</td>
-								<td class="val">{hex(value, 6)}</td>
+								<td class="name">PC</td>
+								<td class="val">{hex(debugKio.pc)}</td>
 							</tr>
+							<tr>
+								<td class="name">Instr</td>
+								<td class="val">{debugKio.instr?.toString?.() ?? '—'}</td>
+							</tr>
+							<tr>
+								<td class="name">IMR</td>
+								<td class="val">{hex(debugKio.imr, 2)}</td>
+							</tr>
+							<tr>
+								<td class="name">ISR</td>
+								<td class="val">{hex(debugKio.isr, 2)}</td>
+							</tr>
+							<tr>
+								<td class="name">KOL/KOH/KIL</td>
+								<td class="val">
+									{hex(debugKio.kol, 2)} / {hex(debugKio.koh, 2)} / {hex(debugKio.kil, 2)}
+								</td>
+							</tr>
+							<tr>
+								<td class="name">FIFO head/tail</td>
+								<td class="val">{hex(debugKio.fifoHead, 2)} / {hex(debugKio.fifoTail, 2)}</td>
+							</tr>
+							<tr>
+								<td class="name">FIFO[0..15]</td>
+								<td class="val">{debugKio.fifo.map((b) => hex(b, 2)).join(' ')}</td>
+							</tr>
+							<tr>
+								<td class="name">Pressed</td>
+								<td class="val"
+									>{Array.from(pressedCodes)
+										.map((c) => hex(c, 2))
+										.join(' ') || '—'}</td
+								>
+							</tr>
+							<tr>
+								<td class="name">Pending release</td>
+								<td class="val">
+									{Array.from(pendingVirtualRelease.entries())
+										.map(([c, n]) => `${hex(c, 2)}:${n}`)
+										.join(' ') || '—'}
+								</td>
+							</tr>
+						</tbody>
+					</table>
+					<details>
+						<summary>Debug JSON</summary>
+						<pre class="log" data-testid="keyboard-debug-json">{debugKioJson ?? ''}</pre>
+					</details>
+				{:else}
+					<p class="hint">No keyboard snapshot available yet.</p>
+				{/if}
+				{#if debugLog.length > 0}
+					<pre class="log" data-testid="keyboard-debug-log">{debugLog.join('\n')}</pre>
+				{:else}
+					<p class="hint">No events yet.</p>
+				{/if}
+			</details>
+		{/if}
+
+		{#if romLoaded}
+			<details
+				bind:open={callStackOpen}
+				on:toggle={() => {
+					if (callStackOpen) refreshAllNow();
+				}}
+			>
+				<summary>Call stack</summary>
+				{#if callStack && callStack.length > 0}
+					<ol class="stack" data-testid="call-stack">
+						{#each callStack as frame}
+							<li>{formatFunction(frame)} ({hex(frame)})</li>
 						{/each}
-					</tbody>
-				</table>
-			{:else}
-				<p class="hint">Open to fetch registers.</p>
-			{/if}
-		</details>
+					</ol>
+				{:else}
+					<p class="hint" data-testid="call-stack-empty">No frames</p>
+				{/if}
+			</details>
 
-		<details
-			bind:open={lcdTextOpen}
-			on:toggle={() => {
-				if (lcdTextOpen) refreshAllNow();
-			}}
-		>
-			<summary>LCD (decoded text)</summary>
-			{#if lcdText && lcdText.length > 0}
-				<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
-			{:else}
-				<p class="hint">Open to decode LCD text.</p>
-			{/if}
-		</details>
-	{/if}
+			<details
+				bind:open={regsOpen}
+				on:toggle={() => {
+					if (regsOpen) refreshAllNow();
+				}}
+			>
+				<summary>Registers</summary>
+				{#if regs}
+					<table class="regs" data-testid="regs-table">
+						<tbody>
+							{#each sortedRegs(regs) as [name, value]}
+								<tr>
+									<td class="name">{name}</td>
+									<td class="val">{hex(value, 6)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{:else}
+					<p class="hint">Open to fetch registers.</p>
+				{/if}
+			</details>
 
-	{#if romLoaded}
-		<details
-			bind:open={debugStateOpen}
-			on:toggle={() => {
-				if (debugStateOpen) refreshAllNow();
-			}}
-		>
-			<summary>Debug state</summary>
-			{#if debugState}
-				<pre>{safeJson(debugState)}</pre>
-			{:else}
-				<p class="hint">Open to fetch debug state.</p>
-			{/if}
-		</details>
-	{/if}
+			<details
+				bind:open={lcdTextOpen}
+				on:toggle={() => {
+					if (lcdTextOpen) refreshAllNow();
+				}}
+			>
+				<summary>LCD (decoded text)</summary>
+				{#if lcdText && lcdText.length > 0}
+					<pre data-testid="lcd-text">{lcdText.join('\n')}</pre>
+				{:else}
+					<p class="hint">Open to decode LCD text.</p>
+				{/if}
+			</details>
+		{/if}
 
-	{#if romLoaded}
-		<FunctionRunnerExamplesPanel />
-	{/if}
+		{#if romLoaded}
+			<details
+				bind:open={debugStateOpen}
+				on:toggle={() => {
+					if (debugStateOpen) refreshAllNow();
+				}}
+			>
+				<summary>Debug state</summary>
+				{#if debugState}
+					<pre>{safeJson(debugState)}</pre>
+				{:else}
+					<p class="hint">Open to fetch debug state.</p>
+				{/if}
+			</details>
+		{/if}
 
-	{#if romLoaded}
-		<FunctionRunnerPanel
-			disabled={!romLoaded || stepBusy || !!controlPending || workerHealth !== 'ready'}
-			busy={functionRunnerBusy}
-			onRun={runFunctionRunner}
-		/>
-	{/if}
+		{#if romLoaded}
+			<FunctionRunnerExamplesPanel />
+		{/if}
+
+		{#if romLoaded}
+			<FunctionRunnerPanel
+				disabled={!romLoaded || stepBusy || !!controlPending || workerHealth !== 'ready'}
+				busy={functionRunnerBusy}
+				onRun={runFunctionRunner}
+			/>
+		{/if}
+	</details>
 </main>
 
 <style>
+	.device-toolbar,
+	.toolbar-actions,
+	.quick-options,
+	.queue-status {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+	.device-toolbar {
+		justify-content: space-between;
+	}
+	.quick-options {
+		padding: 14px;
+		border: 1px solid #35434a;
+		border-radius: 8px;
+	}
+	.quick-options p {
+		flex-basis: 100%;
+		margin: 0;
+		font-size: 12px;
+	}
+	.lcd-only {
+		max-width: 900px;
+		padding: 24px;
+		margin: 0 auto;
+		background: #bfc0b3;
+		border-radius: 6px;
+	}
+	.advanced {
+		border-top: 1px solid #35434a;
+	}
 	.keyboard-controls {
 		display: flex;
 		flex-wrap: wrap;
