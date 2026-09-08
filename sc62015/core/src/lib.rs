@@ -1481,6 +1481,8 @@ impl CoreRuntime {
             timer_ptr: *mut TimerContext,
             onk_level: bool,
             on_key_ssr_mask: u8,
+            #[cfg(target_arch = "wasm32")]
+            tracing_active: bool,
             #[allow(dead_code)]
             cycle: u64,
             #[allow(dead_code)]
@@ -1492,6 +1494,12 @@ impl CoreRuntime {
             lcd_bus_capture: *mut LcdBusCapture,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
+            #[cfg(target_arch = "wasm32")]
+            fn tracing_active_hint(&self) -> Option<bool> {
+                // Browser JS cannot change tracing while this synchronous
+                // WASM call owns the emulator. Stub callbacks are slice handoffs.
+                Some(self.tracing_active)
+            }
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
@@ -1923,6 +1931,8 @@ impl CoreRuntime {
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level,
                     on_key_ssr_mask,
+                    #[cfg(target_arch = "wasm32")]
+                    tracing_active: perfetto_active,
                     cycle: self.metadata.cycle_count,
                     pc,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,
@@ -2408,6 +2418,8 @@ impl CoreRuntime {
                     timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level,
                     on_key_ssr_mask,
+                    #[cfg(target_arch = "wasm32")]
+                    tracing_active: perfetto_active,
                     cycle: self.metadata.cycle_count,
                     pc: pc_before,
                     meta_ptr: &self.metadata as *const SnapshotMetadata,

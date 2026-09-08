@@ -323,6 +323,12 @@ pub(crate) struct DeferredInstructionTrace {
 }
 
 pub trait LlamaBus {
+    /// Optional hint only for executors that prohibit installing/removing a
+    /// tracer during their synchronous instruction slice. Generic/native buses
+    /// retain the live handle check.
+    fn tracing_active_hint(&self) -> Option<bool> {
+        None
+    }
     fn load(&mut self, addr: u32, bits: u8) -> u32;
     fn store(&mut self, addr: u32, bits: u8, value: u32);
     /// Read one byte for validation without advancing devices, consuming host
@@ -1711,12 +1717,14 @@ impl LlamaExecutor {
             decoded.len = offset as u8;
             return Ok(decoded);
         }
-        let coding_order: Vec<(usize, &OperandKind)> = if entry.ops_reversed.unwrap_or(false) {
-            entry.operands.iter().enumerate().rev().collect()
-        } else {
-            entry.operands.iter().enumerate().collect()
-        };
-        for (operand_index, op) in coding_order {
+        let reversed = entry.ops_reversed.unwrap_or(false);
+        for position in 0..entry.operands.len() {
+            let operand_index = if reversed {
+                entry.operands.len() - 1 - position
+            } else {
+                position
+            };
+            let op = &entry.operands[operand_index];
             match op {
                 OperandKind::Imm(bits) => {
                     let val = if *bits == 20 {
@@ -2956,7 +2964,9 @@ impl LlamaExecutor {
         // The trace clock belongs to an active trace, not to executor object
         // construction or untraced execution. This also prevents unrelated
         // parallel runtimes from perturbing a trace-state atomicity proof.
-        let tracing_active = PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some();
+        let tracing_active = bus
+            .tracing_active_hint()
+            .unwrap_or_else(|| PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some());
         let instr_index = if tracing_active {
             PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed)
         } else {
@@ -2985,32 +2995,31 @@ impl LlamaExecutor {
         PERF_CURRENT_OP.with(|value| value.set(instr_index));
         PERF_CURRENT_PC.with(|value| value.set(trace_pc_snapshot));
         let _ctx_guard = PerfettoContextGuard;
-        let trace_regs = {
-            let mut guard = PERFETTO_TRACER.enter();
-            guard.with_some(|_| ()).is_some()
-        }
-        .then(|| {
-            let mut regs = HashMap::new();
-            for (name, reg) in [
-                ("A", RegName::A),
-                ("B", RegName::B),
-                ("BA", RegName::BA),
-                ("IL", RegName::IL),
-                ("IH", RegName::IH),
-                ("I", RegName::I),
-                ("X", RegName::X),
-                ("Y", RegName::Y),
-                ("U", RegName::U),
-                ("S", RegName::S),
-                ("PC", RegName::PC),
-                ("F", RegName::F),
-                ("FC", RegName::FC),
-                ("FZ", RegName::FZ),
-            ] {
-                regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
-            }
-            regs
-        });
+        let trace_regs = bus
+            .tracing_active_hint()
+            .unwrap_or_else(|| PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some())
+            .then(|| {
+                let mut regs = HashMap::new();
+                for (name, reg) in [
+                    ("A", RegName::A),
+                    ("B", RegName::B),
+                    ("BA", RegName::BA),
+                    ("IL", RegName::IL),
+                    ("IH", RegName::IH),
+                    ("I", RegName::I),
+                    ("X", RegName::X),
+                    ("Y", RegName::Y),
+                    ("U", RegName::U),
+                    ("S", RegName::S),
+                    ("PC", RegName::PC),
+                    ("F", RegName::F),
+                    ("FC", RegName::FC),
+                    ("FZ", RegName::FZ),
+                ] {
+                    regs.insert(name.to_string(), state.get_reg(reg) & mask_for(reg));
+                }
+                regs
+            });
 
         let entry_kind = entry.map(|entry| entry.kind);
         let entry_name = entry.map(|entry| entry.name);

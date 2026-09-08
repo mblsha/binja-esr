@@ -142,11 +142,11 @@ impl LlamaState {
         match name {
             RegName::BA => self.ba = masked,
             RegName::A => {
-                let b = (self.get_reg(RegName::BA) >> 8) & 0xFF;
+                let b = (self.ba >> 8) & 0xFF;
                 self.ba = ((b << 8) | (masked & 0xFF)) & mask_for(RegName::BA);
             }
             RegName::B => {
-                let a = self.get_reg(RegName::BA) & 0xFF;
+                let a = self.ba & 0xFF;
                 self.ba = (((masked & 0xFF) << 8) | a) & mask_for(RegName::BA);
             }
             RegName::I => self.i = masked,
@@ -155,7 +155,7 @@ impl LlamaState {
                 self.i = masked & mask_for(RegName::I);
             }
             RegName::IH => {
-                let low = self.get_reg(RegName::IL);
+                let low = self.i & 0xFF;
                 self.i = (((masked & 0xFF) << 8) | (low & 0xFF)) & mask_for(RegName::I);
             }
             RegName::X => self.x = masked,
@@ -182,14 +182,15 @@ impl LlamaState {
         }
     }
 
+    #[inline]
     pub fn get_reg(&self, name: RegName) -> u32 {
         match name {
             RegName::BA => self.ba,
-            RegName::A => self.get_reg(RegName::BA) & 0xFF,
-            RegName::B => (self.get_reg(RegName::BA) >> 8) & 0xFF,
+            RegName::A => self.ba & 0xFF,
+            RegName::B => (self.ba >> 8) & 0xFF,
             RegName::I => self.i,
-            RegName::IL => self.get_reg(RegName::I) & 0xFF,
-            RegName::IH => (self.get_reg(RegName::I) >> 8) & 0xFF,
+            RegName::IL => self.i & 0xFF,
+            RegName::IH => (self.i >> 8) & 0xFF,
             RegName::X => self.x,
             RegName::Y => self.y,
             RegName::U => self.u,
@@ -209,11 +210,11 @@ impl LlamaState {
     }
 
     pub fn pc(&self) -> u32 {
-        self.get_reg(RegName::PC)
+        self.pc
     }
 
     pub fn set_pc(&mut self, value: u32) {
-        self.set_reg(RegName::PC, value);
+        self.pc = value & mask_for(RegName::PC);
     }
 
     pub fn halt(&mut self) {
@@ -406,6 +407,34 @@ mod tests {
         assert_eq!(state.get_reg(RegName::IL), 0x34);
         assert_eq!(state.get_reg(RegName::IH), 0x00);
         assert_eq!(state.get_reg(RegName::I), 0x0034);
+    }
+
+    #[test]
+    fn hot_alias_access_preserves_masks_and_other_bytes() {
+        for initial in [0, 0xff, 0xff00, 0x123456, u32::MAX] {
+            for value in [0, 0x12, 0xff, 0x1234, u32::MAX] {
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::BA, initial);
+                state.set_reg(RegName::A, value);
+                assert_eq!(
+                    state.get_reg(RegName::BA),
+                    (initial & 0xff00) | (value & 0xff)
+                );
+                assert_eq!(state.get_reg(RegName::B), (initial >> 8) & 0xff);
+                state.set_reg(RegName::B, value);
+                assert_eq!(state.get_reg(RegName::BA), (value & 0xff) * 0x101);
+                state.set_reg(RegName::I, initial);
+                state.set_reg(RegName::IH, value);
+                assert_eq!(
+                    state.get_reg(RegName::I),
+                    (initial & 0xff) | ((value & 0xff) << 8)
+                );
+                assert_eq!(state.get_reg(RegName::IL), initial & 0xff);
+                state.set_pc(value);
+                assert_eq!(state.pc(), value & 0xfffff);
+                assert_eq!(state.get_reg(RegName::PC), state.pc());
+            }
+        }
     }
 
     #[test]

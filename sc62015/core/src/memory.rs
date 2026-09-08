@@ -252,6 +252,7 @@ pub struct MemoryImage {
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
     overlays: Vec<MemoryOverlay>,
+    overlay_span: Option<(u32, u32)>,
     memory_card_state: MemoryCardState,
     retained_memory_card: Option<RetainedMemoryCard>,
     overlay_epoch: u64,
@@ -303,6 +304,7 @@ impl MemoryImage {
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
             overlays: Vec::new(),
+            overlay_span: None,
             memory_card_state: MemoryCardState::Unconfigured,
             retained_memory_card: None,
             overlay_epoch: 0,
@@ -492,6 +494,10 @@ impl MemoryImage {
     }
 
     fn add_overlay_internal(&mut self, overlay: MemoryOverlay) {
+        self.overlay_span = Some(match self.overlay_span {
+            Some((start, end)) => (start.min(overlay.start), end.max(overlay.end)),
+            None => (overlay.start, overlay.end),
+        });
         self.overlays.push(overlay);
         self.overlays
             .sort_by(|a, b| (a.start, a.end, &a.name).cmp(&(b.start, b.end, &b.name)));
@@ -500,7 +506,26 @@ impl MemoryImage {
     fn remove_overlay_internal(&mut self, name: &str) -> bool {
         let previous_len = self.overlays.len();
         self.overlays.retain(|ov| ov.name != name);
+        self.overlay_span = self.overlays.iter().fold(None, |span, overlay| {
+            Some(match span {
+                Some((start, end)) => (start.min(overlay.start), end.max(overlay.end)),
+                None => (overlay.start, overlay.end),
+            })
+        });
         self.overlays.len() != previous_len
+    }
+
+    // A conservative derived range rejects plain-memory accesses without
+    // walking overlays. Addresses inside it retain the original ordered path.
+    fn read_overlay_candidates(&self, address: u32) -> &[MemoryOverlay] {
+        if self
+            .overlay_span
+            .is_some_and(|(start, end)| address >= start && address <= end)
+        {
+            &self.overlays
+        } else {
+            &[]
+        }
     }
 
     pub fn add_overlay(&mut self, overlay: MemoryOverlay) {
@@ -532,7 +557,7 @@ impl MemoryImage {
         if self.requires_python(address) {
             return false;
         }
-        for overlay in &self.overlays {
+        for overlay in self.read_overlay_candidates(address) {
             if !overlay.contains(address) {
                 continue;
             }
@@ -1160,7 +1185,7 @@ impl MemoryImage {
         if let Some(index) = Self::internal_index(address) {
             return Some(self.internal[index]);
         }
-        for overlay in &self.overlays {
+        for overlay in self.read_overlay_candidates(address) {
             if !overlay.contains(address) {
                 continue;
             }
@@ -1351,7 +1376,7 @@ impl MemoryImage {
         for offset in 0..bytes {
             let addr = canonical_address(address + offset as u32);
             let mut handled = false;
-            for overlay in &self.overlays {
+            for overlay in self.read_overlay_candidates(addr) {
                 if !overlay.contains(addr) {
                     continue;
                 }
@@ -2126,6 +2151,27 @@ mod tests {
         let value = mem.load_with_pc(0x5000, 8, Some(0x0300));
         assert_eq!(value, Some(0x55));
         assert!(mem.overlay_read_log().is_empty());
+    }
+
+    #[test]
+    fn overlay_read_span_tracks_add_remove_and_keeps_boundary_reads() {
+        let mut mem = MemoryImage::new();
+        assert!(mem.read_overlay_candidates(0x200).is_empty());
+        mem.add_ram_overlay(0x200, 2, "low");
+        mem.add_ram_overlay(0x500, 2, "high");
+        for address in [0x200, 0x201, 0x500, 0x501] {
+            assert!(!mem.read_overlay_candidates(address).is_empty());
+            assert_eq!(mem.read_byte_for_preflight(address, None), Some(0));
+        }
+        assert!(mem.read_overlay_candidates(0x1ff).is_empty());
+        assert!(mem.read_overlay_candidates(0x502).is_empty());
+        mem.remove_overlay("low");
+        assert!(mem.read_overlay_candidates(0x200).is_empty());
+        assert!(!mem.read_overlay_candidates(0x500).is_empty());
+        mem.remove_overlay("high");
+        assert!(mem.read_overlay_candidates(0x500).is_empty());
+        mem.add_ram_overlay(0x100, 1, "new");
+        assert_eq!(mem.load_with_pc(0x100, 8, None), Some(0));
     }
 
     #[test]
