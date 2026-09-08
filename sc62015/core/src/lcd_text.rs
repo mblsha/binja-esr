@@ -843,7 +843,6 @@ mod tests {
         Iq7000LcdController, LcdController, LcdDisplayWrite, LcdHal, LcdKind, LcdStats,
         LcdWriteTrace, LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
     };
-    use serde_json::Value;
     use std::any::Any;
 
     const TEST_LCD_PAGES: usize = 8;
@@ -927,11 +926,18 @@ mod tests {
             LcdStats::default()
         }
 
-        fn export_snapshot(&self) -> (Value, Vec<u8>) {
-            (Value::Null, Vec::new())
+        fn snapshot_state(&self) -> (crate::lcd_snapshot::LcdSnapshotMetadata, Vec<u8>) {
+            (
+                crate::lcd_snapshot::LcdSnapshotMetadata::Unknown,
+                Vec::new(),
+            )
         }
 
-        fn load_snapshot(&mut self, _metadata: &Value, _payload: &[u8]) -> Result<(), String> {
+        fn restore_state(
+            &mut self,
+            _metadata: &crate::lcd_snapshot::LcdSnapshotMetadata,
+            _payload: &[u8],
+        ) -> Result<(), String> {
             Ok(())
         }
     }

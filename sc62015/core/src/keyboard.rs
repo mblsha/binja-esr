@@ -180,7 +180,7 @@ pub struct KeyboardTelemetry {
     pub active_columns: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyboardSnapshot {
     pub kol: u8,
@@ -210,13 +210,44 @@ pub struct KeyboardSnapshot {
     pub keyi_latch: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyStateSnapshot {
     pub pressed: bool,
     pub debounced: bool,
     pub press_ticks: u8,
     pub release_ticks: u8,
     pub repeat_ticks: u8,
+}
+
+/// Redundant snapshot diagnostics, checked against the authoritative keyboard
+/// state at the file boundary rather than carried as a dynamic value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyboardMetrics {
+    pub irq_count: u32,
+    pub strobe_count: u32,
+    pub column_hist: Vec<u32>,
+    pub last_cols: Vec<u8>,
+    pub last_kol: u8,
+    pub last_koh: u8,
+    pub kil_reads: u32,
+    pub kb_irq_enabled: bool,
+}
+
+impl KeyboardSnapshot {
+    pub fn metrics(&self, kb_irq_enabled: bool) -> KeyboardMetrics {
+        KeyboardMetrics {
+            irq_count: self.irq_count,
+            strobe_count: self.strobe_count,
+            column_hist: self.column_histogram.clone(),
+            last_cols: self.active_columns.clone(),
+            last_kol: self.kol,
+            last_koh: self.koh,
+            kil_reads: self.kil_read_count,
+            kb_irq_enabled,
+        }
+    }
 }
 
 impl KeyboardMatrix {

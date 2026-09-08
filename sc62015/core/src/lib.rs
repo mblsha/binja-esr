@@ -2,14 +2,17 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
 
 pub mod async_driver;
+pub mod bus_trace;
 pub mod device;
 pub mod generated_key_input;
+mod interrupt_codec;
 pub mod iq7000;
 pub mod iq7000_annunciators;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_capture;
 pub mod lcd_render;
+pub mod lcd_snapshot;
 pub mod lcd_text;
 pub mod llama;
 pub mod loop_detector;
@@ -29,8 +32,6 @@ pub mod timer;
 use crate::llama::state::{validate_f_image, PowerState};
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
-#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
-use serde_json::json;
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
@@ -75,6 +76,7 @@ pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTrac
 pub type PerfettoGuard<'a> = retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>>;
 
 #[cfg(not(feature = "perfetto"))]
+#[derive(Default)]
 pub struct PerfettoHandle;
 
 #[cfg(not(feature = "perfetto"))]
@@ -127,10 +129,11 @@ pub use snapshot::{
 };
 pub use timer::TimerContext;
 
-#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::keyboard::KeyboardSnapshot;
 use crate::llama::eval::{perfetto_last_pc, LlamaBus, TimerTrace};
-use crate::llama::state::{mask_for, CallMetricsSnapshot};
+use crate::llama::state::mask_for;
+#[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
+use crate::llama::state::CallMetricsSnapshot;
 use crate::memory::{
     IMEM_IMR_OFFSET, IMEM_ISR_OFFSET, IMEM_KIL_OFFSET, IMEM_KOH_OFFSET, IMEM_KOL_OFFSET,
     IMEM_LCC_OFFSET, IMEM_RXD_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET, IMEM_TXD_OFFSET,
@@ -147,6 +150,7 @@ pub enum CoreError {
     #[error("zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
     #[error("serialize error: {0}")]
+    #[cfg(any(test, feature = "json-compat"))]
     Serde(#[from] serde_json::Error),
     #[error("snapshot error: {0}")]
     InvalidSnapshot(String),
@@ -202,9 +206,9 @@ pub struct InterruptInfo {
     pub next_id: u32,
     pub imr: u8,
     pub isr: u8,
-    pub irq_counts: Option<serde_json::Value>,
-    pub last_irq: Option<serde_json::Value>,
-    pub irq_bit_watch: Option<serde_json::Value>,
+    pub irq_counts: Option<interrupt_codec::Counts>,
+    pub last_irq: Option<interrupt_codec::LastIrq>,
+    pub irq_bit_watch: Option<timer::BitWatch>,
     pub delivered_masks: Vec<u8>,
 }
 
@@ -242,9 +246,9 @@ pub struct SnapshotMetadata {
     pub timer: TimerInfo,
     pub interrupts: InterruptInfo,
     #[serde(default)]
-    pub keyboard: Option<serde_json::Value>,
+    pub keyboard: Option<KeyboardSnapshot>,
     #[serde(default)]
-    pub kb_metrics: Option<serde_json::Value>,
+    pub kb_metrics: Option<keyboard::KeyboardMetrics>,
     #[serde(default)]
     pub fallback_ranges: Vec<(u32, u32)>,
     #[serde(default)]
@@ -259,7 +263,7 @@ pub struct SnapshotMetadata {
     pub fast_mode: bool,
     pub memory_image_size: usize,
     pub lcd_payload_size: usize,
-    pub lcd: Option<serde_json::Value>,
+    pub lcd: Option<lcd_snapshot::LcdSnapshotMetadata>,
 }
 
 impl Default for SnapshotMetadata {
@@ -2661,23 +2665,12 @@ impl CoreRuntime {
         metadata.memory_dump_pc = 0;
         if let Some(kb) = self.keyboard.as_ref() {
             let kb_state = kb.snapshot_state();
-            if let Ok(snapshot) = serde_json::to_value(&kb_state) {
-                metadata.keyboard = Some(snapshot);
-                metadata.kb_metrics = Some(json!({
-                    "irq_count": kb_state.irq_count,
-                    "strobe_count": kb_state.strobe_count,
-                    "column_hist": kb_state.column_histogram,
-                    "last_cols": kb_state.active_columns,
-                    "last_kol": kb_state.kol,
-                    "last_koh": kb_state.koh,
-                    "kil_reads": kb_state.kil_read_count,
-                    "kb_irq_enabled": self.timer.kb_irq_enabled,
-                }));
-            }
+            metadata.kb_metrics = Some(kb_state.metrics(self.timer.kb_irq_enabled));
+            metadata.keyboard = Some(kb_state);
         }
         let mut lcd_payload: Option<Vec<u8>> = None;
         if let Some(lcd) = self.lcd.as_ref() {
-            let (lcd_meta, payload) = lcd.export_snapshot();
+            let (lcd_meta, payload) = lcd.snapshot_state();
             metadata.lcd = Some(lcd_meta);
             metadata.lcd_payload_size = payload.len();
             lcd_payload = Some(payload);
@@ -2686,12 +2679,6 @@ impl CoreRuntime {
         let (timer_info, intr_info) = self.timer.snapshot_info();
         metadata.timer = timer_info;
         metadata.interrupts = intr_info;
-        if metadata.interrupts.irq_bit_watch.is_none() {
-            metadata.interrupts.irq_bit_watch = self
-                .timer
-                .irq_bit_watch_json()
-                .map(serde_json::Value::Object);
-        }
         let regs = collect_registers(&self.state);
         snapshot::save_snapshot(path, &metadata, &regs, &self.memory, lcd_payload.as_deref())
     }
@@ -2776,26 +2763,18 @@ impl CoreRuntime {
         state_candidate.set_power_state(metadata.power_state);
 
         let mut timer_candidate = (*self.timer).clone();
-        timer_candidate.apply_snapshot_info(
-            &metadata.timer,
-            &metadata.interrupts,
-            metadata.cycle_count,
-        );
+        timer_candidate
+            .apply_snapshot_info(&metadata.timer, &metadata.interrupts, metadata.cycle_count)
+            .map_err(CoreError::InvalidSnapshot)?;
         timer_candidate.restore_scr_selector(loaded.imem[IMEM_SCR_OFFSET as usize]);
 
         let keyboard_candidate = match metadata.keyboard.as_ref() {
             Some(value) => {
-                let snapshot: KeyboardSnapshot =
-                    serde_json::from_value(value.clone()).map_err(|error| {
-                        CoreError::InvalidSnapshot(format!(
-                            "invalid keyboard snapshot metadata: {error}"
-                        ))
-                    })?;
                 let mut keyboard = KeyboardMatrix::new();
-                keyboard.load_snapshot_state(&snapshot).map_err(|error| {
+                keyboard.load_snapshot_state(value).map_err(|error| {
                     CoreError::InvalidSnapshot(format!("invalid keyboard snapshot: {error}"))
                 })?;
-                let restored = serde_json::to_value(keyboard.snapshot_state())?;
+                let restored = keyboard.snapshot_state();
                 if restored != *value {
                     return Err(CoreError::InvalidSnapshot(
                         "keyboard snapshot is not exactly representable".to_string(),
@@ -2812,7 +2791,7 @@ impl CoreRuntime {
         };
 
         let lcd_candidate = if let Some(lcd_meta) = metadata.lcd.as_ref() {
-            let kind = crate::lcd::lcd_kind_from_snapshot_meta(lcd_meta, LcdKind::Hd61202);
+            let kind = lcd_meta.kind();
             let lcd_model = metadata.device_model.unwrap_or(match kind {
                 LcdKind::Iq7000Vram => DeviceModel::Iq7000,
                 _ => DeviceModel::PcE500,
@@ -2823,11 +2802,11 @@ impl CoreRuntime {
                 lcd_model,
                 &loaded.external_memory,
             );
-            lcd.load_snapshot(lcd_meta, loaded.lcd_payload.as_deref().unwrap_or(&[]))
+            lcd.restore_state(lcd_meta, loaded.lcd_payload.as_deref().unwrap_or(&[]))
                 .map_err(|error| {
                     CoreError::InvalidSnapshot(format!("invalid LCD snapshot: {error}"))
                 })?;
-            let (restored_meta, restored_payload) = lcd.export_snapshot();
+            let (restored_meta, restored_payload) = lcd.snapshot_state();
             if restored_meta != *lcd_meta
                 || restored_payload.as_slice() != loaded.lcd_payload.as_deref().unwrap_or(&[])
             {
@@ -3685,18 +3664,20 @@ mod tests {
         rt.timer.next_mti = 123;
         rt.timer.next_sti = 456;
         rt.timer.kb_irq_enabled = false;
-        rt.timer.set_interrupt_state(
-            true, // pending
-            0xAA, // imr
-            0x55, // isr
-            200,  // next_mti
-            300,  // next_sti
-            Some("MTI".to_string()),
-            true,          // in_interrupt
-            Some(vec![3]), // interrupt_stack (flow IDs)
-            5,             // next_interrupt_id
-            None,          // irq_bit_watch
-        );
+        rt.timer
+            .set_interrupt_state(
+                true, // pending
+                0xAA, // imr
+                0x55, // isr
+                200,  // next_mti
+                300,  // next_sti
+                Some("MTI".to_string()),
+                true,          // in_interrupt
+                Some(vec![3]), // interrupt_stack (flow IDs)
+                5,             // next_interrupt_id
+                None,          // irq_bit_watch
+            )
+            .unwrap();
         rt.memory.write_internal_byte(IMEM_IMR_OFFSET, 0xAA);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0x55);
         rt.timer.delivered_masks = vec![ISR_MTI];

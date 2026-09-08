@@ -317,6 +317,44 @@ impl Sc62015Emulator {
     }
 
     pub fn call_function_finish(&mut self, id: u32) -> Result<String, JsValue> {
+        let artifacts = self.take_finished_function_call(id)?;
+        serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Structured result endpoint. Build ordinary JS objects, not generic JS
+    /// Maps; no callbacks run while the owned report is converted.
+    pub fn call_function_finish_object(&mut self, id: u32) -> Result<JsValue, JsValue> {
+        let artifacts = self.take_finished_function_call(id)?;
+        artifacts
+            .serialize(
+                &serde_wasm_bindgen::Serializer::new()
+                    .serialize_maps_as_objects(true)
+                    .serialize_missing_as_null(true),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Structured cancellation result, with the same restoration guarantees.
+    pub fn call_function_cancel_object(&mut self, id: u32) -> Result<JsValue, JsValue> {
+        let artifacts = self.take_cancelled_function_call(id)?;
+        artifacts
+            .serialize(
+                &serde_wasm_bindgen::Serializer::new()
+                    .serialize_maps_as_objects(true)
+                    .serialize_missing_as_null(true),
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Cancel at a host boundary; retain the JSON endpoint for old callers.
+    pub fn call_function_cancel(&mut self, id: u32) -> Result<String, JsValue> {
+        let artifacts = self.take_cancelled_function_call(id)?;
+        serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+}
+
+impl Sc62015Emulator {
+    fn take_finished_function_call(&mut self, id: u32) -> Result<CallArtifacts, JsValue> {
         self.require_call_id(id)?;
         if self.call_session.as_ref().expect("checked call").reason == "running" {
             return Err(JsValue::from_str(
@@ -324,19 +362,19 @@ impl Sc62015Emulator {
             ));
         }
         let call = self.call_session.take().expect("checked call");
-        self.finish_function_call(call)
+        self.finish_function_call_artifacts(call)
     }
 
     /// Cancel at a host boundary. This restores debugger scaffolding, not a
     /// whole-machine snapshot; it cannot undo bus/peripheral effects.
-    pub fn call_function_cancel(&mut self, id: u32) -> Result<String, JsValue> {
+    fn take_cancelled_function_call(&mut self, id: u32) -> Result<CallArtifacts, JsValue> {
         self.require_call_id(id)?;
         let mut call = self.call_session.take().expect("checked call");
         if call.reason == "running" {
             call.reason = "cancelled".into();
         }
         call.pending_stub = None;
-        self.finish_function_call(call)
+        self.finish_function_call_artifacts(call)
     }
 }
 
@@ -512,6 +550,14 @@ impl Sc62015Emulator {
     }
 
     fn finish_function_call(&mut self, call: FunctionCallSession) -> Result<String, JsValue> {
+        let artifacts = self.finish_function_call_artifacts(call)?;
+        serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    fn finish_function_call_artifacts(
+        &mut self,
+        call: FunctionCallSession,
+    ) -> Result<CallArtifacts, JsValue> {
         let FunctionCallSession {
             addr,
             opts,
@@ -610,10 +656,6 @@ impl Sc62015Emulator {
             perfetto_trace_b64,
             report,
         };
-        // Return JSON to avoid browser-specific structured-object aliasing errors observed with
-        // `serde_wasm_bindgen` + `HashMap` (wasm-bindgen re-entrancy guard).
-        let json =
-            serde_json::to_string(&artifacts).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(json)
+        Ok(artifacts)
     }
 }

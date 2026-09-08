@@ -1,18 +1,42 @@
 // PY_SOURCE: pce500/scheduler.py:TimerScheduler
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator._tick_timers
 
+#[cfg(test)]
+use crate::interrupt_codec::default_bit_watch_table;
 use crate::keyboard::KeyboardTelemetry;
 use crate::llama::eval::perfetto_last_pc;
 use crate::memory::MemoryImage;
 use crate::perfetto::AnnotationValue;
 use crate::PERFETTO_TRACER;
 use crate::{InterruptInfo, TimerInfo};
+#[cfg(test)]
 use serde_json::json;
 use std::collections::HashMap;
 
 const ISR_OFFSET: u32 = 0xFC;
 const SCR_MTS: u8 = 0x02;
 const SCR_STS: u8 = 0x04;
+
+/// Owned interrupt state, independent of any file or host serialization format.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InterruptSnapshot {
+    pub pending: bool,
+    pub in_interrupt: bool,
+    pub key_irq_latched: bool,
+    pub source: Option<String>,
+    pub last_fired: Option<String>,
+    pub stack: Vec<u32>,
+    pub next_id: u32,
+    pub imr: u8,
+    pub isr: u8,
+    /// Total, KEY, MTI, STI counts, in that order.
+    pub counts: [u32; 4],
+    pub last_source: Option<String>,
+    pub last_pc: Option<u32>,
+    pub last_vector: Option<u32>,
+    pub history: Option<BitWatch>,
+    pub delivered_masks: Vec<u8>,
+}
 
 #[derive(Clone, Debug)]
 pub struct TimerContext {
@@ -54,24 +78,7 @@ pub struct TimerContext {
     scr_selector: u8,
 }
 
-fn default_bit_watch_table() -> serde_json::Map<String, serde_json::Value> {
-    let mut table = serde_json::Map::new();
-    for reg in ["IMR", "ISR"] {
-        let mut reg_map = serde_json::Map::new();
-        for bit in 0..8u8 {
-            reg_map.insert(
-                bit.to_string(),
-                json!({
-                    "set": [],
-                    "clear": [],
-                }),
-            );
-        }
-        table.insert(reg.to_string(), serde_json::Value::Object(reg_map));
-    }
-    table
-}
-
+#[cfg(test)]
 fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
     for reg in ["IMR", "ISR"] {
         if !table.get(reg).map(|v| v.is_object()).unwrap_or(false) {
@@ -107,10 +114,10 @@ fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct PcHistory {
-    pcs: [u32; 10],
-    len: usize,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PcHistory {
+    pub(crate) pcs: [u32; 10],
+    pub(crate) len: usize,
 }
 
 impl PcHistory {
@@ -128,70 +135,52 @@ impl PcHistory {
     }
 }
 
-/// Fixed-size normal execution state; permissive legacy imports retain their
-/// original JSON behavior instead of silently discarding unknown fields.
-#[derive(Clone, Debug, Default)]
-struct BitWatch {
-    histories: [[[PcHistory; 2]; 8]; 2],
-    legacy: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-impl BitWatch {
-    fn from_json(table: serde_json::Map<String, serde_json::Value>) -> Self {
-        let mut watch = Self::default();
-        let parsed = (|| {
-            if table.len() != 2 {
-                return None;
-            }
-            for (r, name) in ["IMR", "ISR"].iter().enumerate() {
-                let bits = table.get(*name)?.as_object()?;
-                if bits.len() != 8 {
-                    return None;
-                }
-                for b in 0..8 {
-                    let actions = bits.get(&b.to_string())?.as_object()?;
-                    if actions.len() != 2 {
-                        return None;
-                    }
-                    for (a, name) in ["set", "clear"].iter().enumerate() {
-                        let pcs = actions.get(*name)?.as_array()?;
-                        if pcs.len() > 10 {
-                            return None;
-                        }
-                        let history = &mut watch.histories[r][b][a];
-                        for (i, pc) in pcs.iter().enumerate() {
-                            history.pcs[i] = u32::try_from(pc.as_u64()?).ok()?;
-                        }
-                        history.len = pcs.len();
-                    }
-                }
-            }
-            Some(())
-        })();
-        if parsed.is_none() {
-            watch.legacy = Some(table);
-        }
-        watch
-    }
-
-    fn to_json(&self) -> serde_json::Map<String, serde_json::Value> {
-        if let Some(table) = &self.legacy {
-            return table.clone();
-        }
-        let mut table = default_bit_watch_table();
-        for (r, name) in ["IMR", "ISR"].iter().enumerate() {
-            for b in 0..8 {
-                for (a, action) in ["set", "clear"].iter().enumerate() {
-                    let h = &self.histories[r][b][a];
-                    table[*name][b.to_string()][*action] = json!(&h.pcs[..h.len]);
-                }
-            }
-        }
-        table
-    }
+/// Fixed-size execution state. Unsupported diagnostic schemas fail at import.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BitWatch {
+    pub(crate) histories: [[[PcHistory; 2]; 8]; 2],
 }
 
 impl TimerContext {
+    /// Capture interrupt execution state without serialization or dynamic maps.
+    pub fn interrupt_snapshot(&self) -> InterruptSnapshot {
+        InterruptSnapshot {
+            pending: self.irq_pending,
+            in_interrupt: self.in_interrupt,
+            key_irq_latched: self.key_irq_latched,
+            source: self.irq_source.clone(),
+            last_fired: self.last_fired.clone(),
+            stack: self.interrupt_stack.clone(),
+            next_id: self.next_interrupt_id,
+            imr: self.irq_imr,
+            isr: self.irq_isr,
+            counts: [self.irq_total, self.irq_key, self.irq_mti, self.irq_sti],
+            last_source: self.last_irq_src.clone(),
+            last_pc: self.last_irq_pc,
+            last_vector: self.last_irq_vector,
+            history: self.irq_bit_watch.clone(),
+            delivered_masks: self.delivered_masks.clone(),
+        }
+    }
+
+    pub fn restore_interrupt_snapshot(&mut self, snapshot: &InterruptSnapshot) {
+        self.irq_pending = snapshot.pending;
+        self.in_interrupt = snapshot.in_interrupt;
+        self.key_irq_latched = snapshot.key_irq_latched;
+        self.irq_source = snapshot.source.clone();
+        self.last_fired = snapshot.last_fired.clone();
+        self.interrupt_stack = snapshot.stack.clone();
+        self.next_interrupt_id = snapshot.next_id;
+        self.irq_imr = snapshot.imr;
+        self.irq_isr = snapshot.isr;
+        [self.irq_total, self.irq_key, self.irq_mti, self.irq_sti] = snapshot.counts;
+        self.last_irq_src = snapshot.last_source.clone();
+        self.last_irq_pc = snapshot.last_pc;
+        self.last_irq_vector = snapshot.last_vector;
+        self.irq_bit_watch = snapshot.history.clone();
+        self.delivered_masks = snapshot.delivered_masks.clone();
+    }
+
     pub fn new(enabled: bool, mti_period: i32, sti_period: i32) -> Self {
         let mut ctx = Self {
             enabled,
@@ -325,6 +314,7 @@ impl TimerContext {
 
     /// Restore the selector latch without restarting either divider. Snapshot
     /// metadata already carries the exact active periods and deadlines.
+    #[cfg(any(test, all(feature = "snapshot", not(target_arch = "wasm32"))))]
     pub(crate) fn restore_scr_selector(&mut self, scr: u8) {
         self.scr_selector = scr & (SCR_MTS | SCR_STS);
     }
@@ -504,34 +494,7 @@ impl TimerContext {
             fired_sti_since_boundary: self.fired_sti_since_boundary,
             preserve_phase: self.preserve_phase,
         };
-        let mut watch = self
-            .irq_bit_watch_json()
-            .unwrap_or_else(default_bit_watch_table);
-        normalize_bit_watch(&mut watch);
-        let interrupts = InterruptInfo {
-            pending: self.irq_pending,
-            in_interrupt: self.in_interrupt,
-            key_irq_latched: self.key_irq_latched,
-            source: self.irq_source.clone(),
-            last_fired: self.last_fired.clone(),
-            stack: self.interrupt_stack.clone(),
-            next_id: self.next_interrupt_id,
-            imr: self.irq_imr,
-            isr: self.irq_isr,
-            irq_counts: Some(json!({
-                "total": self.irq_total,
-                "KEY": self.irq_key,
-                "MTI": self.irq_mti,
-                "STI": self.irq_sti,
-            })),
-            last_irq: Some(json!({
-                "src": self.last_irq_src,
-                "pc": self.last_irq_pc,
-                "vector": self.last_irq_vector,
-            })),
-            irq_bit_watch: Some(json!(watch)),
-            delivered_masks: self.delivered_masks.clone(),
-        };
+        let interrupts = InterruptInfo::from(self.interrupt_snapshot());
         (timer, interrupts)
     }
 
@@ -540,7 +503,8 @@ impl TimerContext {
         timer: &TimerInfo,
         interrupts: &InterruptInfo,
         _current_cycle: u64,
-    ) {
+    ) -> Result<(), String> {
+        let snapshot = InterruptSnapshot::try_from(interrupts)?;
         self.enabled = timer.enabled;
         self.mti_period = timer.mti_period;
         self.sti_period = timer.sti_period;
@@ -555,49 +519,11 @@ impl TimerContext {
         self.fired_sti_since_boundary = timer.fired_sti_since_boundary;
         self.preserve_phase = timer.preserve_phase;
 
-        self.irq_pending = interrupts.pending;
-        self.in_interrupt = interrupts.in_interrupt;
-        self.key_irq_latched = interrupts.key_irq_latched;
-        self.irq_source = interrupts.source.clone();
-        self.interrupt_stack = interrupts.stack.clone();
-        self.next_interrupt_id = interrupts.next_id;
-        self.irq_imr = interrupts.imr;
-        self.irq_isr = interrupts.isr;
-        self.irq_bit_watch = interrupts
-            .irq_bit_watch
-            .as_ref()
-            .and_then(|value| value.as_object())
-            .cloned()
-            .map(BitWatch::from_json);
-        self.delivered_masks = interrupts.delivered_masks.clone();
-        self.last_fired = interrupts.last_fired.clone();
-        // Restore IRQ counters/last info if present; otherwise zero them.
-        self.irq_total = 0;
-        self.irq_key = 0;
-        self.irq_mti = 0;
-        self.irq_sti = 0;
-        self.last_irq_src = None;
-        self.last_irq_pc = None;
-        self.last_irq_vector = None;
-        if let Some(counts) = interrupts.irq_counts.as_ref() {
-            self.irq_total = counts.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            self.irq_key = counts.get("KEY").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            self.irq_mti = counts.get("MTI").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            self.irq_sti = counts.get("STI").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        }
-        if let Some(last) = interrupts.last_irq.as_ref().and_then(|v| v.as_object()) {
-            self.last_irq_src = last
-                .get("src")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            self.last_irq_pc = last.get("pc").and_then(|v| v.as_u64()).map(|v| v as u32);
-            self.last_irq_vector = last
-                .get("vector")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32);
-        }
+        self.restore_interrupt_snapshot(&snapshot);
+        Ok(())
     }
 
+    #[cfg(any(test, feature = "json-compat"))]
     #[allow(clippy::too_many_arguments)]
     pub fn set_interrupt_state(
         &mut self,
@@ -611,7 +537,8 @@ impl TimerContext {
         interrupt_stack: Option<Vec<u32>>,
         next_interrupt_id: u32,
         irq_bit_watch: Option<serde_json::Map<String, serde_json::Value>>,
-    ) {
+    ) -> Result<(), String> {
+        let history = irq_bit_watch.map(BitWatch::from_json).transpose()?;
         self.irq_pending = pending;
         self.irq_source = source;
         self.irq_imr = imr;
@@ -623,8 +550,9 @@ impl TimerContext {
         self.next_interrupt_id = next_interrupt_id;
         self.last_fired = None;
         self.key_irq_latched = false;
-        self.irq_bit_watch = irq_bit_watch.map(BitWatch::from_json);
+        self.irq_bit_watch = history;
         self.delivered_masks.clear();
+        Ok(())
     }
 
     /// Record IMR/ISR bit transitions (set/clear) keyed by bit number and PC, mirroring Python.
@@ -636,10 +564,6 @@ impl TimerContext {
         pc: u32,
     ) {
         let watch = self.irq_bit_watch.get_or_insert_with(BitWatch::default);
-        if let Some(table) = watch.legacy.as_mut() {
-            Self::record_legacy_bit_watch_transition(table, reg_name, prev_val, new_val, pc);
-            return;
-        }
         let r = match reg_name {
             "IMR" => 0,
             "ISR" => 1,
@@ -655,10 +579,12 @@ impl TimerContext {
     }
 
     /// Materialize diagnostic JSON only for an explicit observer/snapshot.
+    #[cfg(any(test, feature = "json-compat"))]
     pub fn irq_bit_watch_json(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
         self.irq_bit_watch.as_ref().map(BitWatch::to_json)
     }
 
+    #[cfg(test)]
     fn record_legacy_bit_watch_transition(
         table: &mut serde_json::Map<String, serde_json::Value>,
         reg_name: &str,
@@ -1041,7 +967,9 @@ mod tests {
 
         let mut restored = TimerContext::new(true, 4, 500);
         restored.configure_scr_periods(4, 16, 500, 2_000, 0, 0);
-        restored.apply_snapshot_info(&timer_info, &interrupt_info, 100);
+        restored
+            .apply_snapshot_info(&timer_info, &interrupt_info, 100)
+            .unwrap();
         restored.restore_scr_selector(SCR_MTS | SCR_STS);
         restored.sync_scr_selection(SCR_MTS | SCR_STS, 200);
 
@@ -1168,19 +1096,21 @@ mod tests {
     fn snapshot_absolute_targets_match_python_semantics() {
         // Simulate a Python snapshot with absolute next_mti/next_sti values.
         let mut timer = TimerContext::new(true, 20, 30);
-        timer.apply_snapshot_info(
-            &crate::TimerInfo {
-                enabled: true,
-                mti_period: 20,
-                sti_period: 30,
-                next_mti: 150,
-                next_sti: 200,
-                kb_irq_enabled: true,
-                ..Default::default()
-            },
-            &InterruptInfo::default(),
-            100,
-        );
+        timer
+            .apply_snapshot_info(
+                &crate::TimerInfo {
+                    enabled: true,
+                    mti_period: 20,
+                    sti_period: 30,
+                    next_mti: 150,
+                    next_sti: 200,
+                    kb_irq_enabled: true,
+                    ..Default::default()
+                },
+                &InterruptInfo::default(),
+                100,
+            )
+            .unwrap();
         let mut mem = MemoryImage::new();
         let mut cycles = 100u64; // current cycle when snapshot applied
 
@@ -1245,19 +1175,21 @@ mod tests {
             ..Default::default()
         };
 
-        timer.apply_snapshot_info(
-            &crate::TimerInfo {
-                enabled: true,
-                mti_period: 20,
-                sti_period: 30,
-                next_mti: 150,
-                next_sti: 200,
-                kb_irq_enabled: true,
-                ..Default::default()
-            },
-            &interrupts,
-            100,
-        );
+        timer
+            .apply_snapshot_info(
+                &crate::TimerInfo {
+                    enabled: true,
+                    mti_period: 20,
+                    sti_period: 30,
+                    next_mti: 150,
+                    next_sti: 200,
+                    kb_irq_enabled: true,
+                    ..Default::default()
+                },
+                &interrupts,
+                100,
+            )
+            .unwrap();
 
         assert!(timer.irq_pending);
         assert_eq!(timer.irq_source.as_deref(), Some("KEY"));
@@ -1408,17 +1340,21 @@ mod tests {
                 pc,
             );
             assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
+            let typed = timer.interrupt_snapshot();
+            let mut restored = TimerContext::new(false, 1, 1);
+            restored.restore_interrupt_snapshot(&typed);
+            assert_eq!(restored.interrupt_snapshot(), typed);
             if i % 127 == 0 {
                 let (t, irq) = timer.snapshot_info();
-                timer.apply_snapshot_info(&t, &irq, 0);
-                assert!(timer.irq_bit_watch.as_ref().unwrap().legacy.is_none());
+                timer.apply_snapshot_info(&t, &irq, 0).unwrap();
+                assert!(timer.irq_bit_watch.is_some());
             }
         }
     }
 
     #[test]
-    fn unusual_bit_watch_import_preserves_legacy_behavior() {
-        let mut reference = serde_json::Map::from_iter([
+    fn unusual_bit_watch_import_is_rejected_before_mutation() {
+        let reference = serde_json::Map::from_iter([
             ("extra".to_string(), json!({"preserve": true})),
             (
                 "IMR".to_string(),
@@ -1426,19 +1362,16 @@ mod tests {
             ),
         ]);
         let mut timer = TimerContext::new(true, 0, 0);
-        timer.irq_bit_watch = Some(BitWatch::from_json(reference.clone()));
-        assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
-        for (before, after) in [(0, 0), (0, 128), (128, 0)] {
-            timer.record_bit_watch_transition("IMR", before, after, 0x12345);
-            TimerContext::record_legacy_bit_watch_transition(
-                &mut reference,
-                "IMR",
-                before,
-                after,
-                0x12345,
-            );
-            assert_eq!(timer.irq_bit_watch_json().unwrap(), reference);
-        }
+        let (before_timer, mut irq) = timer.snapshot_info();
+        irq.pending = true;
+        assert!(BitWatch::from_json(reference).is_err());
+        let mut invalid = BitWatch::default();
+        invalid.histories[0][0][0].pcs[0] = 0x100000;
+        invalid.histories[0][0][0].len = 1;
+        irq.irq_bit_watch = Some(invalid);
+        let before = format!("{timer:?}");
+        assert!(timer.apply_snapshot_info(&before_timer, &irq, 0).is_err());
+        assert_eq!(format!("{timer:?}"), before);
     }
 
     #[test]
@@ -1568,19 +1501,21 @@ mod tests {
     fn apply_snapshot_restores_timer_periods_without_scaling() {
         let mut timer = TimerContext::new(true, 100, 200);
         timer.set_timer_scale(0.5);
-        timer.apply_snapshot_info(
-            &crate::TimerInfo {
-                enabled: true,
-                mti_period: 100,
-                sti_period: 200,
-                next_mti: 75,
-                next_sti: 125,
-                kb_irq_enabled: true,
-                ..Default::default()
-            },
-            &InterruptInfo::default(),
-            0,
-        );
+        timer
+            .apply_snapshot_info(
+                &crate::TimerInfo {
+                    enabled: true,
+                    mti_period: 100,
+                    sti_period: 200,
+                    next_mti: 75,
+                    next_sti: 125,
+                    kb_irq_enabled: true,
+                    ..Default::default()
+                },
+                &InterruptInfo::default(),
+                0,
+            )
+            .unwrap();
 
         assert_eq!(timer.mti_period, 100);
         assert_eq!(timer.sti_period, 200);
@@ -1604,7 +1539,9 @@ mod tests {
 
         let (timer_info, interrupt_info) = timer.snapshot_info();
         let mut restored = TimerContext::new(false, 1, 1);
-        restored.apply_snapshot_info(&timer_info, &interrupt_info, 0);
+        restored
+            .apply_snapshot_info(&timer_info, &interrupt_info, 0)
+            .unwrap();
 
         assert_eq!(restored.next_mti, 1_000);
         assert_eq!(restored.next_sti, 2_000);

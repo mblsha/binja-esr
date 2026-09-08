@@ -11,8 +11,8 @@ use sc62015_core::{
     generated_key_input::{lookup_generated_key_input, GeneratedKeyInputKind},
     iq7000::{self, Iq7000ClockSeed, Iq7000RtcPeripheral},
     iq7000_annunciators::Iq7000Annunciators,
-    keyboard::{KeyboardMatrix, KeyboardSnapshot},
-    lcd::{lcd_kind_from_snapshot_meta, LcdHal, LcdWriteTrace},
+    keyboard::KeyboardMatrix,
+    lcd::{LcdHal, LcdWriteTrace},
     lcd_capture::lcd_matrix_pixels as lcd_pixels,
     lcd_render::render_lcd,
     llama::{
@@ -280,6 +280,10 @@ struct Args {
     /// Dump external bus accesses as JSONL (one byte-level event per line).
     #[arg(long, value_name = "PATH")]
     dump_bus_trace: Option<PathBuf>,
+
+    /// Use fixed-record binary output; convert to JSONL offline with sc62015-bus-trace.
+    #[arg(long, requires = "dump_bus_trace")]
+    bus_trace_binary: bool,
 
     /// Load function names from a BNIDA export (rom-analysis/.../bnida.json) and use them to label
     /// the "Functions" track in Perfetto traces (replacing sub_XXXXXX fallbacks).
@@ -701,19 +705,7 @@ fn load_reset_trace2_main_display_profile(
     Ok(Some(profile))
 }
 
-#[derive(Serialize)]
-struct BusTraceEvent {
-    index: u64,
-    kind: &'static str,
-    region: &'static str,
-    addr: u32,
-    value: u8,
-    bits: u8,
-    byte_offset: u8,
-    pc: u32,
-    instr_index: u64,
-    cycle: u64,
-}
+use sc62015_core::bus_trace::BusTraceEvent;
 
 fn load_bnida_names(
     model: DeviceModel,
@@ -782,7 +774,9 @@ struct StandaloneBus {
     host_peek: Option<Box<dyn FnMut(u32) -> Option<u8> + Send>>,
     host_write: Option<Box<dyn FnMut(u32, u8) + Send>>,
     bus_trace: Option<BufWriter<fs::File>>,
+    bus_trace_binary: bool,
     bus_trace_index: u64,
+    bus_trace_error: Option<String>,
     trace_resume_ssr_onk: bool,
     trace_resume_onk_release_cycle: Option<u64>,
     trace_resume_onk_release_instr: Option<u64>,
@@ -1173,7 +1167,9 @@ impl StandaloneBus {
             host_peek: None,
             host_write,
             bus_trace: None,
+            bus_trace_binary: false,
             bus_trace_index: 0,
+            bus_trace_error: None,
             trace_resume_ssr_onk: false,
             trace_resume_onk_release_cycle: None,
             trace_resume_onk_release_instr: None,
@@ -1209,6 +1205,19 @@ impl StandaloneBus {
     fn set_bus_trace(&mut self, writer: Option<BufWriter<fs::File>>) {
         self.bus_trace = writer;
         self.bus_trace_index = 0;
+        self.bus_trace_error = None;
+    }
+
+    fn finish_bus_trace(&mut self) -> Result<(), String> {
+        if let Some(mut writer) = self.bus_trace.take() {
+            if let Err(error) = writer.flush() {
+                self.bus_trace_error = Some(error.to_string());
+            }
+        }
+        match self.bus_trace_error.as_ref() {
+            Some(error) => Err(format!("bus trace is incomplete: {error}")),
+            None => Ok(()),
+        }
     }
 
     fn install_iq7000_clock_seed(&mut self, seed: Iq7000RtcSeed) {
@@ -1232,14 +1241,6 @@ impl StandaloneBus {
         self.iq7000_clock_seed
             .as_ref()
             .and_then(|seed| seed.clock.read(addr, bits))
-    }
-
-    fn finish_bus_trace(&mut self) {
-        if let Some(writer) = self.bus_trace.as_mut() {
-            if let Err(err) = writer.flush() {
-                eprintln!("warning: failed to flush bus trace: {err}");
-            }
-        }
     }
 
     fn ssr_onk_visible(&self) -> bool {
@@ -1464,19 +1465,16 @@ impl StandaloneBus {
                 instr_index: self.instr_index,
                 cycle: self.cycle_count,
             };
-            let line = match serde_json::to_string(&event) {
-                Ok(line) => line,
-                Err(err) => {
-                    write_error = Some(err.to_string());
-                    break;
-                }
-            };
             if let Some(writer) = self.bus_trace.as_mut() {
-                if let Err(err) = writer
-                    .write_all(line.as_bytes())
-                    .and_then(|_| writer.write_all(b"\n"))
-                {
-                    write_error = Some(err.to_string());
+                let result = if self.bus_trace_binary {
+                    event.write_binary(writer)
+                } else {
+                    serde_json::to_writer(&mut *writer, &event)
+                        .map_err(std::io::Error::other)
+                        .and_then(|_| writer.write_all(b"\n"))
+                };
+                if let Err(error) = result {
+                    write_error = Some(error.to_string());
                     break;
                 }
             }
@@ -1484,6 +1482,7 @@ impl StandaloneBus {
         }
         if let Some(err) = write_error {
             eprintln!("warning: disabling bus trace after write failure: {err}");
+            self.bus_trace_error = Some(err);
             self.bus_trace = None;
         }
     }
@@ -2206,18 +2205,17 @@ fn load_snapshot_state(
         &metadata.timer,
         &metadata.interrupts,
         metadata.cycle_count,
-    );
+    )?;
 
     let kb_meta = metadata
         .keyboard
         .as_ref()
         .ok_or("snapshot is missing keyboard state")?;
-    let kb_snapshot: KeyboardSnapshot = serde_json::from_value(kb_meta.clone())?;
     let mut keyboard_candidate = KeyboardMatrix::new();
     keyboard_candidate
-        .load_snapshot_state(&kb_snapshot)
+        .load_snapshot_state(kb_meta)
         .map_err(|error| format!("invalid keyboard snapshot: {error}"))?;
-    if serde_json::to_value(keyboard_candidate.snapshot_state())? != *kb_meta {
+    if keyboard_candidate.snapshot_state() != *kb_meta {
         return Err("keyboard snapshot is not exactly representable".into());
     }
 
@@ -2225,13 +2223,13 @@ fn load_snapshot_state(
         .lcd
         .as_ref()
         .ok_or("snapshot is missing LCD state")?;
-    let kind = lcd_kind_from_snapshot_meta(lcd_meta, model.lcd_kind());
+    let kind = lcd_meta.kind();
     let mut lcd_candidate = create_lcd(kind);
     sc62015_core::device::configure_lcd_char_tracing(lcd_candidate.as_mut(), model, rom_bytes);
     lcd_candidate
-        .load_snapshot(lcd_meta, loaded.lcd_payload.as_deref().unwrap_or(&[]))
+        .restore_state(lcd_meta, loaded.lcd_payload.as_deref().unwrap_or(&[]))
         .map_err(|error| format!("invalid LCD snapshot: {error}"))?;
-    let (restored_lcd_meta, restored_lcd_payload) = lcd_candidate.export_snapshot();
+    let (restored_lcd_meta, restored_lcd_payload) = lcd_candidate.snapshot_state();
     if restored_lcd_meta != *lcd_meta
         || restored_lcd_payload.as_slice() != loaded.lcd_payload.as_deref().unwrap_or(&[])
     {
@@ -2270,7 +2268,7 @@ fn load_snapshot_state(
         .copied()
         .unwrap_or(0);
     bus.pending_onk = metadata.onk_level;
-    bus.pending_kil = kb_snapshot.fifo_len > 0;
+    bus.pending_kil = kb_meta.fifo_len > 0;
     bus.deferred_key_irq = false;
     bus.deferred_pending_kil = false;
     bus.lcd_writes = 0;
@@ -2483,21 +2481,10 @@ fn save_snapshot_state(
     metadata.interrupts = interrupts;
 
     let kb_state = bus.keyboard.snapshot_state();
-    if let Ok(snapshot) = serde_json::to_value(&kb_state) {
-        metadata.keyboard = Some(snapshot);
-        metadata.kb_metrics = Some(json!({
-            "irq_count": kb_state.irq_count,
-            "strobe_count": kb_state.strobe_count,
-            "column_hist": kb_state.column_histogram,
-            "last_cols": kb_state.active_columns,
-            "last_kol": kb_state.kol,
-            "last_koh": kb_state.koh,
-            "kil_reads": kb_state.kil_read_count,
-            "kb_irq_enabled": bus.timer.kb_irq_enabled,
-        }));
-    }
+    metadata.kb_metrics = Some(kb_state.metrics(bus.timer.kb_irq_enabled));
+    metadata.keyboard = Some(kb_state);
 
-    let (lcd_meta, payload) = bus.lcd.export_snapshot();
+    let (lcd_meta, payload) = bus.lcd.snapshot_state();
     metadata.lcd = Some(lcd_meta);
     metadata.lcd_payload_size = payload.len();
     let lcd_payload = Some(payload);
@@ -5295,7 +5282,12 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
             }
         }
         let file = fs::File::create(path)?;
-        bus.set_bus_trace(Some(BufWriter::new(file)));
+        let mut writer = BufWriter::new(file);
+        if args.bus_trace_binary {
+            writer.write_all(sc62015_core::bus_trace::HEADER)?;
+        }
+        bus.bus_trace_binary = args.bus_trace_binary;
+        bus.set_bus_trace(Some(writer));
     }
     configure_bus_for_model(&mut bus, args.model);
     if args.reset_trace_card {
@@ -5759,7 +5751,10 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
 
         if let Some(error) = run_fault {
             bus.finish_perfetto();
-            bus.finish_bus_trace();
+            let error = match bus.finish_bus_trace() {
+                Ok(()) => error,
+                Err(trace_error) => format!("{error}; {trace_error}"),
+            };
             *run_error_slot_run.borrow_mut() = Some(error);
             emit_event(DriverEvent::User(CPU_DONE_EVENT));
             return;
@@ -5780,7 +5775,9 @@ fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
         }
 
         bus.finish_perfetto();
-        bus.finish_bus_trace();
+        if let Err(error) = bus.finish_bus_trace() {
+            *run_error_slot_run.borrow_mut() = Some(error);
+        }
 
         let imr_mem = bus.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         let isr_mem = bus.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
@@ -8115,6 +8112,27 @@ mod tests {
         );
         let snap = bus.keyboard.snapshot_state();
         assert_eq!(snap.press_threshold, 1);
+    }
+
+    #[test]
+    fn trace_flush_failure_is_reported_and_remains_latched() {
+        let mut bus = StandaloneBus::new(
+            MemoryImage::new(),
+            create_lcd(sc62015_core::LcdKind::Hd61202),
+            TimerContext::new(true, 1, 1),
+            false,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        // A read-only file accepts buffered bytes but must fail the final flush.
+        let file = fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+        bus.set_bus_trace(Some(BufWriter::new(file)));
+        bus.trace_bus_access("read", 0xc0000, 8, 0x55);
+        assert!(bus.finish_bus_trace().unwrap_err().contains("incomplete"));
+        assert!(bus.finish_bus_trace().is_err());
     }
 
     #[test]

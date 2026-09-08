@@ -1879,115 +1879,14 @@ fn validate_scheduler_metadata(timer: &TimerInfo, interrupts: &InterruptInfo) ->
             }
         }
     }
-    if let Some(counts) = interrupts.irq_counts.as_ref() {
-        let counts = counts
-            .as_object()
-            .ok_or_else(|| PyTypeError::new_err("snapshot irq_counts must be an object"))?;
-        if counts.len() != 4 {
-            return Err(PyValueError::new_err(
-                "snapshot irq_counts must contain exactly total/KEY/MTI/STI",
-            ));
-        }
-        for name in ["total", "KEY", "MTI", "STI"] {
-            let value = counts
-                .get(name)
-                .and_then(JsonValue::as_u64)
-                .ok_or_else(|| {
-                    PyValueError::new_err(format!(
-                        "snapshot irq_counts is missing unsigned integer {name:?}"
-                    ))
-                })?;
-            if value > u64::from(u32::MAX) {
-                return Err(PyValueError::new_err(format!(
-                    "snapshot irq_counts {name:?} exceeds u32"
-                )));
-            }
+    // Field presence/types/u32 bounds are enforced by typed deserialization.
+    if let Some(last) = &interrupts.last_irq {
+        if [last.pc, last.vector].into_iter().flatten().any(|v| v > ADDRESS_MASK) {
+            return Err(PyValueError::new_err("snapshot last_irq address exceeds 20 bits"));
         }
     }
-    if let Some(last_irq) = interrupts.last_irq.as_ref() {
-        let last_irq = last_irq
-            .as_object()
-            .ok_or_else(|| PyTypeError::new_err("snapshot last_irq must be an object"))?;
-        if last_irq.len() != 3
-            || !["src", "pc", "vector"]
-                .iter()
-                .all(|name| last_irq.contains_key(*name))
-        {
-            return Err(PyValueError::new_err(
-                "snapshot last_irq must contain exactly src/pc/vector",
-            ));
-        }
-        for name in ["pc", "vector"] {
-            if let Some(value) = last_irq.get(name).filter(|value| !value.is_null()) {
-                let value = value.as_u64().ok_or_else(|| {
-                    PyTypeError::new_err(format!(
-                        "snapshot last_irq {name:?} must be an unsigned integer or null"
-                    ))
-                })?;
-                if value > u64::from(ADDRESS_MASK) {
-                    return Err(PyValueError::new_err(format!(
-                        "snapshot last_irq {name:?} exceeds the 20-bit address space"
-                    )));
-                }
-            }
-        }
-        if let Some(source) = last_irq.get("src").filter(|value| !value.is_null()) {
-            if !source.is_string() {
-                return Err(PyTypeError::new_err(
-                    "snapshot last_irq \"src\" must be a string or null",
-                ));
-            }
-        }
-    }
-    if let Some(watch) = interrupts.irq_bit_watch.as_ref() {
-        let watch = watch
-            .as_object()
-            .ok_or_else(|| PyTypeError::new_err("snapshot irq_bit_watch must be an object"))?;
-        if watch.len() != 2 || !["IMR", "ISR"].iter().all(|name| watch.contains_key(*name)) {
-            return Err(PyValueError::new_err(
-                "snapshot irq_bit_watch must contain exactly IMR/ISR",
-            ));
-        }
-        for register in ["IMR", "ISR"] {
-            let bits = watch[register].as_object().ok_or_else(|| {
-                PyTypeError::new_err(format!(
-                    "snapshot irq_bit_watch {register} must be an object"
-                ))
-            })?;
-            if bits.len() != 8 {
-                return Err(PyValueError::new_err(format!(
-                    "snapshot irq_bit_watch {register} must contain exactly eight bits"
-                )));
-            }
-            for bit in 0..8 {
-                let actions = bits
-                    .get(&bit.to_string())
-                    .and_then(JsonValue::as_object)
-                    .ok_or_else(|| {
-                        PyValueError::new_err(format!(
-                            "snapshot irq_bit_watch {register} is missing bit {bit}"
-                        ))
-                    })?;
-                if actions.len() != 2
-                    || !["set", "clear"]
-                        .iter()
-                        .all(|name| actions.get(*name).is_some_and(JsonValue::is_array))
-                {
-                    return Err(PyValueError::new_err(format!(
-                        "snapshot irq_bit_watch {register}.{bit} must contain set/clear arrays"
-                    )));
-                }
-                for action in ["set", "clear"] {
-                    for pc in actions[action].as_array().expect("validated array") {
-                        if pc.as_u64().is_none_or(|pc| pc > u64::from(ADDRESS_MASK)) {
-                            return Err(PyValueError::new_err(format!(
-                                "snapshot irq_bit_watch {register}.{bit}.{action} contains an invalid PC"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
+    if interrupts.irq_bit_watch.as_ref().is_some_and(|watch| !watch.addresses_valid()) {
+        return Err(PyValueError::new_err("IRQ history address exceeds 20 bits"));
     }
     Ok(())
 }
@@ -2114,7 +2013,8 @@ fn scheduler_snapshot_candidate(
     validate_scheduler_metadata(&timer_metadata, &interrupt_metadata)?;
 
     let mut candidate = current.clone();
-    candidate.apply_snapshot_info(&timer_metadata, &interrupt_metadata, current_cycle);
+    candidate.apply_snapshot_info(&timer_metadata, &interrupt_metadata, current_cycle)
+        .map_err(PyValueError::new_err)?;
     Ok((candidate, interrupt_metadata))
 }
 
@@ -3153,19 +3053,8 @@ impl LlamaCpu {
             call_page_stack: call_metrics.call_page_stack,
             call_return_widths: call_metrics.call_return_widths,
             temps,
-            keyboard: Some(to_value(&kb_state).map_err(|err| {
-                PyRuntimeError::new_err(format!("serialize keyboard snapshot: {err}"))
-            })?),
-            kb_metrics: Some(json!({
-                "irq_count": kb_state.irq_count,
-                "strobe_count": kb_state.strobe_count,
-                "column_hist": kb_state.column_histogram,
-                "last_cols": kb_state.active_columns,
-                "last_kol": kb_state.kol,
-                "last_koh": kb_state.koh,
-                "kil_reads": kb_state.kil_read_count,
-                "kb_irq_enabled": self.timer.kb_irq_enabled,
-            })),
+            keyboard: Some(kb_state.clone()),
+            kb_metrics: Some(kb_state.metrics(self.timer.kb_irq_enabled)),
             ..SnapshotMetadata::default()
         };
         metadata.power_state = self.state.power_state();
@@ -3182,7 +3071,11 @@ impl LlamaCpu {
             Some(pair) => (Some(pair.0), Some(pair.1)),
             None => (None, None),
         };
-        metadata.lcd = lcd_meta;
+        metadata.lcd = lcd_meta.as_ref().map(|value| {
+            sc62015_core::lcd_snapshot::LcdSnapshotMetadata::from_legacy(
+                value, sc62015_core::lcd::LcdKind::Hd61202,
+            ).map_err(PyValueError::new_err)
+        }).transpose()?;
         metadata.lcd_payload_size = lcd_payload.as_ref().map(|v| v.len()).unwrap_or(0);
 
         let regs = sc62015_core::collect_registers(&self.state);

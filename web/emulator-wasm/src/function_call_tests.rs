@@ -5,6 +5,48 @@ use wasm_bindgen_test::wasm_bindgen_test;
 const ENTRY: u32 = 0xB8000;
 const STACK: u32 = 0xB9003;
 
+#[wasm_bindgen_test]
+fn structured_results_match_json_and_release_call_ownership() {
+    for model in [DeviceModel::PcE500, DeviceModel::Iq7000] {
+        for cancel in [false, true] {
+            let mut legacy = machine(model);
+            let mut structured = machine(model);
+            let a = legacy
+                .call_function_begin(ENTRY, 4, JsValue::UNDEFINED)
+                .unwrap();
+            let b = structured
+                .call_function_begin(ENTRY, 4, JsValue::UNDEFINED)
+                .unwrap();
+            legacy.call_function_slice(a, 4, 16.0).unwrap();
+            structured.call_function_slice(b, 4, 16.0).unwrap();
+            let text = if cancel {
+                legacy.call_function_cancel(a)
+            } else {
+                legacy.call_function_finish(a)
+            }
+            .unwrap();
+            let object = if cancel {
+                structured.call_function_cancel_object(b)
+            } else {
+                structured.call_function_finish_object(b)
+            }
+            .unwrap();
+            assert!(!object.is_string());
+            let registers =
+                js_sys::Reflect::get(&object, &JsValue::from_str("before_regs")).unwrap();
+            assert!(!registers.is_instance_of::<js_sys::Map>());
+            let actual: serde_json::Value = serde_wasm_bindgen::from_value(object).unwrap();
+            let expected: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(actual, expected);
+            assert_machine_matches(&legacy, &structured);
+            let next = structured
+                .call_function_begin(ENTRY, 1, JsValue::UNDEFINED)
+                .unwrap();
+            structured.call_function_cancel_object(next).unwrap();
+        }
+    }
+}
+
 fn json_js(value: serde_json::Value) -> JsValue {
     // JSON objects match the JavaScript call API. serde_wasm_bindgen's default
     // generic-map serializer produces a JS Map, not an options object.

@@ -20,6 +20,30 @@ const machine = () => ({
 });
 
 describe('resumable Rust function calls', () => {
+	it('uses structured results without invoking legacy serialization', async () => {
+		const emulator = {
+			...machine(),
+			call_function_finish_object: vi.fn(() => JSON.parse(finished)),
+			call_function_cancel_object: vi.fn(() => JSON.parse(cancelled)),
+		};
+		await callBounded(emulator, 0x10000, 1000, {}, { yieldHost: async () => {} });
+		expect(emulator.call_function_finish_object).toHaveBeenCalledExactlyOnceWith(3);
+		expect(emulator.call_function_finish).not.toHaveBeenCalled();
+		const controller = new AbortController();
+		emulator.call_function_slice.mockReturnValue(status('running'));
+		await callBounded(
+			emulator,
+			0x10000,
+			1000,
+			{},
+			{
+				signal: controller.signal,
+				yieldHost: async () => controller.abort(),
+			},
+		);
+		expect(emulator.call_function_cancel_object).toHaveBeenCalledExactlyOnceWith(3);
+		expect(emulator.call_function_cancel).not.toHaveBeenCalled();
+	});
 	it('limits call slices at input release boundaries and does not charge debugger stub actions', async () => {
 		const emulator = machine();
 		let boundaries = 0;

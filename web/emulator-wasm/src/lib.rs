@@ -1185,7 +1185,7 @@ mod tests {
     fn lcd_poll_detects_pc_data_start_line_and_snapshot_restore() {
         let mut emulator = function_test_emulator();
         emulator.lcd_capture_if_changed(false).unwrap();
-        let (meta, payload) = emulator.runtime.lcd.as_ref().unwrap().export_snapshot();
+        let (meta, payload) = emulator.runtime.lcd.as_ref().unwrap().snapshot_state();
         let lcd = emulator.runtime.lcd.as_mut().unwrap();
         lcd.write(0xa000, 0x40); // column 0, both chips
         lcd.write(0xa000, 0xb8); // page 0
@@ -1204,7 +1204,7 @@ mod tests {
             .lcd
             .as_mut()
             .unwrap()
-            .load_snapshot(&meta, &payload)
+            .restore_state(&meta, &payload)
             .unwrap();
         assert!(!emulator.lcd_capture_if_changed(false).unwrap().is_null());
         assert!(emulator.lcd_capture_if_changed(false).unwrap().is_null());

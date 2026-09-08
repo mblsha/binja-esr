@@ -4,27 +4,37 @@
 //! Letter case follows the device's CAPS state; SHIFT means its printed legend.
 
 use crate::DeviceModel;
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
+include!(concat!(env!("OUT_DIR"), "/physical_keys.rs"));
 
 pub fn matrix_key(model: DeviceModel, name: &str) -> Option<u8> {
-    type Maps = BTreeMap<String, BTreeMap<String, u8>>;
-    static MAPS: OnceLock<Maps> = OnceLock::new();
-    let maps = MAPS.get_or_init(|| {
-        serde_json::from_str(include_str!("../data/physical_keys.json"))
-            .expect("checked-in physical key map must be valid")
-    });
-    let model = if model == DeviceModel::Iq7000 {
-        "iq-7000"
+    let keys = if model == DeviceModel::Iq7000 {
+        IQ_7000_KEYS
     } else {
-        "pc-e500"
+        PC_E500_KEYS
     };
-    maps.get(model)?.get(name).copied()
+    keys.binary_search_by_key(&name, |(key, _)| *key)
+        .ok()
+        .map(|index| keys[index].1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_tables_match_every_shared_definition() {
+        let maps: std::collections::BTreeMap<String, std::collections::BTreeMap<String, u8>> =
+            serde_json::from_str(include_str!("../data/physical_keys.json")).unwrap();
+        for (name, model, table) in [
+            ("pc-e500", DeviceModel::PcE500, PC_E500_KEYS),
+            ("iq-7000", DeviceModel::Iq7000, IQ_7000_KEYS),
+        ] {
+            assert_eq!(table.len(), maps[name].len());
+            for (key, code) in &maps[name] {
+                assert_eq!(matrix_key(model, key), Some(*code));
+            }
+        }
+    }
 
     #[test]
     fn shared_key_maps_have_valid_unique_contacts_and_complete_basic_typing() {

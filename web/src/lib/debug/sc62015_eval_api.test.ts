@@ -125,8 +125,12 @@ describe('createEvalApi', () => {
 		expect(capture).toEqual(frame);
 		expect(await api.lcd.pixels()).toHaveLength(96 * 64);
 		frame.annunciators.shadow_bytes[0] = 0;
+		frame.annunciators.state_bytes[0] = 99;
+		frame.annunciators.unmapped_shadow_bytes[0] = 99;
 		frame.pixels[pixelIndex] = 192;
 		expect(capture.annunciators?.shadow_bytes[0]).toBe(0x10);
+		expect(capture.annunciators?.state_bytes[0]).toBe(0);
+		expect(capture.annunciators?.unmapped_shadow_bytes[0]).toBe(0);
 		expect(capture.pixels[pixelIndex]).toBe(73);
 		expect((await api.lcd.capture({ scale: 4 })).pixels[pixelIndex]).toBe(192);
 		expect(scales).toEqual([undefined, 4]);

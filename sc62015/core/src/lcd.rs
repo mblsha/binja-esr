@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/display/hd61202.py:HD61202
 // PY_SOURCE: pce500/display/controller_wrapper.py:HD61202Controller
 
+use crate::lcd_snapshot::{ChipSnapshot, LcdSnapshotMetadata};
 use crate::{
     lcd_text::{LcdCharMatcher, LcdCharWriteSample},
     llama::eval::{
@@ -11,7 +12,8 @@ use crate::{
     PERFETTO_TRACER,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(any(test, feature = "json-compat"))]
+use serde_json::Value;
 use std::any::Any;
 use std::collections::HashMap;
 
@@ -55,6 +57,7 @@ impl LcdKind {
     }
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 pub fn lcd_kind_from_snapshot_meta(metadata: &Value, default: LcdKind) -> LcdKind {
     metadata
         .get("kind")
@@ -82,8 +85,25 @@ pub trait LcdHal: Send {
 
     fn stats(&self) -> LcdStats;
 
-    fn export_snapshot(&self) -> (Value, Vec<u8>);
-    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String>;
+    fn snapshot_state(&self) -> (LcdSnapshotMetadata, Vec<u8>);
+    fn restore_state(
+        &mut self,
+        metadata: &LcdSnapshotMetadata,
+        payload: &[u8],
+    ) -> Result<(), String>;
+
+    #[cfg(any(test, feature = "json-compat"))]
+    fn export_snapshot(&self) -> (Value, Vec<u8>) {
+        let (metadata, payload) = self.snapshot_state();
+        (metadata.to_legacy(), payload)
+    }
+    #[cfg(any(test, feature = "json-compat"))]
+    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
+        self.restore_state(
+            &LcdSnapshotMetadata::from_legacy(metadata, self.kind())?,
+            payload,
+        )
+    }
 }
 
 pub fn create_lcd(kind: LcdKind) -> Box<dyn LcdHal> {
@@ -659,106 +679,98 @@ impl LcdController {
         }
     }
 
+    #[cfg(any(test, feature = "json-compat"))]
     pub fn export_snapshot(&self) -> (Value, Vec<u8>) {
-        let mut meta = json!({
-            "kind": self.kind(),
-            "chip_count": self.chips.len(),
-            "pages": LCD_PAGES,
-            "width": LCD_WIDTH,
-            "chips": [],
-            "cs_both_count": self.cs_both_count,
-            "cs_left_count": self.cs_left_count,
-            "cs_right_count": self.cs_right_count,
-        });
-        let mut chips_meta = Vec::with_capacity(self.chips.len());
-        let mut payload = Vec::with_capacity(self.chips.len() * LCD_PAGES * LCD_WIDTH);
-        for chip in &self.chips {
-            chips_meta.push(json!({
-                "on": chip.state.on,
-                "start_line": chip.state.start_line,
-                "page": chip.state.page,
-                "y_address": chip.state.y_address,
-                "instruction_count": chip.instruction_count,
-                "data_write_count": chip.data_write_count,
-                "data_read_count": chip.data_read_count,
-            }));
-            for page in &chip.vram {
-                for byte in page {
-                    payload.push(*byte);
-                }
-            }
-        }
-        if let Some(obj) = meta.as_object_mut() {
-            obj.insert("chips".to_string(), Value::Array(chips_meta));
-        }
-        (meta, payload)
+        let (metadata, payload) = self.snapshot_state();
+        (metadata.to_legacy(), payload)
     }
 
-    pub fn load_snapshot(&mut self, metadata: &Value, vram: &[u8]) -> Result<(), String> {
-        let chip_count = metadata
-            .get("chip_count")
-            .and_then(|v| v.as_u64())
-            .ok_or("lcd meta missing chip_count")?;
-        if chip_count != self.chips.len() as u64 {
-            return Err("lcd chip_count mismatch".to_string());
-        }
-        let pages = metadata
-            .get("pages")
-            .and_then(|v| v.as_u64())
-            .ok_or("lcd meta missing pages")?;
-        let width = metadata
-            .get("width")
-            .and_then(|v| v.as_u64())
-            .ok_or("lcd meta missing width")?;
-        if pages as usize != LCD_PAGES || width as usize != LCD_WIDTH {
-            return Err("lcd geometry mismatch".to_string());
-        }
-        if vram.len() != self.chips.len() * LCD_PAGES * LCD_WIDTH {
-            return Err("lcd vram size mismatch".to_string());
-        }
-        for (idx, chip) in self.chips.iter_mut().enumerate() {
-            if let Some(chips) = metadata.get("chips").and_then(|v| v.as_array()) {
-                if let Some(meta) = chips.get(idx) {
-                    chip.state.on = meta.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
-                    chip.state.start_line =
-                        meta.get("start_line").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    chip.state.page = meta.get("page").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    chip.state.y_address =
-                        meta.get("y_address").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                    chip.instruction_count = meta
-                        .get("instruction_count")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    chip.data_write_count = meta
-                        .get("data_write_count")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    chip.data_read_count = meta
-                        .get("data_read_count")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                }
+    #[cfg(any(test, feature = "json-compat"))]
+    pub fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
+        self.restore_state(
+            &LcdSnapshotMetadata::from_legacy(metadata, self.kind())?,
+            payload,
+        )
+    }
+
+    pub fn snapshot_state(&self) -> (LcdSnapshotMetadata, Vec<u8>) {
+        let chips = std::array::from_fn(|i| {
+            let chip = &self.chips[i];
+            ChipSnapshot {
+                on: chip.state.on,
+                start_line: chip.state.start_line,
+                page: chip.state.page,
+                y_address: chip.state.y_address,
+                instruction_count: chip.instruction_count,
+                data_write_count: chip.data_write_count,
+                data_read_count: chip.data_read_count,
             }
-            let start = idx * LCD_PAGES * LCD_WIDTH;
-            let end = start + LCD_PAGES * LCD_WIDTH;
-            let slice = &vram[start..end];
-            for page in 0..LCD_PAGES {
-                let base = page * LCD_WIDTH;
-                chip.vram[page].copy_from_slice(&slice[base..base + LCD_WIDTH]);
+        });
+        let payload = self
+            .chips
+            .iter()
+            .flat_map(|chip| chip.vram.iter().flatten().copied())
+            .collect();
+        (
+            LcdSnapshotMetadata::Hd61202 {
+                chip_count: 2,
+                pages: LCD_PAGES,
+                width: LCD_WIDTH,
+                chips,
+                cs_both_count: self.cs_both_count,
+                cs_left_count: self.cs_left_count,
+                cs_right_count: self.cs_right_count,
+            },
+            payload,
+        )
+    }
+
+    pub fn restore_state(
+        &mut self,
+        metadata: &LcdSnapshotMetadata,
+        payload: &[u8],
+    ) -> Result<(), String> {
+        let LcdSnapshotMetadata::Hd61202 {
+            chip_count,
+            pages,
+            width,
+            chips,
+            cs_both_count,
+            cs_left_count,
+            cs_right_count,
+        } = metadata
+        else {
+            return Err("lcd kind mismatch".into());
+        };
+        if *chip_count != 2 || *pages != LCD_PAGES || *width != LCD_WIDTH {
+            return Err("lcd geometry mismatch".into());
+        }
+        if payload.len() != 2 * LCD_PAGES * LCD_WIDTH {
+            return Err("lcd vram size mismatch".into());
+        }
+        if chips
+            .iter()
+            .any(|c| c.start_line >= 64 || c.page >= 8 || c.y_address >= 64)
+        {
+            return Err("lcd chip selector out of range".into());
+        }
+        // All validation precedes mutation.
+        for (index, (chip, snapshot)) in self.chips.iter_mut().zip(chips).enumerate() {
+            chip.state.on = snapshot.on;
+            chip.state.start_line = snapshot.start_line;
+            chip.state.page = snapshot.page;
+            chip.state.y_address = snapshot.y_address;
+            chip.instruction_count = snapshot.instruction_count;
+            chip.data_write_count = snapshot.data_write_count;
+            chip.data_read_count = snapshot.data_read_count;
+            for (page, row) in chip.vram.iter_mut().enumerate() {
+                let start = (index * LCD_PAGES + page) * LCD_WIDTH;
+                row.copy_from_slice(&payload[start..start + LCD_WIDTH]);
             }
         }
-        self.cs_both_count = metadata
-            .get("cs_both_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        self.cs_left_count = metadata
-            .get("cs_left_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
-        self.cs_right_count = metadata
-            .get("cs_right_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        self.cs_both_count = *cs_both_count;
+        self.cs_left_count = *cs_left_count;
+        self.cs_right_count = *cs_right_count;
         Ok(())
     }
 
@@ -874,12 +886,16 @@ impl LcdHal for LcdController {
         self.stats()
     }
 
-    fn export_snapshot(&self) -> (Value, Vec<u8>) {
-        self.export_snapshot()
+    fn snapshot_state(&self) -> (LcdSnapshotMetadata, Vec<u8>) {
+        self.snapshot_state()
     }
 
-    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
-        self.load_snapshot(metadata, payload)
+    fn restore_state(
+        &mut self,
+        metadata: &LcdSnapshotMetadata,
+        payload: &[u8],
+    ) -> Result<(), String> {
+        self.restore_state(metadata, payload)
     }
 }
 
@@ -1042,13 +1058,12 @@ impl LcdHal for Iq7000LcdController {
         LcdStats::default()
     }
 
-    fn export_snapshot(&self) -> (Value, Vec<u8>) {
-        let meta = json!({
-            "kind": self.kind(),
-            "cols": IQ7000_VRAM_COLS,
-            "pages_per_buffer": IQ7000_PAGES_PER_BUFFER,
-            "buffers": 2,
-        });
+    fn snapshot_state(&self) -> (LcdSnapshotMetadata, Vec<u8>) {
+        let meta = LcdSnapshotMetadata::Iq7000Vram {
+            cols: IQ7000_VRAM_COLS,
+            pages_per_buffer: IQ7000_PAGES_PER_BUFFER,
+            buffers: 2,
+        };
         let mut payload = Vec::with_capacity(IQ7000_TOTAL_PAGES * IQ7000_VRAM_COLS);
         for page in 0..IQ7000_TOTAL_PAGES {
             payload.extend_from_slice(&self.vram[page]);
@@ -1056,10 +1071,24 @@ impl LcdHal for Iq7000LcdController {
         (meta, payload)
     }
 
-    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
-        let kind = lcd_kind_from_snapshot_meta(metadata, LcdKind::Iq7000Vram);
-        if kind != self.kind() {
-            return Err("lcd kind mismatch".to_string());
+    fn restore_state(
+        &mut self,
+        metadata: &LcdSnapshotMetadata,
+        payload: &[u8],
+    ) -> Result<(), String> {
+        let LcdSnapshotMetadata::Iq7000Vram {
+            cols,
+            pages_per_buffer,
+            buffers,
+        } = metadata
+        else {
+            return Err("lcd kind mismatch".into());
+        };
+        if *cols != IQ7000_VRAM_COLS
+            || *pages_per_buffer != IQ7000_PAGES_PER_BUFFER
+            || *buffers != 2
+        {
+            return Err("lcd geometry mismatch".into());
         }
         let expected = IQ7000_TOTAL_PAGES * IQ7000_VRAM_COLS;
         if payload.len() != expected {
@@ -1159,13 +1188,16 @@ impl LcdHal for UnknownLcdController {
         LcdStats::default()
     }
 
-    fn export_snapshot(&self) -> (Value, Vec<u8>) {
-        (json!({"kind": self.kind()}), Vec::new())
+    fn snapshot_state(&self) -> (LcdSnapshotMetadata, Vec<u8>) {
+        (LcdSnapshotMetadata::Unknown, Vec::new())
     }
 
-    fn load_snapshot(&mut self, metadata: &Value, payload: &[u8]) -> Result<(), String> {
-        let kind = lcd_kind_from_snapshot_meta(metadata, LcdKind::Unknown);
-        if kind != self.kind() {
+    fn restore_state(
+        &mut self,
+        metadata: &LcdSnapshotMetadata,
+        payload: &[u8],
+    ) -> Result<(), String> {
+        if metadata.kind() != self.kind() {
             return Err("lcd kind mismatch".to_string());
         }
         if !payload.is_empty() {

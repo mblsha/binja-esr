@@ -922,7 +922,12 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					throw new Error('Invalid LCD capture geometry');
 				}
 				// Capture owns its arrays: later execution must not change screenshot evidence.
-				return JSON.parse(JSON.stringify({ ...frame, pixels: Array.from(frame.pixels) }));
+				return {
+					...frame,
+					pixels: Array.from(frame.pixels),
+					// Preserve ownership of extension metadata as well as known byte arrays.
+					annunciators: structuredClone(frame.annunciators),
+				};
 			},
 			assertCalendarMonth: async (options) => {
 				const { year, month } = options;

@@ -23,6 +23,8 @@ export type ResumableCallEmulator = {
 	call_function_stub_failed(id: number, sequence: number, message: string): void;
 	call_function_finish(id: number): string;
 	call_function_cancel(id: number): string;
+	call_function_finish_object?(id: number): CallArtifacts;
+	call_function_cancel_object?(id: number): CallArtifacts;
 };
 
 /** Keeps the same Rust machine alive across yields. Cancellation removes the
@@ -52,14 +54,18 @@ export async function callBounded(
 		for (;;) {
 			if (controls.signal?.aborted) {
 				owned = false; // Rust restores scaffolding even if artifact encoding fails.
-				return JSON.parse(emulator.call_function_cancel(id));
+				return emulator.call_function_cancel_object
+					? emulator.call_function_cancel_object(id)
+					: JSON.parse(emulator.call_function_cancel(id));
 			}
 			const slice = emulator.call_function_slice(id, limitedBudget(200_000, controls.limitBudget), HOST_SLICE_MS);
 			controls.onProgress?.(slice.scheduler_boundaries - previousBoundaries, slice);
 			previousBoundaries = slice.scheduler_boundaries;
 			if (slice.state === 'complete') {
 				owned = false;
-				const result = JSON.parse(emulator.call_function_finish(id));
+				const result = emulator.call_function_finish_object
+					? emulator.call_function_finish_object(id)
+					: JSON.parse(emulator.call_function_finish(id));
 				// Repeated tiny calls must also allow the host to receive control messages.
 				await (controls.yieldHost ?? yieldToHost)();
 				return result;
@@ -80,7 +86,8 @@ export async function callBounded(
 	} catch (error) {
 		if (owned) {
 			try {
-				emulator.call_function_cancel(id);
+				if (emulator.call_function_cancel_object) emulator.call_function_cancel_object(id);
+				else emulator.call_function_cancel(id);
 			} catch (cleanupError) {
 				throw new Error(`Function call failed: ${String(error)}; cleanup also failed: ${String(cleanupError)}`);
 			}

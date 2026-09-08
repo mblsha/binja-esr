@@ -1,16 +1,25 @@
 // PY_SOURCE: pce500/emulator.py:save_snapshot
 // PY_SOURCE: pce500/emulator.py:load_snapshot
 
-use crate::memory::{MemoryCardMode, MemoryCardSnapshot};
+#[cfg(any(test, feature = "json-compat"))]
+use crate::memory::MemoryCardMode;
+use crate::memory::MemoryCardSnapshot;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use crate::memory::{
     MemoryImage, INTERNAL_MEMORY_START, INTERNAL_RAM_SIZE, INTERNAL_RAM_START, INTERNAL_SPACE,
 };
 use crate::{CoreError, Result, SnapshotMetadata};
+#[cfg(any(test, feature = "json-compat"))]
 use serde::de::Error as _;
+#[cfg(any(test, feature = "json-compat"))]
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use serde::Deserialize;
+#[cfg(any(test, feature = "json-compat"))]
+use serde::Serialize;
+use std::collections::HashMap;
+#[cfg(any(test, feature = "json-compat"))]
+use std::collections::HashSet;
+#[cfg(any(test, feature = "json-compat"))]
 use std::fmt;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 use std::fs::{self, File, OpenOptions};
@@ -29,10 +38,15 @@ use zip::{CompressionMethod, ZipWriter};
 
 pub const SNAPSHOT_MAGIC: &str = "pc-e500.snapshot";
 pub const SNAPSHOT_VERSION: u32 = 4;
+#[cfg(any(test, feature = "json-compat"))]
 const SNAPSHOT_JSON_MAX_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(any(test, feature = "json-compat"))]
 const SNAPSHOT_LCD_MAX_BYTES: usize = 0x10_0000;
+#[cfg(any(test, feature = "json-compat"))]
 const SNAPSHOT_MEMORY_CARD_CAPACITIES: [usize; 4] = [8192, 16384, 32768, 65536];
+#[cfg(any(test, feature = "json-compat"))]
 const SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX: u32 = crate::memory::EXTERNAL_SPACE as u32 - 1;
+#[cfg(any(test, feature = "json-compat"))]
 const SNAPSHOT_ARCHIVE_BASE_ENTRIES: [&str; 5] = [
     "snapshot.json",
     "registers.bin",
@@ -64,6 +78,7 @@ pub struct SnapshotLoad {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[cfg(any(test, feature = "json-compat"))]
 enum SnapshotMemoryCardMode {
     Absent,
     Present,
@@ -71,6 +86,7 @@ enum SnapshotMemoryCardMode {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(test, feature = "json-compat"))]
 struct SnapshotMemoryCardMetadata {
     mode: SnapshotMemoryCardMode,
     capacity: usize,
@@ -78,6 +94,7 @@ struct SnapshotMemoryCardMetadata {
     payload_size: usize,
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 impl SnapshotMemoryCardMetadata {
     fn from_snapshot(snapshot: &MemoryCardSnapshot) -> Result<Self> {
         let metadata = Self {
@@ -142,8 +159,10 @@ enum RangeSerde {
 /// an earlier one. `serde_json::Value` normally keeps only the last duplicate,
 /// which is inappropriate for an exact checkpoint format.
 #[derive(Debug)]
+#[cfg(any(test, feature = "json-compat"))]
 struct DuplicateFreeJson(serde_json::Value);
 
+#[cfg(any(test, feature = "json-compat"))]
 impl<'de> Deserialize<'de> for DuplicateFreeJson {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -153,8 +172,10 @@ impl<'de> Deserialize<'de> for DuplicateFreeJson {
     }
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 struct DuplicateFreeJsonVisitor;
 
+#[cfg(any(test, feature = "json-compat"))]
 impl<'de> Visitor<'de> for DuplicateFreeJsonVisitor {
     type Value = DuplicateFreeJson;
 
@@ -237,6 +258,7 @@ impl<'de> Visitor<'de> for DuplicateFreeJsonVisitor {
     }
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn parse_duplicate_free_json(bytes: &[u8]) -> Result<serde_json::Value> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let value = DuplicateFreeJson::deserialize(&mut deserializer)
@@ -298,6 +320,7 @@ pub fn canonical_snapshot_ranges(label: &str, ranges: &[(u32, u32)]) -> Result<V
     Ok(canonical)
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn require_canonical_snapshot_ranges(label: &str, ranges: &[(u32, u32)]) -> Result<()> {
     if canonical_snapshot_ranges(label, ranges)? != ranges {
         return Err(CoreError::InvalidSnapshot(format!(
@@ -307,6 +330,7 @@ fn require_canonical_snapshot_ranges(label: &str, ranges: &[(u32, u32)]) -> Resu
     Ok(())
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn encode_snapshot_metadata(
     metadata: &SnapshotMetadata,
     memory_card: Option<&SnapshotMemoryCardMetadata>,
@@ -322,6 +346,7 @@ fn encode_snapshot_metadata(
     Ok(serde_json::to_vec_pretty(&value)?)
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn decode_snapshot_metadata(
     bytes: &[u8],
 ) -> Result<(SnapshotMetadata, Option<SnapshotMemoryCardMetadata>)> {
@@ -420,6 +445,7 @@ fn decode_snapshot_metadata(
     Ok((metadata, memory_card))
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn validate_snapshot_architectural_addresses(
     metadata: &SnapshotMetadata,
     registers: &HashMap<String, u32>,
@@ -449,20 +475,12 @@ fn validate_snapshot_architectural_addresses(
             "snapshot call-page stack contains an address above 0xFFFFF".to_string(),
         ));
     }
-    if metadata
-        .interrupts
-        .last_irq
-        .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|last_irq| {
-            ["pc", "vector"].iter().any(|name| {
-                last_irq
-                    .get(*name)
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|address| address > u64::from(SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX))
-            })
-        })
-    {
+    if metadata.interrupts.last_irq.as_ref().is_some_and(|last| {
+        [last.pc, last.vector]
+            .into_iter()
+            .flatten()
+            .any(|address| address > SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX)
+    }) {
         return Err(CoreError::InvalidSnapshot(
             "snapshot last_irq contains an address above 0xFFFFF".to_string(),
         ));
@@ -471,26 +489,7 @@ fn validate_snapshot_architectural_addresses(
         .interrupts
         .irq_bit_watch
         .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .is_some_and(|watch| {
-            watch.values().any(|bits| {
-                bits.as_object().is_some_and(|bits| {
-                    bits.values().any(|actions| {
-                        actions.as_object().is_some_and(|actions| {
-                            actions.values().any(|pcs| {
-                                pcs.as_array().is_some_and(|pcs| {
-                                    pcs.iter().any(|pc| {
-                                        pc.as_u64().is_some_and(|pc| {
-                                            pc > u64::from(SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX)
-                                        })
-                                    })
-                                })
-                            })
-                        })
-                    })
-                })
-            })
-        })
+        .is_some_and(|watch| !watch.addresses_valid())
     {
         return Err(CoreError::InvalidSnapshot(
             "snapshot irq_bit_watch contains an address above 0xFFFFF".to_string(),
@@ -499,6 +498,7 @@ fn validate_snapshot_architectural_addresses(
     Ok(())
 }
 
+#[cfg(any(test, feature = "json-compat"))]
 fn validate_snapshot_register_file(registers: &HashMap<String, u32>) -> Result<()> {
     let expected: HashSet<&str> = SNAPSHOT_REGISTER_LAYOUT
         .iter()
@@ -1113,178 +1113,57 @@ pub fn load_snapshot(path: &Path) -> Result<SnapshotLoad> {
             ));
         }
     }
-    let counts = metadata
-        .interrupts
-        .irq_counts
-        .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| {
-            CoreError::InvalidSnapshot("snapshot irq_counts must be an object".to_string())
-        })?;
-    if counts.len() != 4
-        || ["total", "KEY", "MTI", "STI"].iter().any(|name| {
-            counts
-                .get(*name)
-                .and_then(serde_json::Value::as_u64)
-                .is_none_or(|value| value > u64::from(u32::MAX))
-        })
-    {
+    if metadata.interrupts.irq_counts.is_none() {
         return Err(CoreError::InvalidSnapshot(
-            "snapshot irq_counts must contain exactly bounded total/KEY/MTI/STI values".to_string(),
+            "snapshot irq_counts must be an object".into(),
         ));
     }
-    let last_irq = metadata
-        .interrupts
-        .last_irq
-        .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| {
-            CoreError::InvalidSnapshot("snapshot last_irq must be an object".to_string())
+    let last =
+        metadata.interrupts.last_irq.as_ref().ok_or_else(|| {
+            CoreError::InvalidSnapshot("snapshot last_irq must be an object".into())
         })?;
-    if last_irq.len() != 3
-        || ["src", "pc", "vector"]
-            .iter()
-            .any(|name| !last_irq.contains_key(*name))
-        || ["pc", "vector"].iter().any(|name| {
-            last_irq
-                .get(*name)
-                .filter(|value| !value.is_null())
-                .is_some_and(|value| {
-                    value.as_u64().is_none_or(|address| {
-                        address > u64::from(SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX)
-                    })
-                })
-        })
-        || last_irq
-            .get("src")
-            .filter(|value| !value.is_null())
-            .is_some_and(|value| {
-                value
-                    .as_str()
-                    .is_none_or(|source| !valid_irq_source(source))
-            })
+    if [last.pc, last.vector]
+        .into_iter()
+        .flatten()
+        .any(|v| v > SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX)
+        || last
+            .src
+            .as_ref()
+            .is_some_and(|source| !valid_irq_source(source))
     {
         return Err(CoreError::InvalidSnapshot(
-            "snapshot last_irq has an invalid shape or value".to_string(),
+            "snapshot last_irq has an invalid shape or value".into(),
         ));
     }
     let watch = metadata
         .interrupts
         .irq_bit_watch
         .as_ref()
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| {
-            CoreError::InvalidSnapshot("snapshot irq_bit_watch must be an object".to_string())
-        })?;
-    if watch.len() != 2 || ["IMR", "ISR"].iter().any(|name| !watch.contains_key(*name)) {
+        .ok_or_else(|| CoreError::InvalidSnapshot("snapshot IRQ history is missing".into()))?;
+    if !watch.addresses_valid() {
         return Err(CoreError::InvalidSnapshot(
-            "snapshot irq_bit_watch must contain exactly IMR and ISR".to_string(),
+            "snapshot IRQ history address exceeds 20 bits".into(),
         ));
-    }
-    for register in ["IMR", "ISR"] {
-        let bits = watch[register].as_object().ok_or_else(|| {
-            CoreError::InvalidSnapshot(format!(
-                "snapshot irq_bit_watch.{register} must be an object"
-            ))
-        })?;
-        if bits.len() != 8 {
-            return Err(CoreError::InvalidSnapshot(format!(
-                "snapshot irq_bit_watch.{register} must contain eight bits"
-            )));
-        }
-        for bit in 0..8u8 {
-            let actions = bits
-                .get(&bit.to_string())
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| {
-                    CoreError::InvalidSnapshot(format!(
-                        "snapshot irq_bit_watch.{register} is missing bit {bit}"
-                    ))
-                })?;
-            if actions.len() != 2
-                || ["set", "clear"].iter().any(|action| {
-                    actions
-                        .get(*action)
-                        .and_then(serde_json::Value::as_array)
-                        .is_none_or(|pcs| {
-                            pcs.iter().any(|pc| {
-                                pc.as_u64().is_none_or(|pc| {
-                                    pc > u64::from(SNAPSHOT_ARCHITECTURAL_ADDRESS_MAX)
-                                })
-                            })
-                        })
-                })
-            {
-                return Err(CoreError::InvalidSnapshot(format!(
-                    "snapshot irq_bit_watch.{register}.{bit} has invalid set/clear history"
-                )));
-            }
-        }
     }
 
     match metadata.keyboard.as_ref() {
         Some(value) => {
-            let keyboard_snapshot: crate::keyboard::KeyboardSnapshot =
-                serde_json::from_value(value.clone()).map_err(|error| {
-                    CoreError::InvalidSnapshot(format!(
-                        "invalid keyboard snapshot metadata: {error}"
-                    ))
-                })?;
+            let keyboard_snapshot = value;
             let mut keyboard = crate::keyboard::KeyboardMatrix::new();
             keyboard
-                .load_snapshot_state(&keyboard_snapshot)
+                .load_snapshot_state(keyboard_snapshot)
                 .map_err(CoreError::InvalidSnapshot)?;
-            if serde_json::to_value(keyboard.snapshot_state())? != *value {
+            if keyboard.snapshot_state() != *value {
                 return Err(CoreError::InvalidSnapshot(
                     "keyboard snapshot is not exactly representable".to_string(),
                 ));
             }
-            let metrics = metadata
-                .kb_metrics
-                .as_ref()
-                .and_then(serde_json::Value::as_object)
-                .ok_or_else(|| {
-                    CoreError::InvalidSnapshot(
-                        "snapshot keyboard metrics must be an object".to_string(),
-                    )
-                })?;
-            let expected_metric_keys: HashSet<&str> = [
-                "irq_count",
-                "strobe_count",
-                "column_hist",
-                "last_cols",
-                "last_kol",
-                "last_koh",
-                "kil_reads",
-                "kb_irq_enabled",
-            ]
-            .into_iter()
-            .collect();
-            if metrics.len() != expected_metric_keys.len()
-                || metrics
-                    .keys()
-                    .any(|name| !expected_metric_keys.contains(name.as_str()))
-                || metrics.get("irq_count").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(keyboard_snapshot.irq_count))
-                || metrics
-                    .get("strobe_count")
-                    .and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(keyboard_snapshot.strobe_count))
-                || metrics.get("last_kol").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(keyboard_snapshot.kol))
-                || metrics.get("last_koh").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(keyboard_snapshot.koh))
-                || metrics.get("kil_reads").and_then(serde_json::Value::as_u64)
-                    != Some(u64::from(keyboard_snapshot.kil_read_count))
-                || metrics
-                    .get("kb_irq_enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(metadata.timer.kb_irq_enabled)
-                || metrics.get("column_hist")
-                    != Some(&serde_json::json!(keyboard_snapshot.column_histogram))
-                || metrics.get("last_cols")
-                    != Some(&serde_json::json!(keyboard_snapshot.active_columns))
-            {
+            let metrics = metadata.kb_metrics.as_ref().ok_or_else(|| {
+                CoreError::InvalidSnapshot(
+                    "snapshot keyboard metrics must be an object".to_string(),
+                )
+            })?;
+            if *metrics != keyboard_snapshot.metrics(metadata.timer.kb_irq_enabled) {
                 return Err(CoreError::InvalidSnapshot(
                     "snapshot keyboard metrics disagree with keyboard state".to_string(),
                 ));
@@ -1458,20 +1337,22 @@ mod strict_json_tests {
 
         for field in ["pc", "vector"] {
             let mut metadata = SnapshotMetadata::default();
-            metadata.interrupts.last_irq = Some(serde_json::json!({
-                "src": null,
-                "pc": null,
-                "vector": null,
-            }));
-            metadata.interrupts.last_irq.as_mut().unwrap()[field] = serde_json::json!(0x100000);
+            let mut last = crate::interrupt_codec::LastIrq::default();
+            if field == "pc" {
+                last.pc = Some(0x100000);
+            } else {
+                last.vector = Some(0x100000);
+            }
+            metadata.interrupts.last_irq = Some(last);
             validate_snapshot_architectural_addresses(&metadata, &registers)
                 .expect_err("last IRQ address must be 20-bit");
         }
 
         let mut metadata = SnapshotMetadata::default();
-        metadata.interrupts.irq_bit_watch = Some(serde_json::json!({
-            "IMR": {"0": {"set": [0x100000], "clear": []}}
-        }));
+        let mut watch = crate::timer::BitWatch::default();
+        watch.histories[0][0][0].pcs[0] = 0x100000;
+        watch.histories[0][0][0].len = 1;
+        metadata.interrupts.irq_bit_watch = Some(watch);
         validate_snapshot_architectural_addresses(&metadata, &registers)
             .expect_err("IRQ history PC must be 20-bit");
     }
@@ -1517,14 +1398,6 @@ mod archive_tests {
             .collect()
     }
 
-    fn empty_irq_watch_bits() -> serde_json::Value {
-        serde_json::Value::Object(
-            (0..8)
-                .map(|bit| (bit.to_string(), serde_json::json!({"set": [], "clear": []})))
-                .collect(),
-        )
-    }
-
     fn valid_metadata() -> SnapshotMetadata {
         let mut metadata = SnapshotMetadata {
             temps: (0..crate::NUM_TEMP_REGISTERS)
@@ -1532,21 +1405,9 @@ mod archive_tests {
                 .collect(),
             ..SnapshotMetadata::default()
         };
-        metadata.interrupts.irq_counts = Some(serde_json::json!({
-            "total": 0,
-            "KEY": 0,
-            "MTI": 0,
-            "STI": 0,
-        }));
-        metadata.interrupts.last_irq = Some(serde_json::json!({
-            "src": null,
-            "pc": null,
-            "vector": null,
-        }));
-        metadata.interrupts.irq_bit_watch = Some(serde_json::json!({
-            "IMR": empty_irq_watch_bits(),
-            "ISR": empty_irq_watch_bits(),
-        }));
+        metadata.interrupts.irq_counts = Some(Default::default());
+        metadata.interrupts.last_irq = Some(Default::default());
+        metadata.interrupts.irq_bit_watch = Some(Default::default());
         metadata
     }
 

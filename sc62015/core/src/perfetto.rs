@@ -885,6 +885,7 @@ impl PerfettoTracer {
     ) {
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_mem_write_with_substep(
         &mut self,
         _instr_index: u64,
