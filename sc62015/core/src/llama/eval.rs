@@ -3079,8 +3079,19 @@ impl LlamaExecutor {
 
         let entry_kind = entry.map(|entry| entry.kind);
         let entry_name = entry.map(|entry| entry.name);
-        let stack_s_before = state.get_reg(RegName::S) & mask_for(RegName::S);
-        let stack_u_before = state.get_reg(RegName::U) & mask_for(RegName::U);
+        // Only a trusted slice hint may suppress these observations: generic
+        // buses can install a tracer during execution and retain live behavior.
+        let observe_stack = bus.tracing_active_hint() != Some(false);
+        let stack_s_before = if observe_stack {
+            state.get_reg(RegName::S)
+        } else {
+            0
+        };
+        let stack_u_before = if observe_stack {
+            state.get_reg(RegName::U)
+        } else {
+            0
+        };
 
         let result = match entry {
             Some(entry) => self.execute_with(
@@ -3119,7 +3130,7 @@ impl LlamaExecutor {
             }
         }
 
-        if let Some(kind) = entry_kind {
+        if let Some(kind) = entry_kind.filter(|_| observe_stack) {
             if !matches!(
                 kind,
                 InstrKind::Call | InstrKind::Ret | InstrKind::RetF | InstrKind::RetI
@@ -7981,6 +7992,54 @@ mod tests {
         assert_eq!(bus.loads, 0, "preflight must not fall back to load");
         assert_eq!(state.get_reg(RegName::A), 0x44);
         assert_eq!(state.pc(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "perfetto")]
+    fn stack_write_events_survive_known_and_dynamic_tracing_hints() {
+        struct HintBus(MemBus, Option<bool>);
+        impl LlamaBus for HintBus {
+            fn tracing_active_hint(&self) -> Option<bool> {
+                self.1
+            }
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.0.load(addr, bits)
+            }
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                self.0.store(addr, bits, value);
+            }
+            fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+                self.0.peek_byte_silent(addr)
+            }
+        }
+        let _lock = crate::perfetto::perfetto_test_guard();
+        for hint in [None, Some(true), Some(false)] {
+            let path = std::env::temp_dir().join(format!(
+                "stack-observation-{}-{hint:?}.perfetto-trace",
+                std::process::id()
+            ));
+            let mut guard = crate::PERFETTO_TRACER.enter();
+            assert!(guard.take().is_none());
+            if hint != Some(false) {
+                guard.replace(Some(crate::PerfettoTracer::new(path.clone())));
+            }
+            let mut bus = HintBus(MemBus::with_size(0x200), hint);
+            bus.0.mem[..4].copy_from_slice(&[0x0f, 0x45, 0x23, 0x01]); // MV S,12345
+            let mut state = LlamaState::new();
+            LlamaExecutor::new()
+                .execute(0x0f, &mut state, &mut bus)
+                .unwrap();
+            assert_eq!(state.get_reg(RegName::S), 0x12345);
+            assert_eq!(state.pc(), 4);
+            if let Some(tracer) = guard.take() {
+                tracer.finish().unwrap();
+                let bytes = std::fs::read(&path).unwrap();
+                assert!(bytes
+                    .windows(b"STACK_REG_WRITE".len())
+                    .any(|w| w == b"STACK_REG_WRITE"));
+                std::fs::remove_file(path).unwrap();
+            }
+        }
     }
 
     #[test]
