@@ -1239,13 +1239,20 @@ impl MemoryImage {
     /// and preserve architectural read accounting. Device routing is the caller's
     /// responsibility; this window cannot intersect the internal RAM mirror.
     pub(crate) fn fetch_plain_rom_byte(&self, address: u32) -> Option<u8> {
+        let value = self.peek_plain_rom_byte(address)?;
+        self.bump_read_count();
+        Some(value)
+    }
+
+    /// Silent counterpart of the architectural ROM fetch. The caller must
+    /// still exclude device mappings; never account a preflight as a bus read.
+    pub(crate) fn peek_plain_rom_byte(&self, address: u32) -> Option<u8> {
         if !(0xc0000..=0xfffff).contains(&address)
             || self.requires_python(address)
             || !self.read_overlay_candidates(address).is_empty()
         {
             return None;
         }
-        self.bump_read_count();
         Some(self.external[address as usize])
     }
 
@@ -2174,24 +2181,62 @@ mod tests {
         for address in [0xc0000, 0xe1234, 0xfffff] {
             mem.write_external_byte(address, 0x42);
             let reads = mem.memory_read_count();
+            assert_eq!(mem.peek_plain_rom_byte(address), Some(0x42));
+            assert_eq!(mem.memory_read_count(), reads);
             assert_eq!(mem.fetch_plain_rom_byte(address), Some(0x42));
             assert_eq!(mem.memory_read_count(), reads + 1);
             mem.write_external_byte(address, 0x99);
+            assert_eq!(mem.peek_plain_rom_byte(address), Some(0x99));
             assert_eq!(mem.fetch_plain_rom_byte(address), Some(0x99));
         }
         let reads = mem.memory_read_count();
         for address in [0, 0xbffff, 0x100000, 0xffffffff] {
+            assert_eq!(mem.peek_plain_rom_byte(address), None);
             assert_eq!(mem.fetch_plain_rom_byte(address), None);
         }
         mem.set_python_ranges(vec![(0xe1234, 0xe1234)]);
+        assert_eq!(mem.peek_plain_rom_byte(0xe1234), None);
         assert_eq!(mem.fetch_plain_rom_byte(0xe1234), None);
         mem.set_python_ranges(vec![]);
         mem.add_rom_overlay(0xe1234, &[0x12], "fetch-override");
+        assert_eq!(mem.peek_plain_rom_byte(0xe1234), None);
         assert_eq!(mem.fetch_plain_rom_byte(0xe1234), None);
         assert_eq!(mem.memory_read_count(), reads);
         assert_eq!(mem.load(0xe1234, 8), Some(0x12));
         mem.remove_overlay("fetch-override");
         assert_eq!(mem.fetch_plain_rom_byte(0xe1234), Some(0x99));
+    }
+
+    #[test]
+    fn silent_rom_fast_path_defers_pc_sensitive_overlay_reads() {
+        let mut mem = MemoryImage::new();
+        mem.write_external_byte(0xe0000, 0x42);
+        mem.add_overlay(MemoryOverlay {
+            start: 0xe0000,
+            end: 0xe0000,
+            name: "pc-sensitive".to_string(),
+            data: None,
+            read_only: true,
+            read_handler: Some(Box::new(|_, _| panic!("preflight must not read the bus"))),
+            preflight_read_handler: Some(Box::new(|_, pc| {
+                Some(if pc == Some(0xe1234) { 0x12 } else { 0x34 })
+            })),
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        assert_eq!(mem.peek_plain_rom_byte(0xe0000), None);
+        assert_eq!(
+            mem.read_byte_for_preflight(0xe0000, Some(0xe1234)),
+            Some(0x12)
+        );
+        assert_eq!(
+            mem.read_byte_for_preflight(0xe0000, Some(0xe1235)),
+            Some(0x34)
+        );
+        assert_eq!(mem.memory_read_count(), 0);
+        mem.remove_overlay("pc-sensitive");
+        assert_eq!(mem.peek_plain_rom_byte(0xe0000), Some(0x42));
+        assert_eq!(mem.memory_read_count(), 0);
     }
 
     #[test]

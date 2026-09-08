@@ -1795,6 +1795,15 @@ impl CoreRuntime {
             fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
                 let addr = addr & ADDRESS_MASK;
                 unsafe {
+                    // Clock/keyboard/SIO mappings cannot intersect upper ROM,
+                    // but custom LCD devices and memory overlays can.
+                    if (0xc0000..=0xfffff).contains(&addr)
+                        && !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr))
+                    {
+                        if let Some(value) = (*self.mem).peek_plain_rom_byte(addr) {
+                            return Some(value);
+                        }
+                    }
                     if let Some(seed_ptr) = self.iq7000_clock_seed {
                         if let Some(value) = (*seed_ptr).read(addr, 8) {
                             return Some(value as u8);
@@ -6529,10 +6538,10 @@ mod tests {
 
     #[test]
     fn quarantined_opcodes_fail_before_scheduler_or_level_mutation() {
-        for opcode in [0x20, 0xBF] {
+        for (pc, opcode) in [(0, 0x20), (0xe0000, 0x20), (0, 0xBF), (0xe0000, 0xBF)] {
             let mut rt = CoreRuntime::new();
-            rt.memory.write_external_byte(0, opcode);
-            rt.state.set_pc(0);
+            rt.memory.write_external_byte(pc, opcode);
+            rt.state.set_pc(pc);
             rt.state.set_reg(RegName::I, 0);
             *rt.timer = TimerContext::new(true, 1, 1);
             rt.timer.next_mti = 0;
@@ -6547,7 +6556,7 @@ mod tests {
 
             assert_eq!(rt.metadata.cycle_count, 0, "opcode 0x{opcode:02X}");
             assert_eq!(rt.metadata.instruction_count, 0, "opcode 0x{opcode:02X}");
-            assert_eq!(rt.state.pc(), 0, "opcode 0x{opcode:02X}");
+            assert_eq!(rt.state.pc(), pc, "opcode 0x{opcode:02X}");
             assert_eq!(
                 rt.memory.read_internal_byte_silent(IMEM_ISR_OFFSET),
                 Some(0),
@@ -6976,6 +6985,17 @@ mod tests {
             rt.state.peek_call_page().is_none(),
             "call page stack cleared"
         );
+    }
+
+    #[test]
+    fn upper_rom_preflight_keeps_wrapped_operand_fetch() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0xfffff);
+        rt.memory.write_external_byte(0xfffff, 0x08); // MV A,imm8
+        rt.memory.write_external_byte(0, 0x42);
+        rt.step(1).unwrap();
+        assert_eq!(rt.state.pc(), 1);
+        assert_eq!(rt.state.get_reg(RegName::A), 0x42);
     }
 
     #[test]
