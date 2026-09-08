@@ -978,13 +978,24 @@ impl LlamaExecutor {
         // Decode the complete operand shape through a read-only register view.
         // This catches malformed JP/E3/EB selectors, ignored selector bytes,
         // and noncanonical encoded 20-bit operands before scheduler mutation.
-        let decoded_result = self.decode_operands::<true, _>(
-            resolved,
-            state,
-            bus,
-            pre_modes_opt.as_ref(),
-            Some(exec_pc),
-        );
+        let decoded_result =
+            if prefix_len == 0 && matches!(resolved.operands, [OperandKind::ImmOffset]) {
+                // The offset has no reserved values, but it must still be available
+                // through the silent bus before any scheduler mutation.
+                Self::fetch_byte(bus, exec_pc.wrapping_add(1));
+                Ok(DecodedOperands {
+                    len: 2,
+                    ..Default::default()
+                })
+            } else {
+                self.decode_operands::<true, _>(
+                    resolved,
+                    state,
+                    bus,
+                    pre_modes_opt.as_ref(),
+                    Some(exec_pc),
+                )
+            };
         if bus.unavailable {
             return Err(SILENT_PEEK_UNAVAILABLE_ERROR);
         }
@@ -8061,6 +8072,59 @@ mod tests {
                     .windows(b"STACK_REG_WRITE".len())
                     .any(|w| w == b"STACK_REG_WRITE"));
                 std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn relative_validation_preserves_silent_availability_and_prefix_rejection() {
+        struct PeekBus {
+            value: Option<u8>,
+            reads: Vec<u32>,
+        }
+        impl LlamaBus for PeekBus {
+            fn load(&mut self, _: u32, _: u8) -> u32 {
+                panic!("architectural read")
+            }
+            fn store(&mut self, _: u32, _: u8, _: u32) {
+                panic!("write")
+            }
+            fn peek_byte_silent_at(&mut self, addr: u32, _: u32) -> Option<u8> {
+                self.reads.push(addr);
+                self.value
+            }
+        }
+        let exec = LlamaExecutor::new();
+        for entry in OPCODES.iter().filter(|e| e.kind == InstrKind::JpRel) {
+            for pc in [0, 0xffffe, 0xfffff] {
+                let mut state = LlamaState::new();
+                state.set_pc(pc);
+                for value in std::iter::once(None).chain((0..=255).map(Some)) {
+                    let mut bus = PeekBus {
+                        value,
+                        reads: vec![],
+                    };
+                    let result =
+                        exec.validate_before_scheduling_with_length(entry.opcode, &state, &mut bus);
+                    assert_eq!(
+                        result,
+                        if value.is_some() {
+                            Ok(2)
+                        } else {
+                            Err(SILENT_PEEK_UNAVAILABLE_ERROR)
+                        }
+                    );
+                    assert_eq!(bus.reads, [(pc + 1) & 0xfffff]);
+                    assert_eq!(state.pc(), pc);
+                }
+                let mut bus = PeekBus {
+                    value: Some(entry.opcode),
+                    reads: vec![],
+                };
+                assert_eq!(
+                    exec.validate_before_scheduling_with_length(0x30, &state, &mut bus),
+                    Err("PRE prefix has no addressable internal-memory operand")
+                );
             }
         }
     }
