@@ -362,8 +362,15 @@ fn real_pc_rom_terminal_burst_calculator_expression() {
     nonblocking(terminal.child.stdout.as_ref().unwrap().as_raw_fd(), true);
     terminal.wait_raw();
     terminal.wait_text("S2(CARD):NEW CARD");
+    terminal.wait_text("pc=0xF175F");
     terminal.key(b"\x1bOP");
     terminal.wait_text("S1(MAIN):NEW CARD");
+    // This ROM draws S1 before its scanner has observed the first PF1's
+    // release. F175F is the PC after HALT in the keyboard wait routine;
+    // F1742 first checks that its remembered held-key slots are empty.
+    // Wait for that observable firmware condition, not a host sleep or a
+    // larger tap budget. The deterministic ROM test covers the early-key loss.
+    terminal.wait_text("pc=0xF175F");
     terminal.key(b"\x1bOP");
     terminal.wait_text("MAIN MENU");
     terminal.key(b"\x1bOQ"); // PF2 = CAL

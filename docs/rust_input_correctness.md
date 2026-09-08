@@ -146,6 +146,25 @@ their existence is not evidence for the ordinary physical-input path.
 
 ## Acceptance and evidence limits
 
+### PC-E500 initialization readiness
+
+The private-ROM terminal test waits for the ROM keyboard-idle PC `0xF175F`
+after each initialization header, before submitting PF1. Screen text alone is
+not input readiness: S1 can be drawn while the firmware still remembers the
+first PF1 as held, even though the native queue released its physical contact.
+An early repeated PF1 then produces no new firmware press event. This explains
+host-timing-dependent failures seen across otherwise equivalent builds.
+
+The deterministic opt-in test
+`pc_initialization_header_precedes_firmware_key_release_readiness` covers both
+early-arrival failure and readiness-gated success with identical 40,000-boundary
+holds. It verifies that the physical contact is up while the ROM's remembered
+key is still set, then that keyboard idle has cleared that state. This is a
+ROM-specific test synchronization condition, not a new generic emulator
+readiness API, hardware timing claim, longer timeout, or input-policy change.
+
+### Foreground app checks
+
 Actual-process PTY and compiled Chromium tests use private firmware through its
 normal foreground UI. They do not inject FIFO events, write records directly,
 jump into app routines, stub calls, or patch framebuffer contents:

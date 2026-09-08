@@ -8,6 +8,77 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[test]
+#[ignore = "requires private PC-E500 ROM; run explicitly with --ignored"]
+fn pc_initialization_header_precedes_firmware_key_release_readiness() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/pc-e500-en.bin");
+    let rom = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let model = DeviceModel::PcE500;
+    let decoder = model.text_decoder(&rom).expect("ROM font decoder");
+    let pf1 = sc62015_core::physical_keys::matrix_key(model, "PF1").unwrap();
+    for wait_for_release in [false, true] {
+        let mut rt = CoreRuntime::for_model(model, &rom).unwrap();
+        rt.power_on_reset().unwrap();
+        // Fixed failing ROM trace: first press at 7k, physical release at 47k,
+        // S1 header visible at 548k while the firmware still remembers PF1.
+        rt.step_scheduler_boundaries(7_000).unwrap();
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .press_matrix_code(pf1, &mut rt.memory);
+        rt.step_scheduler_boundaries(40_000).unwrap();
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .release_matrix_code(pf1, &mut rt.memory);
+        rt.step_scheduler_boundaries(501_000).unwrap();
+        assert!(decoder
+            .decode_display_text(rt.lcd.as_deref().unwrap())
+            .join("\n")
+            .contains("S1(MAIN):NEW CARD"));
+        assert!(rt
+            .keyboard
+            .as_ref()
+            .unwrap()
+            .pressed_matrix_codes()
+            .is_empty());
+        assert_eq!(rt.memory.read_byte_for_preflight(0xbfcb5, None), Some(0x13));
+
+        if wait_for_release {
+            // Bound the diagnostic, but stop on state, not a chosen delay.
+            for _ in 0..50_000 {
+                if rt.state.pc() == 0xf175f && rt.state.is_halted() {
+                    break;
+                }
+                rt.step_scheduler_boundaries(1).unwrap();
+            }
+            assert_eq!(rt.state.pc(), 0xf175f);
+            assert!(rt.state.is_halted());
+            assert_eq!(rt.memory.read_byte_for_preflight(0xbfcb5, None), Some(0));
+            assert_eq!(rt.memory.read_byte_for_preflight(0xbfcb6, None), Some(0));
+        }
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .press_matrix_code(pf1, &mut rt.memory);
+        rt.step_scheduler_boundaries(40_000).unwrap();
+        rt.keyboard
+            .as_mut()
+            .unwrap()
+            .release_matrix_code(pf1, &mut rt.memory);
+        rt.step_scheduler_boundaries(600_000).unwrap();
+        let text = decoder
+            .decode_display_text(rt.lcd.as_deref().unwrap())
+            .join("\n");
+        if wait_for_release {
+            assert!(text.contains("MAIN MENU"), "{text}");
+        } else {
+            assert!(text.contains("S1(MAIN):NEW CARD"), "{text}");
+            assert!(!text.contains("MAIN MENU"));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires both private ROMs; run explicitly with --ignored --nocapture"]
 fn sliced_execution_matches_direct_boot_for_both_real_roms() {
     for (model, filename) in [
