@@ -1494,6 +1494,20 @@ impl CoreRuntime {
             lcd_bus_capture: *mut LcdBusCapture,
         }
         impl<'a> LlamaBus for RuntimeBus<'a> {
+            fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
+                // Upper ROM cannot intersect keyboard/SIO/RTC ports or the
+                // IQ clock workspace. LcdHal is extensible, so check it even here.
+                unsafe {
+                    if (0xc0000..=0xfffff).contains(&addr)
+                        && !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr))
+                    {
+                        if let Some(value) = (*self.mem).fetch_plain_rom_byte(addr) {
+                            return value;
+                        }
+                    }
+                }
+                self.load(addr, 8) as u8
+            }
             #[cfg(target_arch = "wasm32")]
             fn tracing_active_hint(&self) -> Option<bool> {
                 // Browser JS cannot change tracing while this synchronous
@@ -2039,11 +2053,11 @@ impl CoreRuntime {
                     // A deliverable asynchronous IRQ replaces the current
                     // instruction after exactly one opcode-byte fetch. Do not
                     // decode or read operands from the discarded instruction.
-                    let _discarded_opcode = bus.load(pc, 8);
+                    let _discarded_opcode = bus.fetch_instruction_byte(pc);
                 }
 
                 if let Some((silent_opcode, timing)) = silent_prepared_opcode {
-                    let opcode = bus.load(pc, 8) as u8;
+                    let opcode = bus.fetch_instruction_byte(pc);
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
                             "architectural opcode fetch at 0x{pc:05X} disagrees with preflight: \
@@ -6577,39 +6591,42 @@ mod tests {
 
     #[test]
     fn deliverable_irq_fetches_but_does_not_decode_reserved_fallthrough() {
-        let mut rt = CoreRuntime::new();
-        rt.state.set_pc(0);
-        rt.state.set_reg(RegName::S, 0x0200);
-        rt.memory.write_external_byte(0, 0x20);
-        rt.memory.write_external_byte(0x0100, 0x00);
-        rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
-        rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x01);
-        rt.memory
-            .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
-        rt.memory
-            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
-        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
-        rt.timer.irq_pending = true;
-        rt.timer.irq_source = Some("KEY".to_string());
-        rt.memory.set_python_ranges(vec![(0, 0)]);
-        let fallthrough_reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let callback_reads = std::sync::Arc::clone(&fallthrough_reads);
-        rt.set_host_read(move |address| {
-            assert_eq!(address, 0);
-            callback_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Some(0x20)
-        });
+        for fallthrough in [0, 0xe0000] {
+            let mut rt = CoreRuntime::new();
+            rt.state.set_pc(fallthrough);
+            rt.state.set_reg(RegName::S, 0x0200);
+            rt.memory.write_external_byte(fallthrough, 0x20);
+            rt.memory.write_external_byte(0x0100, 0x00);
+            rt.memory.write_external_byte(INTERRUPT_VECTOR_ADDR, 0x00);
+            rt.memory
+                .write_external_byte(INTERRUPT_VECTOR_ADDR + 1, 0x01);
+            rt.memory
+                .write_external_byte(INTERRUPT_VECTOR_ADDR + 2, 0x00);
+            rt.memory
+                .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+            rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+            rt.timer.irq_pending = true;
+            rt.timer.irq_source = Some("KEY".to_string());
+            rt.memory
+                .set_python_ranges(vec![(fallthrough, fallthrough)]);
+            let fallthrough_reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let callback_reads = std::sync::Arc::clone(&fallthrough_reads);
+            rt.set_host_read(move |address| {
+                assert_eq!(address, fallthrough);
+                callback_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(0x20)
+            });
 
-        rt.step(1)
-            .expect("reserved fall-through byte is fetched but not decoded");
+            rt.step(1)
+                .expect("reserved fall-through byte is fetched but not decoded");
 
-        assert_eq!(rt.state.pc(), 0x0101);
-        assert_eq!(rt.metadata.instruction_count, 1);
-        assert_eq!(
-            fallthrough_reads.load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
+            assert_eq!(rt.state.pc(), 0x0101);
+            assert_eq!(rt.metadata.instruction_count, 1);
+            assert_eq!(
+                fallthrough_reads.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+        }
     }
 
     #[test]
@@ -6959,6 +6976,57 @@ mod tests {
             rt.state.peek_call_page().is_none(),
             "call page stack cleared"
         );
+    }
+
+    #[test]
+    fn upper_rom_instruction_fetch_does_not_bypass_callback_quarantine() {
+        use std::sync::{Arc, Mutex};
+        let mut rt = CoreRuntime::new();
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        rt.state.set_pc(0xe0000);
+        rt.memory.set_python_ranges(vec![(0xe0000, 0xe0001)]);
+        rt.set_host_peek(|addr| match addr {
+            0xe0000 => Some(0x08),
+            0xe0001 => Some(0x42),
+            _ => None,
+        });
+        let callback_reads = reads.clone();
+        rt.set_host_read(move |addr| {
+            callback_reads.lock().unwrap().push(addr);
+            match addr {
+                0xe0000 => Some(0x08),
+                0xe0001 => Some(0x42),
+                _ => None,
+            }
+        });
+        let error = rt.step(1).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("callback-backed instruction bytes"));
+        assert_eq!(rt.state.pc(), 0xe0000);
+        assert_eq!(rt.metadata.instruction_count, 0);
+        assert!(reads.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn upper_rom_instruction_fetch_keeps_overlay_bytes_and_read_order() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0xe0000);
+        rt.memory.write_external_byte(0xe0000, 0x00);
+        rt.memory.set_overlay_logging(true);
+        rt.add_rom_overlay(0xe0000, &[0x08, 0x42], "instruction"); // MV A,42
+        rt.step(1).unwrap();
+        assert_eq!(rt.state.get_reg(RegName::A), 0x42);
+        assert_eq!(rt.state.pc(), 0xe0002);
+        let reads = rt.overlay_read_log();
+        assert_eq!(
+            reads.iter().map(|r| r.address).collect::<Vec<_>>(),
+            vec![0xe0000, 0xe0001]
+        );
+        rt.remove_overlay("instruction");
+        rt.state.set_pc(0xe0000);
+        rt.step(1).unwrap(); // live backing NOP after removing the overlay
+        assert_eq!(rt.state.pc(), 0xe0001);
     }
 
     #[test]

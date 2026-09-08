@@ -271,7 +271,7 @@ enum AddressingMode {
     BpPy,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PreModes {
     first: AddressingMode,
     second: AddressingMode,
@@ -305,6 +305,64 @@ const SINGLE_ADDRESSABLE_OPCODES: &[u8] = &[
     0xF7, 0xFC,
 ];
 
+#[derive(Clone, Copy)]
+struct DecodeMetadata {
+    single_pre: bool,
+    single_pre_operand: bool,
+    selector_count: u8,
+}
+
+// Derive invariants from the existing opcode definitions at compile time;
+// this is not a second encoding specification or a guest-code cache.
+const DECODE_METADATA: [DecodeMetadata; 256] = {
+    let mut result = [DecodeMetadata {
+        single_pre: false,
+        single_pre_operand: false,
+        selector_count: 0,
+    }; 256];
+    let mut opcode = 0;
+    while opcode < 256 {
+        let mut index = 0;
+        while index < SINGLE_ADDRESSABLE_OPCODES.len() {
+            if SINGLE_ADDRESSABLE_OPCODES[index] as usize == opcode {
+                result[opcode].single_pre = true;
+            }
+            index += 1;
+        }
+        let operands = super::opcodes::OPCODES[opcode].operands;
+        let mut uses_pre = 0;
+        index = 0;
+        while index < operands.len() {
+            if operand_uses_pre_mode(&operands[index]) {
+                uses_pre += 1;
+            }
+            result[opcode].selector_count += match operands[index] {
+                OperandKind::IMem(_)
+                | OperandKind::IMemWidth(_)
+                | OperandKind::EMemIMemWidth(_)
+                | OperandKind::RegIMemOffset(_) => 1,
+                OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 2,
+                _ => 0,
+            };
+            index += 1;
+        }
+        result[opcode].single_pre_operand = uses_pre == 1;
+        opcode += 1;
+    }
+    result
+};
+
+const PRE_LOOKUP: [Option<PreModes>; 256] = {
+    let mut result = [None; 256];
+    let mut index = 0;
+    while index < PRE_MODES.len() {
+        let (opcode, first, second) = PRE_MODES[index];
+        result[opcode as usize] = Some(PreModes { first, second });
+        index += 1;
+    }
+    result
+};
+
 const INTERRUPT_VECTOR_ADDR: u32 = 0xFFFFA;
 // Reset vector is stored in the top three bytes of the address space.
 const ROM_RESET_VECTOR_ADDR: u32 = 0xFFFFD;
@@ -330,6 +388,11 @@ pub trait LlamaBus {
         None
     }
     fn load(&mut self, addr: u32, bits: u8) -> u32;
+    /// Architectural instruction read, including the usual bus side effects.
+    /// Specialized buses may bypass device routing only for proven plain memory.
+    fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
+        self.load(addr, 8) as u8
+    }
     fn store(&mut self, addr: u32, bits: u8, value: u32);
     /// Read one byte for validation without advancing devices, consuming host
     /// callbacks, or publishing trace/memory-read accounting. Production buses
@@ -506,13 +569,7 @@ fn write_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32, value: u8) {
 }
 
 fn pre_modes_for(opcode: u8) -> Option<PreModes> {
-    PRE_MODES
-        .iter()
-        .find(|(pre, _, _)| *pre == opcode)
-        .map(|(_, first, second)| PreModes {
-            first: *first,
-            second: *second,
-        })
+    PRE_LOOKUP[opcode as usize]
 }
 
 fn mode_for_operand(pre: Option<&PreModes>, operand_index: usize) -> AddressingMode {
@@ -528,7 +585,7 @@ fn mode_for_operand(pre: Option<&PreModes>, operand_index: usize) -> AddressingM
     }
 }
 
-fn operand_uses_pre_mode(op: &OperandKind) -> bool {
+const fn operand_uses_pre_mode(op: &OperandKind) -> bool {
     matches!(
         op,
         OperandKind::IMem(_) | OperandKind::IMemWidth(_) | OperandKind::EMemIMemWidth(_)
@@ -536,18 +593,7 @@ fn operand_uses_pre_mode(op: &OperandKind) -> bool {
 }
 
 fn pre_selector_count(entry: &OpcodeEntry) -> usize {
-    entry
-        .operands
-        .iter()
-        .map(|operand| match operand {
-            OperandKind::IMem(_)
-            | OperandKind::IMemWidth(_)
-            | OperandKind::EMemIMemWidth(_)
-            | OperandKind::RegIMemOffset(_) => 1,
-            OperandKind::EMemImemOffsetDestIntMem | OperandKind::EMemImemOffsetDestExtMem => 2,
-            _ => 0,
-        })
-        .sum()
+    usize::from(DECODE_METADATA[entry.opcode as usize].selector_count)
 }
 
 fn validate_canonical_pre(
@@ -929,13 +975,12 @@ impl LlamaExecutor {
             return Err("WAIT requires a cycle-capable bus");
         }
 
-        // Decode the complete operand shape against a cloned register image.
+        // Decode the complete operand shape through a read-only register view.
         // This catches malformed JP/E3/EB selectors, ignored selector bytes,
         // and noncanonical encoded 20-bit operands before scheduler mutation.
-        let mut state_candidate = state.clone_for_decode_preflight();
-        let decoded_result = self.decode_operands(
+        let decoded_result = self.decode_operands::<true, _>(
             resolved,
-            &mut state_candidate,
+            state,
             bus,
             pre_modes_opt.as_ref(),
             Some(exec_pc),
@@ -1322,7 +1367,7 @@ impl LlamaExecutor {
         // The instruction stream is in the 20-bit external address space.
         // Fetching an operand after PC=0xFFFFF wraps to external 0x00000;
         // it must not fall through into the distinct IMEM window at 0x100000.
-        (bus.load(addr & mask_for(RegName::PC), 8) & 0xFF) as u8
+        bus.fetch_instruction_byte(addr & mask_for(RegName::PC))
     }
 
     fn fetch_imm<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
@@ -1506,7 +1551,7 @@ impl LlamaExecutor {
 
     fn decode_ext_reg_ptr<B: LlamaBus>(
         &self,
-        state: &mut LlamaState,
+        state: &LlamaState,
         bus: &mut B,
         pc: u32,
         width_bytes: u8,
@@ -1676,10 +1721,13 @@ impl LlamaExecutor {
         ))
     }
 
-    fn decode_operands<B: LlamaBus>(
+    // Both specializations share every encoding check and bus read. Validation
+    // discards resolved operands only at the return boundary, letting the compiler
+    // remove unused result construction without skipping observable pointer reads.
+    fn decode_operands<const VALIDATE_ONLY: bool, B: LlamaBus>(
         &self,
         entry: &OpcodeEntry,
-        state: &mut LlamaState,
+        state: &LlamaState,
         bus: &mut B,
         pre: Option<&PreModes>,
         pc_override: Option<u32>,
@@ -1687,13 +1735,9 @@ impl LlamaExecutor {
         let pc = pc_override.unwrap_or(state.pc());
         let mut offset = 1u32; // opcode consumed
         let mut decoded = DecodedOperands::default();
-        let single_pre = SINGLE_ADDRESSABLE_OPCODES.contains(&entry.opcode);
-        let single_pre_operand = entry
-            .operands
-            .iter()
-            .filter(|op| operand_uses_pre_mode(op))
-            .count()
-            == 1;
+        let metadata = DECODE_METADATA[entry.opcode as usize];
+        let single_pre = metadata.single_pre;
+        let single_pre_operand = metadata.single_pre_operand;
         // Opcode-specific decoding quirks
         if entry.opcode == 0xE3 {
             // Encoding order is EMemReg mode byte then IMem8.
@@ -1715,6 +1759,12 @@ impl LlamaExecutor {
             });
             offset += 1;
             decoded.len = offset as u8;
+            if VALIDATE_ONLY {
+                return Ok(DecodedOperands {
+                    len: decoded.len,
+                    ..Default::default()
+                });
+            }
             return Ok(decoded);
         }
         let reversed = entry.ops_reversed.unwrap_or(false);
@@ -2039,19 +2089,25 @@ impl LlamaExecutor {
             }
         }
         decoded.len = offset as u8;
+        if VALIDATE_ONLY {
+            return Ok(DecodedOperands {
+                len: decoded.len,
+                ..Default::default()
+            });
+        }
         Ok(decoded)
     }
 
     fn decode_with_prefix<B: LlamaBus>(
         &mut self,
         entry: &OpcodeEntry,
-        state: &mut LlamaState,
+        state: &LlamaState,
         bus: &mut B,
         pre: Option<&PreModes>,
         pc_override: Option<u32>,
         prefix_len: u8,
     ) -> Result<DecodedOperands, &'static str> {
-        let mut decoded = self.decode_operands(entry, state, bus, pre, pc_override)?;
+        let mut decoded = self.decode_operands::<false, _>(entry, state, bus, pre, pc_override)?;
         decoded.len = decoded.len.saturating_add(prefix_len);
         Ok(decoded)
     }
@@ -4411,6 +4467,123 @@ impl Default for LlamaExecutor {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validation_specialization_preserves_decode_errors_and_bus_reads() {
+        #[derive(Default)]
+        struct DecodeBus {
+            bytes: [u8; 8],
+            reads: Vec<(u32, u8)>,
+        }
+        impl LlamaBus for DecodeBus {
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                self.reads.push((addr, bits));
+                u32::from(self.bytes[addr as usize % self.bytes.len()])
+            }
+            fn store(&mut self, _: u32, _: u8, _: u32) {
+                panic!("read-only decode");
+            }
+            fn resolve_emem(&mut self, addr: u32) -> u32 {
+                addr
+            }
+        }
+        let executor = LlamaExecutor::new();
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::X, 0xfffff);
+        state.set_reg(RegName::Y, 0x12345);
+        for entry in &OPCODES {
+            for selector in 0..=255u8 {
+                for pre in std::iter::once(None)
+                    .chain(PRE_MODES.iter().map(|(op, _, _)| pre_modes_for(*op)))
+                {
+                    let bytes = [
+                        entry.opcode,
+                        selector,
+                        selector.rotate_left(3),
+                        !selector,
+                        selector,
+                        0xff,
+                        0,
+                        0x81,
+                    ];
+                    let mut full = DecodeBus {
+                        bytes,
+                        ..Default::default()
+                    };
+                    let mut validation = DecodeBus {
+                        bytes,
+                        ..Default::default()
+                    };
+                    let expected = executor
+                        .decode_operands::<false, _>(
+                            entry,
+                            &state,
+                            &mut full,
+                            pre.as_ref(),
+                            Some(0),
+                        )
+                        .map(|d| d.len);
+                    let actual = executor
+                        .decode_operands::<true, _>(
+                            entry,
+                            &state,
+                            &mut validation,
+                            pre.as_ref(),
+                            Some(0),
+                        )
+                        .map(|d| d.len);
+                    assert_eq!(
+                        actual, expected,
+                        "opcode {:02x}, selector {selector:02x}",
+                        entry.opcode
+                    );
+                    assert_eq!(validation.reads, full.reads);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn constant_decode_metadata_matches_all_opcode_definitions() {
+        for entry in &super::super::opcodes::OPCODES {
+            let metadata = super::DECODE_METADATA[entry.opcode as usize];
+            assert_eq!(
+                metadata.single_pre,
+                super::SINGLE_ADDRESSABLE_OPCODES.contains(&entry.opcode)
+            );
+            assert_eq!(
+                metadata.single_pre_operand,
+                entry
+                    .operands
+                    .iter()
+                    .filter(|op| super::operand_uses_pre_mode(op))
+                    .count()
+                    == 1
+            );
+            let selectors: usize = entry
+                .operands
+                .iter()
+                .map(|op| match op {
+                    super::OperandKind::IMem(_)
+                    | super::OperandKind::IMemWidth(_)
+                    | super::OperandKind::EMemIMemWidth(_)
+                    | super::OperandKind::RegIMemOffset(_) => 1,
+                    super::OperandKind::EMemImemOffsetDestIntMem
+                    | super::OperandKind::EMemImemOffsetDestExtMem => 2,
+                    _ => 0,
+                })
+                .sum();
+            assert_eq!(super::pre_selector_count(entry), selectors);
+            let expected = super::PRE_MODES
+                .iter()
+                .find(|(opcode, _, _)| *opcode == entry.opcode)
+                .map(|(_, first, second)| super::PreModes {
+                    first: *first,
+                    second: *second,
+                });
+            assert_eq!(super::pre_modes_for(entry.opcode), expected);
+        }
+    }
+
     use super::*;
     use crate::llama::opcodes::OPCODES;
     use std::collections::{HashMap, HashSet};
@@ -7673,7 +7846,7 @@ mod tests {
             let mut exec = LlamaExecutor::new();
             let entry = exec.lookup(opcode).expect("opcode entry");
             let decoded = exec
-                .decode_with_prefix(entry, &mut state, &mut bus, None, None, 0)
+                .decode_with_prefix(entry, &state, &mut bus, None, None, 0)
                 .expect("decode should succeed");
             assert_eq!(
                 decoded.len, expected,

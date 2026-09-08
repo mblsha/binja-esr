@@ -1234,6 +1234,21 @@ impl MemoryImage {
         self.load_with_pc(address, bits, None)
     }
 
+    /// Fetch from the upper external ROM window only when no overlay or host
+    /// handling can intercept it. Read live backing storage (never cached bytes)
+    /// and preserve architectural read accounting. Device routing is the caller's
+    /// responsibility; this window cannot intersect the internal RAM mirror.
+    pub(crate) fn fetch_plain_rom_byte(&self, address: u32) -> Option<u8> {
+        if !(0xc0000..=0xfffff).contains(&address)
+            || self.requires_python(address)
+            || !self.read_overlay_candidates(address).is_empty()
+        {
+            return None;
+        }
+        self.bump_read_count();
+        Some(self.external[address as usize])
+    }
+
     pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
@@ -2151,6 +2166,32 @@ mod tests {
         let value = mem.load_with_pc(0x5000, 8, Some(0x0300));
         assert_eq!(value, Some(0x55));
         assert!(mem.overlay_read_log().is_empty());
+    }
+
+    #[test]
+    fn plain_rom_fetch_preserves_live_bytes_counts_and_overlay_fallback() {
+        let mut mem = MemoryImage::new();
+        for address in [0xc0000, 0xe1234, 0xfffff] {
+            mem.write_external_byte(address, 0x42);
+            let reads = mem.memory_read_count();
+            assert_eq!(mem.fetch_plain_rom_byte(address), Some(0x42));
+            assert_eq!(mem.memory_read_count(), reads + 1);
+            mem.write_external_byte(address, 0x99);
+            assert_eq!(mem.fetch_plain_rom_byte(address), Some(0x99));
+        }
+        let reads = mem.memory_read_count();
+        for address in [0, 0xbffff, 0x100000, 0xffffffff] {
+            assert_eq!(mem.fetch_plain_rom_byte(address), None);
+        }
+        mem.set_python_ranges(vec![(0xe1234, 0xe1234)]);
+        assert_eq!(mem.fetch_plain_rom_byte(0xe1234), None);
+        mem.set_python_ranges(vec![]);
+        mem.add_rom_overlay(0xe1234, &[0x12], "fetch-override");
+        assert_eq!(mem.fetch_plain_rom_byte(0xe1234), None);
+        assert_eq!(mem.memory_read_count(), reads);
+        assert_eq!(mem.load(0xe1234, 8), Some(0x12));
+        mem.remove_overlay("fetch-override");
+        assert_eq!(mem.fetch_plain_rom_byte(0xe1234), Some(0x99));
     }
 
     #[test]
