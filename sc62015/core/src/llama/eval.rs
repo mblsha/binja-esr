@@ -1314,7 +1314,11 @@ impl LlamaExecutor {
             let byte_addr = Self::advance_internal_addr(addr, index as u32);
             let byte = (value >> (8 * index)) & 0xFF;
             bus.store(byte_addr, 8, byte);
-            Self::trace_mem_write(byte_addr, 8, byte);
+            // Query after the architectural store: a generic bus callback
+            // may activate tracing. Only a trusted false slice hint skips it.
+            if bus.tracing_active_hint() != Some(false) {
+                Self::trace_mem_write(byte_addr, 8, byte);
+            }
         }
     }
 
@@ -2096,6 +2100,26 @@ impl LlamaExecutor {
             });
         }
         Ok(decoded)
+    }
+
+    fn decode_relative_offset<B: LlamaBus>(
+        &mut self,
+        entry: &OpcodeEntry,
+        state: &LlamaState,
+        bus: &mut B,
+        pre: Option<&PreModes>,
+        pc_override: Option<u32>,
+        prefix_len: u8,
+    ) -> Result<(u8, u8), &'static str> {
+        // Keep validation in the caller. This only specializes the execution
+        // decode of the table's single-byte offset form, including its real
+        // operand read on a not-taken branch. Other shapes retain the decoder.
+        if pre.is_none() && prefix_len == 0 && matches!(entry.operands, [OperandKind::ImmOffset]) {
+            let pc = pc_override.unwrap_or(state.pc());
+            return Ok((Self::fetch_byte(bus, pc.wrapping_add(1)), 2));
+        }
+        let decoded = self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
+        Ok((decoded.imm.ok_or("missing relative")?.0 as u8, decoded.len))
     }
 
     fn decode_with_prefix<B: LlamaBus>(
@@ -3873,9 +3897,8 @@ impl LlamaExecutor {
                 let pc_mask = mask_for(RegName::PC);
                 let pc_before = state.pc() & pc_mask;
                 let cond_ok = Self::cond_pass(entry, state)?;
-                let decoded =
-                    self.decode_with_prefix(entry, state, bus, pre, pc_override, prefix_len)?;
-                let imm_raw = decoded.imm.ok_or("missing relative")?.0 as u8;
+                let (imm_raw, instruction_len) =
+                    self.decode_relative_offset(entry, state, bus, pre, pc_override, prefix_len)?;
                 let imm = if matches!(entry.opcode, 0x13 | 0x19 | 0x1B | 0x1D | 0x1F) {
                     -(imm_raw as i32)
                 } else if matches!(entry.opcode, 0x12 | 0x18 | 0x1A | 0x1C | 0x1E) {
@@ -3883,7 +3906,7 @@ impl LlamaExecutor {
                 } else {
                     (imm_raw as i8) as i32
                 };
-                let fallthrough = pc_before.wrapping_add(decoded.len as u32) & pc_mask;
+                let fallthrough = pc_before.wrapping_add(instruction_len as u32) & pc_mask;
                 let target = fallthrough.wrapping_add_signed(imm) & pc_mask;
                 let dest = if cond_ok { target } else { fallthrough };
                 state.set_pc(dest);
@@ -3901,7 +3924,7 @@ impl LlamaExecutor {
                     );
                     payload.insert(
                         "instr_len".to_string(),
-                        AnnotationValue::UInt(decoded.len as u64),
+                        AnnotationValue::UInt(instruction_len as u64),
                     );
                     if let Some(cond) = entry.cond {
                         payload.insert(
@@ -3921,7 +3944,7 @@ impl LlamaExecutor {
                     "jump"
                 };
                 Self::emit_control_flow_event(entry.name, kind, instr_index, pc_before, payload);
-                Ok(decoded.len)
+                Ok(instruction_len)
             }
             InstrKind::Call => {
                 let decoded =
@@ -8038,6 +8061,145 @@ mod tests {
                     .windows(b"STACK_REG_WRITE".len())
                     .any(|w| w == b"STACK_REG_WRITE"));
                 std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn relative_offset_specialization_matches_generic_decode_and_reads() {
+        let mut exec = LlamaExecutor::new();
+        for entry in OPCODES
+            .iter()
+            .filter(|entry| entry.kind == InstrKind::JpRel)
+        {
+            for pc in [0, 0xffffe, 0xfffff] {
+                for offset in 0..=255u8 {
+                    for prefix in [false, true] {
+                        let mut state = LlamaState::new();
+                        state.set_pc(pc);
+                        let mut generic = OffsetBus::new();
+                        let mut fast = OffsetBus::new();
+                        let address = (pc + 1) & 0xfffff;
+                        generic.data.insert(address, offset);
+                        fast.data.insert(address, offset);
+                        let pre = prefix.then(|| pre_modes_for(0x30).unwrap());
+                        let prefix_len = u8::from(prefix);
+                        let expected = exec
+                            .decode_with_prefix(
+                                entry,
+                                &state,
+                                &mut generic,
+                                pre.as_ref(),
+                                None,
+                                prefix_len,
+                            )
+                            .map(|d| (d.imm.unwrap().0 as u8, d.len));
+                        let actual = exec.decode_relative_offset(
+                            entry,
+                            &state,
+                            &mut fast,
+                            pre.as_ref(),
+                            None,
+                            prefix_len,
+                        );
+                        assert_eq!(actual, expected);
+                        assert_eq!(fast.reads, generic.reads);
+                        assert_eq!(fast.reads, [address]);
+                    }
+                    for flags in 0..4 {
+                        let mut state = LlamaState::new();
+                        state.set_pc(pc);
+                        state.set_reg(RegName::F, flags);
+                        let mut bus = OffsetBus::new();
+                        bus.data.insert((pc + 1) & 0xfffff, offset);
+                        let take = match entry.cond {
+                            None => true,
+                            Some("Z") => flags & 2 != 0,
+                            Some("NZ") => flags & 2 == 0,
+                            Some("C") => flags & 1 != 0,
+                            Some("NC") => flags & 1 == 0,
+                            _ => panic!("unexpected relative condition"),
+                        };
+                        let fallthrough = (pc + 2) & 0xfffff;
+                        let target = if entry.opcode & 1 == 1 {
+                            fallthrough.wrapping_sub(u32::from(offset)) & 0xfffff
+                        } else {
+                            (fallthrough + u32::from(offset)) & 0xfffff
+                        };
+                        exec.execute(entry.opcode, &mut state, &mut bus).unwrap();
+                        assert_eq!(state.pc(), if take { target } else { fallthrough });
+                        assert_eq!(state.get_reg(RegName::F), flags);
+                        assert_eq!(bus.reads, [(pc + 1) & 0xfffff]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "perfetto")]
+    fn traced_store_preserves_byte_callbacks_and_late_trace_activation() {
+        struct HintBus {
+            hint: Option<bool>,
+            activate: Option<std::path::PathBuf>,
+            writes: Vec<(u32, u8, u32)>,
+        }
+        impl LlamaBus for HintBus {
+            fn tracing_active_hint(&self) -> Option<bool> {
+                self.hint
+            }
+            fn load(&mut self, _: u32, _: u8) -> u32 {
+                panic!("store must not read")
+            }
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                self.writes.push((addr, bits, value));
+                if let Some(path) = self.activate.take() {
+                    crate::PERFETTO_TRACER
+                        .enter()
+                        .replace(Some(crate::PerfettoTracer::new(path)));
+                }
+            }
+        }
+        let _lock = crate::perfetto::perfetto_test_guard();
+        for start in [0xfffff, INTERNAL_MEMORY_START + 0xff] {
+            for hint in [None, Some(true), Some(false)] {
+                let path = std::env::temp_dir().join(format!(
+                    "store-hint-{}-{start}-{hint:?}.perfetto-trace",
+                    std::process::id()
+                ));
+                let mut guard = crate::PERFETTO_TRACER.enter();
+                assert!(guard.take().is_none());
+                if hint == Some(true) {
+                    guard.replace(Some(crate::PerfettoTracer::new(path.clone())));
+                }
+                let mut bus = HintBus {
+                    hint,
+                    activate: if hint.is_none() {
+                        Some(path.clone())
+                    } else {
+                        None
+                    },
+                    writes: vec![],
+                };
+                LlamaExecutor::store_traced(&mut bus, start, 24, 0x563412);
+                let base = if start == 0xfffff {
+                    0
+                } else {
+                    INTERNAL_MEMORY_START
+                };
+                assert_eq!(
+                    bus.writes,
+                    [(start, 8, 0x12), (base, 8, 0x34), (base + 1, 8, 0x56)]
+                );
+                if let Some(tracer) = guard.take() {
+                    tracer.finish().unwrap();
+                    let bytes = std::fs::read(&path).unwrap();
+                    for address in [start, base, base + 1] {
+                        let name = format!("Write@0x{address:06X}");
+                        assert!(bytes.windows(name.len()).any(|w| w == name.as_bytes()));
+                    }
+                    std::fs::remove_file(path).unwrap();
+                }
             }
         }
     }
