@@ -62,20 +62,9 @@
 
 - **LLAMA tracing/parity:** Perfetto traces (binary `retrobus-perfetto`) from Python and LLAMA cores align on instruction-index timestamps; `scripts/compare_perfetto_traces.py` compares them. Nightly smoke lives in `.github/workflows/llama-perfetto-smoke.yml`.
 - **CI coverage (Perfetto included):** All guardrails must run in CI—lint, type checks, pytest suites, parity harnesses, and Perfetto comparison jobs. Ensure Perfetto trace comparison (`scripts/compare_perfetto_traces.py` or the smoke workflow) is wired into CI and kept green.
-- **Rust CLI runner (primary):** To boot the ROM and view decoded LCD text:
-  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
-  - The shared `CoreRuntime` is the default. Use `--runtime legacy` only for specialized historical replay/raw-bus diagnostics that report it is required.
-  - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
-  - Default ROM model: `pc-e500` (uses `data/pc-e500-en.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
-- **LCD terminal UI:** A live terminal renderer that redraws decoded LCD lines on change:
-  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500`
-  - Keyboard: Ctrl+1..5 or F1..F5 map to PF1..PF5, Enter maps to `=`, Backspace maps to `BS`, Ctrl+C exits.
-  - Use `--no-alt-screen` for tmux capture panes, `--force-tty` when running detached, `--input-steps` to reduce input latency, `--pf-numbers` to map digits 1–5 to PF1–PF5, `--bnida PATH` to show function names in the status line, `--force-key-irq` to force KEY interrupts if the ROM stays halted, and `--card present|absent` to control the memory card slot state.
-- **JS function runner (WASM):** Run an async JS snippet against the same Rust core compiled to WASM:
-  - Install deps once: `cd web && npm install`
-  - Run a script (auto-builds wasm): `cd web && npm run fnr:cli -- --model pc-e500 path/to/script.js` (or `--eval "<js>"`, or `--stdin`)
-  - Script API: `e` is the same `EvalApi` used by the web Function Runner; output JSON is compatible with `FunctionRunnerOutput`.
-  - IQ-7000 PC-Link scripts can use `await e.pclinkSerial.serve("127.0.0.1:7700", { clients: 1 })` after the ROM reaches `LINK READY`; this serves a TCP bridge backed by the emulated SC62015 COM/SIO registers, not a RAM injection path.
-  - Stubs: `e.stub(0x00F1234, 'demo', (mem, regs, flags) => ({ mem_writes: { 0x2000: 0x41 }, regs: { A: 1 }, flags: { Z: 0, C: 1 }, ret: { kind: 'ret' } }))` intercepts a PC and returns a patch; `mem.read8/read16/read24` are read-only and writes flow through `mem_writes` (array or `{addr: value}` map).
-    Return kinds: `ret`, `retf`, `jump`, `stay`.
-  - Note: this is separate from the native Rust CLI (no TS wrapper for the Rust CLI); the web UI uses `web/src/lib/wasm/sc62015_wasm.ts` to keep `Pce500Emulator` as an alias for `Sc62015Emulator`.
+- For native boot/LCD commands and keyboard flags, use
+  [the CLI reference](README.md#native-runner-command-reference). `CoreRuntime`
+  remains the default; legacy runtime is for explicitly required historical/raw-bus diagnostics.
+- For ad-hoc WASM experiments, use [the Function Runner CLI](web/README.md#function-runner-cli).
+  It auto-builds WASM and shares the browser `EvalApi`; ROM PC-Link proof must
+  use the COM/SIO path, not RAM injection.

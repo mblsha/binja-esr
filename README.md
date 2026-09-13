@@ -252,3 +252,17 @@ calendar day-number pixels directly, while `e.lcd.text()` now decodes those
 same compact monthly-calendar day rows for readable CI output. `--proof-yaml`
 writes concise YAML metadata with the RTC seed, ROM path, assertions, LCD text,
 and pixel signature.
+
+## Native runner command reference
+
+Commands are relative to the repository root.
+
+- **Rust CLI runner (primary):** To boot the ROM and view decoded LCD text:
+  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin pce500 -- --steps 20000`
+  - The shared `CoreRuntime` is the default. Use `--runtime legacy` only for specialized historical replay/raw-bus diagnostics that report it is required.
+  - Optional LCD logging: `RUST_LCD_TRACE=1 RUST_LCD_TRACE_MAX=2000 ...`
+  - Default ROM model: `pc-e500` (uses `data/pc-e500-en.bin`). Select IQ-7000 with `--model iq-7000` or pass `--rom PATH`.
+- **LCD terminal UI:** A live terminal renderer that redraws decoded LCD lines on change:
+  - `cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500`
+  - Keyboard: Ctrl+1..5 or F1..F5 map to PF1..PF5, Enter maps to `=`, Backspace maps to `BS`, Ctrl+C exits.
+  - Use `--no-alt-screen` for tmux capture panes, `--force-tty` when running detached, `--input-steps` to reduce input latency, `--pf-numbers` to map digits 1–5 to PF1–PF5, `--bnida PATH` to show function names in the status line, `--force-key-irq` to force KEY interrupts if the ROM stays halted, and `--card present|absent` to control the memory card slot state.
