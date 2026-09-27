@@ -78,13 +78,19 @@ impl TerminalChild {
 
     fn spawn_rom(model: &str, rom: PathBuf, stdout: Stdio, stderr: Stdio) -> Self {
         let (mut master, mut slave) = (0, 0);
-        let mut size = libc::winsize {
+        let size = libc::winsize {
             ws_row: 40,
             ws_col: 180,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        // SAFETY: writable fd outputs, no name buffer, valid window size.
+        #[cfg(not(target_os = "linux"))]
+        let mut size = size;
+        #[cfg(target_os = "linux")]
+        let size_ptr = &size as *const libc::winsize;
+        #[cfg(not(target_os = "linux"))]
+        let size_ptr = &mut size as *mut libc::winsize;
+        // SAFETY: writable fd outputs, no name buffer, valid window size pointer.
         assert_eq!(
             unsafe {
                 libc::openpty(
@@ -92,7 +98,7 @@ impl TerminalChild {
                     &mut slave,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    &mut size,
+                    size_ptr,
                 )
             },
             0
