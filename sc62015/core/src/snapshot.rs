@@ -343,6 +343,15 @@ fn encode_snapshot_metadata(
         "memory_card".to_string(),
         serde_json::to_value(memory_card)?,
     );
+    // PC-E500 snapshot v4 stores HD61202 metadata without the internal type tag.
+    if let Some(lcd) = object
+        .get_mut("lcd")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if lcd.get("kind").and_then(serde_json::Value::as_str) == Some("hd61202") {
+            lcd.remove("kind");
+        }
+    }
     Ok(serde_json::to_vec_pretty(&value)?)
 }
 
@@ -438,6 +447,14 @@ fn decode_snapshot_metadata(
         })?;
     if let Some(card) = memory_card.as_ref() {
         card.validate()?;
+    }
+    if let Some(lcd) = object
+        .get_mut("lcd")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if !lcd.contains_key("kind") {
+            lcd.insert("kind".to_string(), serde_json::json!("hd61202"));
+        }
     }
     let metadata: SnapshotMetadata = serde_json::from_value(value).map_err(|error| {
         CoreError::InvalidSnapshot(format!("invalid snapshot metadata: {error}"))
@@ -1244,6 +1261,24 @@ mod strict_json_tests {
         let error = decode_snapshot_metadata(&serde_json::to_vec(&wrong_type).unwrap())
             .expect_err("non-boolean held ON-key level must fail closed");
         assert!(error.to_string().contains("invalid snapshot metadata"));
+    }
+
+    #[test]
+    fn hd61202_archive_keeps_the_v4_kindless_lcd_shape() {
+        let metadata = SnapshotMetadata {
+            lcd: Some(
+                crate::lcd::create_lcd(crate::lcd::LcdKind::Hd61202)
+                    .snapshot_state()
+                    .0,
+            ),
+            ..Default::default()
+        };
+        let encoded = encode_snapshot_metadata(&metadata, None).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert!(value["lcd"].get("kind").is_none());
+        assert_eq!(value["lcd"]["chips"][0]["on_off_count"], 0);
+        let (decoded, _) = decode_snapshot_metadata(&encoded).unwrap();
+        assert_eq!(decoded.lcd, metadata.lcd);
     }
 
     #[test]

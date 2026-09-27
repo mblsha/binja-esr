@@ -144,6 +144,7 @@ struct Hd61202Chip {
     instruction_count: u32,
     data_write_count: u32,
     data_read_count: u32,
+    on_off_count: u32,
 }
 
 impl Default for Hd61202Chip {
@@ -155,6 +156,7 @@ impl Default for Hd61202Chip {
             instruction_count: 0,
             data_write_count: 0,
             data_read_count: 0,
+            on_off_count: 0,
         }
     }
 }
@@ -284,6 +286,7 @@ impl Hd61202Chip {
         match instr {
             LcdInstruction::OnOff => {
                 self.state.on = (data & 1) != 0;
+                self.on_off_count = self.on_off_count.wrapping_add(1);
             }
             LcdInstruction::StartLine => {
                 self.state.start_line = data & 0b0011_1111;
@@ -704,6 +707,7 @@ impl LcdController {
                 instruction_count: chip.instruction_count,
                 data_write_count: chip.data_write_count,
                 data_read_count: chip.data_read_count,
+                on_off_count: chip.on_off_count,
             }
         });
         let payload = self
@@ -763,6 +767,7 @@ impl LcdController {
             chip.instruction_count = snapshot.instruction_count;
             chip.data_write_count = snapshot.data_write_count;
             chip.data_read_count = snapshot.data_read_count;
+            chip.on_off_count = snapshot.on_off_count;
             for (page, row) in chip.vram.iter_mut().enumerate() {
                 let start = (index * LCD_PAGES + page) * LCD_WIDTH;
                 row.copy_from_slice(&payload[start..start + LCD_WIDTH]);

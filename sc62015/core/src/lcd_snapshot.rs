@@ -13,6 +13,8 @@ pub struct ChipSnapshot {
     pub instruction_count: u32,
     pub data_write_count: u32,
     pub data_read_count: u32,
+    #[serde(default)]
+    pub on_off_count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,5 +111,30 @@ mod tests {
         }
         assert!(lcd.restore_state(&invalid, &before.1).is_err());
         assert_eq!(lcd.snapshot_state(), before);
+    }
+
+    #[test]
+    fn hd_legacy_metadata_preserves_on_off_count_and_accepts_old_snapshots() {
+        let (metadata, _) = create_lcd(LcdKind::Hd61202).snapshot_state();
+        let mut legacy = metadata.to_legacy();
+        legacy["chips"][0]["on_off_count"] = serde_json::json!(3);
+        let parsed = LcdSnapshotMetadata::from_legacy(&legacy, LcdKind::Hd61202).unwrap();
+        let LcdSnapshotMetadata::Hd61202 { chips, .. } = parsed else {
+            panic!("expected HD61202 metadata");
+        };
+        assert_eq!(chips[0].on_off_count, 3);
+
+        legacy["chips"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("on_off_count");
+        let parsed = LcdSnapshotMetadata::from_legacy(&legacy, LcdKind::Hd61202).unwrap();
+        let LcdSnapshotMetadata::Hd61202 { chips, .. } = parsed else {
+            panic!("expected HD61202 metadata");
+        };
+        assert_eq!(chips[0].on_off_count, 0);
+
+        legacy["chips"][0]["on_off_count"] = serde_json::json!(-1);
+        assert!(LcdSnapshotMetadata::from_legacy(&legacy, LcdKind::Hd61202).is_err());
     }
 }
