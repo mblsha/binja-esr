@@ -1881,11 +1881,21 @@ fn validate_scheduler_metadata(timer: &TimerInfo, interrupts: &InterruptInfo) ->
     }
     // Field presence/types/u32 bounds are enforced by typed deserialization.
     if let Some(last) = &interrupts.last_irq {
-        if [last.pc, last.vector].into_iter().flatten().any(|v| v > ADDRESS_MASK) {
-            return Err(PyValueError::new_err("snapshot last_irq address exceeds 20 bits"));
+        if [last.pc, last.vector]
+            .into_iter()
+            .flatten()
+            .any(|v| v > ADDRESS_MASK)
+        {
+            return Err(PyValueError::new_err(
+                "snapshot last_irq address exceeds 20 bits",
+            ));
         }
     }
-    if interrupts.irq_bit_watch.as_ref().is_some_and(|watch| !watch.addresses_valid()) {
+    if interrupts
+        .irq_bit_watch
+        .as_ref()
+        .is_some_and(|watch| !watch.addresses_valid())
+    {
         return Err(PyValueError::new_err("IRQ history address exceeds 20 bits"));
     }
     Ok(())
@@ -2013,7 +2023,8 @@ fn scheduler_snapshot_candidate(
     validate_scheduler_metadata(&timer_metadata, &interrupt_metadata)?;
 
     let mut candidate = current.clone();
-    candidate.apply_snapshot_info(&timer_metadata, &interrupt_metadata, current_cycle)
+    candidate
+        .apply_snapshot_info(&timer_metadata, &interrupt_metadata, current_cycle)
         .map_err(PyValueError::new_err)?;
     Ok((candidate, interrupt_metadata))
 }
@@ -3071,11 +3082,16 @@ impl LlamaCpu {
             Some(pair) => (Some(pair.0), Some(pair.1)),
             None => (None, None),
         };
-        metadata.lcd = lcd_meta.as_ref().map(|value| {
-            sc62015_core::lcd_snapshot::LcdSnapshotMetadata::from_legacy(
-                value, sc62015_core::lcd::LcdKind::Hd61202,
-            ).map_err(PyValueError::new_err)
-        }).transpose()?;
+        metadata.lcd = lcd_meta
+            .as_ref()
+            .map(|value| {
+                sc62015_core::lcd_snapshot::LcdSnapshotMetadata::from_legacy(
+                    value,
+                    sc62015_core::lcd::LcdKind::Hd61202,
+                )
+                .map_err(PyValueError::new_err)
+            })
+            .transpose()?;
         metadata.lcd_payload_size = lcd_payload.as_ref().map(|v| v.len()).unwrap_or(0);
 
         let regs = sc62015_core::collect_registers(&self.state);
