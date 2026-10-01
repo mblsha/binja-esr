@@ -1274,6 +1274,7 @@ impl MemoryImage {
     /// lies in the upper ROM window and no overlay or host range can intercept
     /// any of it, i.e. when every byte would be served by `peek_plain_rom_byte`.
     /// Device routing remains the caller's responsibility.
+    #[inline]
     pub(crate) fn plain_upper_rom_span(&self, address: u32, len: usize) -> Option<&[u8]> {
         let start = address as usize;
         let end = start.checked_add(len)?.checked_sub(1)?;
@@ -1292,6 +1293,28 @@ impl MemoryImage {
             return None;
         }
         self.external.get(start..=end)
+    }
+
+    /// `plain_upper_rom_span` packed little-endian into a `u64` (zero above
+    /// `len` bytes), for cheap comparison of short instruction encodings.
+    #[inline]
+    pub(crate) fn plain_upper_rom_word(&self, address: u32, len: usize) -> Option<u64> {
+        debug_assert!((1..=8).contains(&len));
+        let span = self.plain_upper_rom_span(address, len)?;
+        let start = address as usize;
+        let word = match self.external.get(start..start + 8) {
+            Some(window) => u64::from_le_bytes(window.try_into().ok()?),
+            None => {
+                let mut buf = [0u8; 8];
+                buf[..len].copy_from_slice(span);
+                u64::from_le_bytes(buf)
+            }
+        };
+        Some(if len == 8 {
+            word
+        } else {
+            word & ((1u64 << (8 * len)) - 1)
+        })
     }
 
     pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {

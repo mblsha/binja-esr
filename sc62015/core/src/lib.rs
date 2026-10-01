@@ -1580,6 +1580,8 @@ impl CoreRuntime {
             mem: &'a mut MemoryImage,
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: Option<*mut dyn LcdHal>,
+            /// No device can claim any address in 0xC0000..=0xFFFFF.
+            upper_rom_unmapped: bool,
             sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
@@ -1607,7 +1609,8 @@ impl CoreRuntime {
                 // IQ clock workspace. LcdHal is extensible, so check it even here.
                 unsafe {
                     if (0xc0000..=0xfffff).contains(&addr)
-                        && !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr))
+                        && (self.upper_rom_unmapped
+                            || !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
                     {
                         if let Some(value) = (*self.mem).fetch_plain_rom_byte(addr) {
                             return value;
@@ -1906,7 +1909,8 @@ impl CoreRuntime {
                     // Clock/keyboard/SIO mappings cannot intersect upper ROM,
                     // but custom LCD devices and memory overlays can.
                     if (0xc0000..=0xfffff).contains(&addr)
-                        && !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr))
+                        && (self.upper_rom_unmapped
+                            || !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
                     {
                         if let Some(value) = (*self.mem).peek_plain_rom_byte(addr) {
                             return Some(value);
@@ -2057,6 +2061,7 @@ impl CoreRuntime {
                     mem: &mut self.memory,
                     keyboard_ptr,
                     lcd_ptr,
+                    upper_rom_unmapped,
                     sio_ptr,
                     host_read,
                     host_peek,
@@ -2556,6 +2561,7 @@ impl CoreRuntime {
                     mem: &mut self.memory,
                     keyboard_ptr,
                     lcd_ptr,
+                    upper_rom_unmapped,
                     sio_ptr,
                     host_read,
                     host_peek,

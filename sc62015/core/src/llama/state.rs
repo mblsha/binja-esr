@@ -21,6 +21,7 @@ pub fn validate_f_image(value: u32) -> Result<u32, &'static str> {
     }
 }
 
+#[inline]
 pub fn mask_for(name: RegName) -> u32 {
     match name {
         RegName::A | RegName::B | RegName::IL | RegName::IH => 0xFF,
@@ -137,6 +138,7 @@ impl LlamaState {
         }
     }
 
+    #[inline]
     pub fn set_reg(&mut self, name: RegName, value: u32) {
         let masked = value & mask_for(name);
         match name {
@@ -176,10 +178,22 @@ impl LlamaState {
             RegName::Temp(index) if usize::from(index) < self.temps.len() => {
                 self.temps[usize::from(index)] = masked;
             }
-            RegName::Temp(_) | RegName::Unknown(_) => {
-                self.extra_regs.insert(name, masked);
-            }
+            RegName::Temp(_) | RegName::Unknown(_) => self.set_extra_reg(name, masked),
         }
+    }
+
+    // Out-of-range temps and unknown names are rare; keep the map off the
+    // inlined register-write path.
+    #[cold]
+    #[inline(never)]
+    fn set_extra_reg(&mut self, name: RegName, masked: u32) {
+        self.extra_regs.insert(name, masked);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn get_extra_reg(&self, name: RegName) -> u32 {
+        self.extra_regs.get(&name).copied().unwrap_or(0) & mask_for(name)
     }
 
     #[inline]
@@ -203,9 +217,7 @@ impl LlamaState {
             RegName::Temp(index) if usize::from(index) < self.temps.len() => {
                 self.temps[usize::from(index)]
             }
-            RegName::Temp(_) | RegName::Unknown(_) => {
-                self.extra_regs.get(&name).copied().unwrap_or(0) & mask_for(name)
-            }
+            RegName::Temp(_) | RegName::Unknown(_) => self.get_extra_reg(name),
         }
     }
 
