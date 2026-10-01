@@ -367,6 +367,7 @@ impl MemoryImage {
         self.dirty_internal = capture.dirty_internal_before;
     }
 
+    #[inline]
     fn capture_external_previous(&mut self, index: usize) {
         let previous = self.external[index];
         if let Some(capture) = self.rollback_capture.as_mut() {
@@ -374,6 +375,7 @@ impl MemoryImage {
         }
     }
 
+    #[inline]
     fn capture_internal_previous(&mut self, index: usize) {
         let previous = self.internal[index];
         if let Some(capture) = self.rollback_capture.as_mut() {
@@ -394,6 +396,7 @@ impl MemoryImage {
         out
     }
 
+    #[inline]
     fn record_write_capture(&mut self, address: u32, value: u8) {
         if let Some(map) = self.write_capture.as_mut() {
             map.insert(canonical_address(address), value);
@@ -416,12 +419,14 @@ impl MemoryImage {
         self.dirty_tracking
     }
 
+    #[inline]
     fn mark_external_dirty(&mut self, address: u32, value: u8) {
         if self.dirty_tracking {
             self.dirty.push((address, value));
         }
     }
 
+    #[inline]
     fn mark_internal_dirty(&mut self, address: u32, value: u8) {
         if self.dirty_tracking {
             self.dirty_internal.push((address, value));
@@ -437,6 +442,7 @@ impl MemoryImage {
         self.imr_isr_hook = hook.map(|h| Rc::new(h) as ImrIsrHook);
     }
 
+    #[inline]
     fn invoke_imr_isr_hook(&self, offset: u32, prev: u8, new: u8) {
         if offset != IMEM_IMR_OFFSET && offset != IMEM_ISR_OFFSET {
             return;
@@ -1274,7 +1280,7 @@ impl MemoryImage {
     /// lies in the upper ROM window and no overlay or host range can intercept
     /// any of it, i.e. when every byte would be served by `peek_plain_rom_byte`.
     /// Device routing remains the caller's responsibility.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn plain_upper_rom_span(&self, address: u32, len: usize) -> Option<&[u8]> {
         let start = address as usize;
         let end = start.checked_add(len)?.checked_sub(1)?;
@@ -1297,7 +1303,7 @@ impl MemoryImage {
 
     /// `plain_upper_rom_span` packed little-endian into a `u64` (zero above
     /// `len` bytes), for cheap comparison of short instruction encodings.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn plain_upper_rom_word(&self, address: u32, len: usize) -> Option<u64> {
         debug_assert!((1..=8).contains(&len));
         let span = self.plain_upper_rom_span(address, len)?;
@@ -1801,6 +1807,7 @@ impl MemoryImage {
         });
     }
 
+    #[inline]
     pub fn is_read_only_range(&self, start: u32, len: u32) -> bool {
         if len == 0 {
             return false;
