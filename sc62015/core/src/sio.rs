@@ -211,6 +211,7 @@ impl SioStub {
         }
     }
 
+    #[inline]
     pub fn tick_cycles(&mut self, cycles: u64, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
         if cycles > 0
             && self.rx_ready_countdown.is_none()
@@ -218,12 +219,17 @@ impl SioStub {
             && self.handshake_countdown.is_none()
             && self.direct_input_timeout_countdown.is_none()
         {
-            // No timed event is armed: the loop below would make exactly one
+            // No timed event is armed: the timed loop would make exactly one
             // pass that only updates flow control.
             let events = self.update_flow_control();
             self.apply_status(memory);
             return events;
         }
+        self.tick_cycles_timed(cycles, memory)
+    }
+
+    #[inline(never)]
+    fn tick_cycles_timed(&mut self, cycles: u64, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
         let mut events = Vec::new();
         let mut remaining = cycles;
         while remaining > 0 {
@@ -509,6 +515,7 @@ impl SioStub {
         }
     }
 
+    #[inline]
     fn apply_status(&self, memory: &mut MemoryImage) {
         let old_usr = memory
             .read_internal_byte_silent(IMEM_USR_OFFSET)
@@ -626,6 +633,7 @@ impl Default for SioStub {
 }
 
 impl SioStub {
+    #[inline]
     fn update_flow_control(&mut self) -> Vec<SioTimedEvent> {
         let pending = self.rx_queue.len() + self.pending_rx_queue.len();
         if !self.xoff_sent && pending >= self.timing_config.xoff_threshold {
