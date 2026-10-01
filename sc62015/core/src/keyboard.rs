@@ -320,10 +320,17 @@ impl KeyboardMatrix {
     }
 
     pub fn active_columns(&self) -> Vec<u8> {
-        let mask = self.active_column_mask();
+        let mask = self.strobed_column_mask();
         (0..COLUMN_COUNT as u8)
             .filter(|column| mask & (1 << column) != 0)
             .collect()
+    }
+
+    /// `active_column_mask` restricted to the matrix's real columns, i.e. the
+    /// bit set of `active_columns()` without allocating.
+    #[inline]
+    fn strobed_column_mask(&self) -> u32 {
+        u32::from(self.active_column_mask()) & ((1u32 << COLUMN_COUNT) - 1)
     }
 
     pub fn compute_kil(&self, allow_pending: bool) -> u8 {
@@ -645,11 +652,12 @@ impl KeyboardMatrix {
     }
 
     fn bump_column_histogram(&mut self) {
-        let active = self.active_columns();
-        for col in &active {
-            if (*col as usize) < self.column_histogram.len() {
-                self.column_histogram[*col as usize] =
-                    self.column_histogram[*col as usize].wrapping_add(1);
+        let mut active = self.strobed_column_mask();
+        while active != 0 {
+            let col = active.trailing_zeros() as usize;
+            active &= active - 1;
+            if col < self.column_histogram.len() {
+                self.column_histogram[col] = self.column_histogram[col].wrapping_add(1);
             }
         }
     }
@@ -919,13 +927,14 @@ impl KeyboardMatrix {
             return 0;
         }
         let emit_events = self.emit_events;
-        let active = self.active_columns();
+        let active = self.strobed_column_mask();
         let mut events = 0usize;
         for idx in 0..self.states.len() {
             let mut enqueue: Option<(u8, bool)> = None;
             {
                 let state = &mut self.states[idx];
-                let strobed = active.contains(&state.location.column);
+                let strobed = u32::from(state.location.column) < u32::BITS
+                    && active & (1u32 << state.location.column) != 0;
                 // Match Python debounce/repeat semantics (KeyboardMatrix._update_key_state).
                 if state.pressed && strobed {
                     if !state.debounced {

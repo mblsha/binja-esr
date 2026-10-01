@@ -14,9 +14,9 @@ use super::{
 };
 use crate::{
     memory::{
-        with_imr_read_suppressed, IMEM_BP_OFFSET, IMEM_IMR_OFFSET, IMEM_ISR_OFFSET,
-        IMEM_LCC_OFFSET, IMEM_PX_OFFSET, IMEM_PY_OFFSET, IMEM_SCR_OFFSET, IMEM_SSR_OFFSET,
-        IMEM_UCR_OFFSET, IMEM_USR_OFFSET, INTERNAL_MEMORY_START,
+        untraced_imr_read, with_imr_read_suppressed, IMEM_BP_OFFSET, IMEM_IMR_OFFSET,
+        IMEM_ISR_OFFSET, IMEM_LCC_OFFSET, IMEM_PX_OFFSET, IMEM_PY_OFFSET, IMEM_SCR_OFFSET,
+        IMEM_SSR_OFFSET, IMEM_UCR_OFFSET, IMEM_USR_OFFSET, INTERNAL_MEMORY_START,
     },
     perfetto::AnnotationValue,
     PERFETTO_TRACER,
@@ -36,46 +36,71 @@ pub struct PerfettoCallStack {
     pub frames: [u32; PERFETTO_CALL_STACK_MAX_FRAMES],
 }
 
+/// Per-thread execution context. It belongs to one machine on one executor
+/// thread: keeping it process-global allowed unrelated parallel tests/machines
+/// to publish a false context into each other's memory and trace callbacks.
+/// The fields share one thread-local so the per-instruction publish costs a
+/// single TLS lookup.
+struct ExecContext {
+    current_pc: Cell<u32>,
+    current_op: Cell<u64>,
+    substep: Cell<u32>,
+    last_pc: Cell<u32>,
+    last_call_stack: Cell<PerfettoCallStack>,
+    preflight_depth: Cell<u32>,
+}
+
 thread_local! {
-    // Current execution context belongs to one machine on one executor thread.
-    // Keeping it process-global allowed unrelated parallel tests/machines to
-    // publish a false context into each other's memory and trace callbacks.
-    static PERF_CURRENT_PC: Cell<u32> = const { Cell::new(u32::MAX) };
-    static PERF_CURRENT_OP: Cell<u64> = const { Cell::new(u64::MAX) };
-    static PERF_SUBSTEP: Cell<u32> = const { Cell::new(0) };
-    static PERF_LAST_PC: Cell<u32> = const { Cell::new(0) };
-    static PERF_LAST_CALL_STACK: Cell<PerfettoCallStack> = const { Cell::new(PerfettoCallStack { len: 0, frames: [0; PERFETTO_CALL_STACK_MAX_FRAMES] }) };
-    static PREFLIGHT_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static EXEC_CONTEXT: ExecContext = const {
+        ExecContext {
+            current_pc: Cell::new(u32::MAX),
+            current_op: Cell::new(u64::MAX),
+            substep: Cell::new(0),
+            last_pc: Cell::new(0),
+            last_call_stack: Cell::new(PerfettoCallStack {
+                len: 0,
+                frames: [0; PERFETTO_CALL_STACK_MAX_FRAMES],
+            }),
+            preflight_depth: Cell::new(0),
+        }
+    };
 }
 
 struct PreflightGuard;
 
 impl PreflightGuard {
     fn enter() -> Self {
-        PREFLIGHT_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.preflight_depth
+                .set(ctx.preflight_depth.get().saturating_add(1))
+        });
         Self
     }
 }
 
 impl Drop for PreflightGuard {
     fn drop(&mut self) {
-        PREFLIGHT_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.preflight_depth
+                .set(ctx.preflight_depth.get().saturating_sub(1))
+        });
     }
 }
 
 struct PerfettoContextGuard;
 impl Drop for PerfettoContextGuard {
     fn drop(&mut self) {
-        PERF_CURRENT_OP.with(|value| value.set(u64::MAX));
-        PERF_CURRENT_PC.with(|value| value.set(u32::MAX));
-        PERF_SUBSTEP.with(|value| value.set(0));
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.current_op.set(u64::MAX);
+            ctx.current_pc.set(u32::MAX);
+            ctx.substep.set(0);
+        });
     }
 }
 
 /// Expose current instruction context for Perfetto correlation outside the executor.
 pub fn perfetto_instr_context() -> Option<(u64, u32)> {
-    let op = PERF_CURRENT_OP.with(|value| value.get());
-    let pc = PERF_CURRENT_PC.with(|value| value.get());
+    let (op, pc) = EXEC_CONTEXT.with(|ctx| (ctx.current_op.get(), ctx.current_pc.get()));
     if op == u64::MAX || pc == u32::MAX {
         None
     } else {
@@ -90,22 +115,24 @@ pub fn perfetto_last_instr_index() -> u64 {
 
 /// Last-seen PC (masked) even outside executor context; useful for host-side tracing.
 pub fn perfetto_last_pc() -> u32 {
-    PERF_LAST_PC.with(|value| value.get())
+    EXEC_CONTEXT.with(|ctx| ctx.last_pc.get())
 }
 
 /// Last-seen call stack (truncated) even outside executor context; useful for host-side tracing.
 pub fn perfetto_last_call_stack() -> PerfettoCallStack {
-    PERF_LAST_CALL_STACK.with(|value| value.get())
+    EXEC_CONTEXT.with(|ctx| ctx.last_call_stack.get())
 }
 
 pub fn reset_perf_counters() {
     let _guard = PERFETTO_TRACER.enter();
     PERF_INSTR_COUNTER.store(0, Ordering::Relaxed);
-    PERF_CURRENT_PC.with(|value| value.set(u32::MAX));
-    PERF_CURRENT_OP.with(|value| value.set(u64::MAX));
-    PERF_LAST_PC.with(|value| value.set(0));
-    PERF_LAST_CALL_STACK.with(|value| value.set(PerfettoCallStack::default()));
-    PERF_SUBSTEP.with(|value| value.set(0));
+    EXEC_CONTEXT.with(|ctx| {
+        ctx.current_pc.set(u32::MAX);
+        ctx.current_op.set(u64::MAX);
+        ctx.last_pc.set(0);
+        ctx.last_call_stack.set(PerfettoCallStack::default());
+        ctx.substep.set(0);
+    });
 }
 
 /// Set the global instruction index used for Perfetto `op_index` annotations.
@@ -118,15 +145,11 @@ pub fn set_perf_instr_counter(value: u64) {
 
 /// Next per-instruction substep for Perfetto manual clock parity.
 pub fn perfetto_next_substep() -> u64 {
-    PERF_SUBSTEP.with(|value| {
-        let next = value.get().wrapping_add(1);
-        value.set(next);
+    EXEC_CONTEXT.with(|ctx| {
+        let next = ctx.substep.get().wrapping_add(1);
+        ctx.substep.set(next);
         next as u64
     })
-}
-
-fn perfetto_reset_substep() {
-    PERF_SUBSTEP.with(|value| value.set(0));
 }
 
 fn reject_unknown() -> Result<u8, &'static str> {
@@ -670,14 +693,15 @@ fn trace_imem_addr(
     px: Option<u32>,
     py: Option<u32>,
 ) {
-    if PREFLIGHT_DEPTH.with(|depth| depth.get() != 0) {
+    if !crate::PERFETTO_TRACER.is_installed()
+        || EXEC_CONTEXT.with(|ctx| ctx.preflight_depth.get() != 0)
+    {
         return;
     }
     // Optional perfetto emit when the builder is available (llama-tests builds).
     let mut guard = crate::PERFETTO_TRACER.enter();
     guard.with_some(|tracer| {
-        let op_idx = PERF_CURRENT_OP.with(|value| value.get());
-        let pc = PERF_CURRENT_PC.with(|value| value.get());
+        let (op_idx, pc) = EXEC_CONTEXT.with(|ctx| (ctx.current_op.get(), ctx.current_pc.get()));
         let op = if op_idx == u64::MAX {
             None
         } else {
@@ -1237,7 +1261,7 @@ impl LlamaExecutor {
                 cycle,
             );
         });
-        PERF_LAST_PC.with(|value| value.set(pc_trace));
+        EXEC_CONTEXT.with(|ctx| ctx.last_pc.set(pc_trace));
     }
 
     pub(crate) fn emit_deferred_instruction_trace(
@@ -1297,8 +1321,8 @@ impl LlamaExecutor {
     fn trace_mem_write(addr: u32, bits: u8, value: u32) {
         let mut guard = PERFETTO_TRACER.enter();
         guard.with_some(|tracer| {
-            let op_index = PERF_CURRENT_OP.with(|value| value.get());
-            let pc = PERF_CURRENT_PC.with(|value| value.get());
+            let (op_index, pc) =
+                EXEC_CONTEXT.with(|ctx| (ctx.current_op.get(), ctx.current_pc.get()));
             let substep = perfetto_next_substep();
             let masked = if bits == 0 || bits >= 32 {
                 value
@@ -3081,28 +3105,35 @@ impl LlamaExecutor {
         } else {
             PERF_INSTR_COUNTER.load(Ordering::Relaxed)
         };
-        PERF_LAST_PC.with(|value| value.set(trace_pc_snapshot));
-        PERF_LAST_CALL_STACK.with(|value| {
-            let mut snapshot = PerfettoCallStack::default();
-            let frames = state.call_stack();
-            let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
-            snapshot.len = take as u8;
-            for (dst, src) in snapshot.frames.iter_mut().take(take).zip(frames.iter()) {
-                *dst = *src & mask_for(RegName::PC);
-            }
-            value.set(snapshot);
+        let mut call_stack_snapshot = PerfettoCallStack::default();
+        let frames = state.call_stack();
+        let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
+        call_stack_snapshot.len = take as u8;
+        for (dst, src) in call_stack_snapshot
+            .frames
+            .iter_mut()
+            .take(take)
+            .zip(frames.iter())
+        {
+            *dst = *src & mask_for(RegName::PC);
+        }
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.last_pc.set(trace_pc_snapshot);
+            ctx.last_call_stack.set(call_stack_snapshot);
+            ctx.substep.set(0);
         });
-        perfetto_reset_substep();
 
         // Defer even the IMR mirror update until the vector's architectural
         // fetch agrees with preflight so a volatile mismatch remains atomic.
         if !matches!(resolved_entry.kind, InstrKind::Ir | InstrKind::Reset) {
-            let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
+            let mem_imr = untraced_imr_read(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
             state.set_reg(RegName::IMR, mem_imr as u32);
         }
 
-        PERF_CURRENT_OP.with(|value| value.set(instr_index));
-        PERF_CURRENT_PC.with(|value| value.set(trace_pc_snapshot));
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.current_op.set(instr_index);
+            ctx.current_pc.set(trace_pc_snapshot);
+        });
         let _ctx_guard = PerfettoContextGuard;
         let trace_regs = bus
             .tracing_active_hint()
@@ -3717,7 +3748,7 @@ impl LlamaExecutor {
                     .ok_or("RESET vector was not prefetched")?
                     .consume_after_architectural_fetch(ROM_RESET_VECTOR_ADDR, state, bus)?;
                 apply_power_on_reset(bus, state, reset_vector);
-                let mem_imr = with_imr_read_suppressed(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
+                let mem_imr = untraced_imr_read(|| bus.peek_imem_silent(IMEM_IMR_OFFSET));
                 state.set_reg(RegName::IMR, mem_imr as u32);
                 Ok(1 + prefix_len)
             }
@@ -8318,13 +8349,17 @@ mod tests {
     fn perfetto_instruction_context_is_thread_local() {
         let _perfetto_lock = crate::perfetto::perfetto_test_guard();
         reset_perf_counters();
-        PERF_CURRENT_OP.with(|value| value.set(7));
-        PERF_CURRENT_PC.with(|value| value.set(0x12345));
+        EXEC_CONTEXT.with(|ctx| {
+            ctx.current_op.set(7);
+            ctx.current_pc.set(0x12345);
+        });
 
         std::thread::spawn(|| {
             assert_eq!(perfetto_instr_context(), None);
-            PERF_CURRENT_OP.with(|value| value.set(9));
-            PERF_CURRENT_PC.with(|value| value.set(0x54321));
+            EXEC_CONTEXT.with(|ctx| {
+                ctx.current_op.set(9);
+                ctx.current_pc.set(0x54321);
+            });
             assert_eq!(perfetto_instr_context(), Some((9, 0x54321)));
             drop(PerfettoContextGuard);
             assert_eq!(perfetto_instr_context(), None);

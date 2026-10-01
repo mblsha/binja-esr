@@ -141,6 +141,20 @@ pub fn imr_read_suppressed() -> bool {
     IMR_READ_SUPPRESS.with(|flag| flag.get())
 }
 
+/// Read IMR through `read` with IMR read tracing suppressed. Suppression only
+/// affects Perfetto IMR_Read events, so it is skipped when no tracer exists.
+#[inline]
+pub fn untraced_imr_read<F, T>(read: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    if crate::PERFETTO_TRACER.is_installed() {
+        with_imr_read_suppressed(read)
+    } else {
+        read()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessKind {
     Read,
@@ -1625,7 +1639,10 @@ impl MemoryImage {
         for offset in 0..bytes {
             value |= (self.internal[index + offset] as u32) << (offset * 8);
         }
-        if address == INTERNAL_MEMORY_START + 0xFB && !imr_read_suppressed() {
+        if address == INTERNAL_MEMORY_START + 0xFB
+            && crate::PERFETTO_TRACER.is_installed()
+            && !imr_read_suppressed()
+        {
             let mut guard = perfetto_guard();
             guard.with_some(|tracer| {
                 let ctx = crate::llama::eval::perfetto_instr_context();
@@ -1689,7 +1706,7 @@ impl MemoryImage {
             self.memory_reads
                 .set(self.memory_reads.get().saturating_add(1));
             let val = self.internal[offset as usize];
-            if offset == 0xFB && !imr_read_suppressed() {
+            if offset == 0xFB && crate::PERFETTO_TRACER.is_installed() && !imr_read_suppressed() {
                 let mut guard = perfetto_guard();
                 guard.with_some(|tracer| {
                     let (op_idx, pc) = perfetto_context_or_last();
