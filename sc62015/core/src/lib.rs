@@ -2066,6 +2066,7 @@ impl CoreRuntime {
         }
 
         impl<'a> LlamaBus for RuntimeBus<'a> {
+            #[inline(always)]
             fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
                 // Upper ROM cannot intersect keyboard/SIO/RTC ports or the
                 // IQ clock workspace. LcdHal is extensible, so check it even here.
