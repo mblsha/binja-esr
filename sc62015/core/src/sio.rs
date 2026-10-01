@@ -515,7 +515,7 @@ impl SioStub {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn apply_status(&self, memory: &mut MemoryImage) {
         let old_usr = memory
             .read_internal_byte_silent(IMEM_USR_OFFSET)
