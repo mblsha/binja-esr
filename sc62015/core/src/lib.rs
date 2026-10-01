@@ -583,9 +583,8 @@ impl FastRouting {
             INTERNAL_MEMORY_START,
             INTERNAL_MEMORY_START + INTERNAL_ADDR_MASK,
         );
-        let internal_unmapped = lcd.map_or(true, |lcd| {
-            !lcd.may_handle_span(internal_span.0, internal_span.1)
-        });
+        let internal_unmapped =
+            lcd.is_none_or(|lcd| !lcd.may_handle_span(internal_span.0, internal_span.1));
         Self {
             internal_unmapped,
             lcd_windows,
@@ -2244,7 +2243,7 @@ impl CoreRuntime {
         let upper_rom_unmapped = self
             .lcd
             .as_ref()
-            .map_or(true, |lcd| !lcd.may_handle_span(0xC0000, 0xFFFFF));
+            .is_none_or(|lcd| !lcd.may_handle_span(0xC0000, 0xFFFFF));
         let fast = FastRouting::new(
             self.lcd.as_deref(),
             self.memory.python_ranges().is_empty(),
@@ -2394,7 +2393,7 @@ impl CoreRuntime {
                         capture_lcd: false,
                         decode_memo: std::ptr::null_mut(),
                         cycle: self.metadata.cycle_count,
-                        pc: pc,
+                        pc,
                     };
                     // Fully validate the current instruction through the silent
                     // bus first. A malformed current encoding takes precedence

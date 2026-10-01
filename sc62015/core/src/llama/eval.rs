@@ -8646,14 +8646,14 @@ mod tests {
                 ctx.current_pc.set(0x54321);
             });
             assert_eq!(perfetto_instr_context(), Some((9, 0x54321)));
-            drop(PerfettoContextGuard);
+            drop(PerfettoContextGuard(exec_context_ptr()));
             assert_eq!(perfetto_instr_context(), None);
         })
         .join()
         .expect("context isolation thread");
 
         assert_eq!(perfetto_instr_context(), Some((7, 0x12345)));
-        drop(PerfettoContextGuard);
+        drop(PerfettoContextGuard(exec_context_ptr()));
         assert_eq!(perfetto_instr_context(), None);
     }
 
