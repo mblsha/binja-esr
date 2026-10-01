@@ -280,6 +280,7 @@ impl TimerContext {
     /// Apply `SCR.MTS`/`SCR.STS` to the active periods.  The exact silicon
     /// divider phase when a selector changes is not captured, so a changed
     /// selection starts a fresh compatibility period at this boundary.
+    #[inline]
     pub fn sync_scr_selection(&mut self, scr: u8, current_cycle: u64) {
         let old_selector = self.scr_selector;
         let new_selector = scr & (SCR_MTS | SCR_STS);
@@ -341,6 +342,7 @@ impl TimerContext {
     /// ordering. Timer periods are far below half the u64 range, so this keeps
     /// a deadline that wrapped to zero in the future while the current cycle
     /// is still near `u64::MAX`.
+    #[inline]
     fn deadline_reached(cycle_count: u64, deadline: u64) -> bool {
         cycle_count.wrapping_sub(deadline) < (1_u64 << 63)
     }
@@ -348,10 +350,12 @@ impl TimerContext {
     /// Return the next cycle in `(after_cycle, end_cycle]` on which at least
     /// one enabled timer can fire. Non-deadline cycles have no architectural
     /// timer or keyboard-scan effect and can therefore be skipped safely.
+    #[inline]
     pub fn next_fire_cycle_in_span(&self, after_cycle: u64, end_cycle: u64) -> Option<u64> {
         self.next_fire_cycle_in_span_selected(after_cycle, end_cycle, true, true)
     }
 
+    #[inline]
     pub fn next_fire_cycle_in_span_selected(
         &self,
         after_cycle: u64,
@@ -366,6 +370,30 @@ impl TimerContext {
         if span == 0 || span >= (1_u64 << 63) {
             return None;
         }
+        // A deadline reached at neither end of the span lies beyond it (its
+        // distance exceeds the span), so it cannot fire in this span.
+        let first_cycle = after_cycle.wrapping_add(1);
+        let quiet = |run: bool, period: u64, deadline: u64| {
+            !run || period == 0
+                || (!Self::deadline_reached(first_cycle, deadline)
+                    && !Self::deadline_reached(end_cycle, deadline))
+        };
+        if quiet(run_mti, self.mti_period, self.next_mti)
+            && quiet(run_sti, self.sti_period, self.next_sti)
+        {
+            return None;
+        }
+        self.next_fire_cycle_in_nonempty_span(after_cycle, span, run_mti, run_sti)
+    }
+
+    #[inline(never)]
+    fn next_fire_cycle_in_nonempty_span(
+        &self,
+        after_cycle: u64,
+        span: u64,
+        run_mti: bool,
+        run_sti: bool,
+    ) -> Option<u64> {
         let first_cycle = after_cycle.wrapping_add(1);
         let candidate = |period: u64, deadline: u64| {
             if period == 0 {
