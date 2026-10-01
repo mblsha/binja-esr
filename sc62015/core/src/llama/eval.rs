@@ -3057,7 +3057,7 @@ impl LlamaExecutor {
         // parallel runtimes from perturbing a trace-state atomicity proof.
         let tracing_active = bus
             .tracing_active_hint()
-            .unwrap_or_else(|| PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some());
+            .unwrap_or_else(|| PERFETTO_TRACER.is_installed());
         let instr_index = if tracing_active {
             PERF_INSTR_COUNTER.fetch_add(1, Ordering::Relaxed)
         } else {
@@ -3088,7 +3088,7 @@ impl LlamaExecutor {
         let _ctx_guard = PerfettoContextGuard;
         let trace_regs = bus
             .tracing_active_hint()
-            .unwrap_or_else(|| PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some())
+            .unwrap_or_else(|| PERFETTO_TRACER.is_installed())
             .then(|| {
                 let mut regs = HashMap::new();
                 for (name, reg) in [

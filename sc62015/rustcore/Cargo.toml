@@ -18,3 +18,10 @@ pyo3-build-config = "0.22"
 [lib]
 name = "_sc62015_rustcore"
 crate-type = ["cdylib"]
+
+# The emulator is an interpreter whose hot path spans crate and module
+# boundaries (CPU, bus, devices); whole-program optimization is measurably
+# faster. See docs/rust_emulator_performance.md.
+[profile.release]
+lto = "fat"
+codegen-units = 1

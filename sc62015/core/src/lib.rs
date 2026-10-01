@@ -70,10 +70,92 @@ pub use sio::{
     SioInputLines, SioQueuedByte, SioSnapshot, SioStub, SioTimedEvent, SioTimingConfig,
     SioTimingSnapshot,
 };
+/// Process-wide Perfetto tracer slot.
+///
+/// The emulator consults this slot from many per-instruction and per-access
+/// hooks. Entering the underlying reentrant handle costs a thread lookup plus
+/// several mutex operations and a condvar notification, so an `installed`
+/// flag lets `with_some`/`take` return `None` without touching the handle
+/// whenever no tracer is installed. `replace` is the only way to install a
+/// tracer and it keeps the flag in sync while holding the handle.
 #[cfg(feature = "perfetto")]
-pub type PerfettoHandle = retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>;
+pub struct PerfettoHandle {
+    inner: retrobus_perfetto::ReentrantHandle<Option<PerfettoTracer>>,
+    installed: std::sync::atomic::AtomicBool,
+}
+
+/// Lazily-entered guard over [`PerfettoHandle`]; the reentrant handle is only
+/// entered when a tracer is installed (or when installing one).
 #[cfg(feature = "perfetto")]
-pub type PerfettoGuard<'a> = retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>>;
+pub struct PerfettoGuard<'a> {
+    handle: &'a PerfettoHandle,
+    inner: Option<retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>>>,
+}
+
+#[cfg(feature = "perfetto")]
+impl PerfettoHandle {
+    pub const fn new(value: Option<PerfettoTracer>) -> Self {
+        let installed = value.is_some();
+        Self {
+            inner: retrobus_perfetto::ReentrantHandle::new(value),
+            installed: std::sync::atomic::AtomicBool::new(installed),
+        }
+    }
+
+    #[inline]
+    pub fn enter(&self) -> PerfettoGuard<'_> {
+        PerfettoGuard {
+            handle: self,
+            inner: None,
+        }
+    }
+
+    /// Cheap check for whether a tracer is currently installed.
+    #[inline]
+    pub fn is_installed(&self) -> bool {
+        self.installed.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[cfg(feature = "perfetto")]
+impl<'a> PerfettoGuard<'a> {
+    #[inline]
+    fn entered(&mut self) -> &mut retrobus_perfetto::ReentrantGuard<'a, Option<PerfettoTracer>> {
+        let handle = self.handle;
+        self.inner.get_or_insert_with(|| handle.inner.enter())
+    }
+
+    #[inline]
+    pub fn with_some<F, R>(&mut self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut PerfettoTracer) -> R,
+    {
+        if self.inner.is_none() && !self.handle.is_installed() {
+            return None;
+        }
+        self.entered().with_some(f)
+    }
+
+    pub fn take(&mut self) -> Option<PerfettoTracer> {
+        if self.inner.is_none() && !self.handle.is_installed() {
+            return None;
+        }
+        let taken = self.entered().take();
+        self.handle
+            .installed
+            .store(false, std::sync::atomic::Ordering::Release);
+        taken
+    }
+
+    pub fn replace(&mut self, value: Option<PerfettoTracer>) -> Option<PerfettoTracer> {
+        let installing = value.is_some();
+        let previous = self.entered().replace(value);
+        self.handle
+            .installed
+            .store(installing, std::sync::atomic::Ordering::Release);
+        previous
+    }
+}
 
 #[cfg(not(feature = "perfetto"))]
 #[derive(Default)]
@@ -94,6 +176,10 @@ impl PerfettoHandle {
         PerfettoGuard {
             _marker: std::marker::PhantomData,
         }
+    }
+
+    pub fn is_installed(&self) -> bool {
+        false
     }
 }
 
@@ -1882,7 +1968,7 @@ impl CoreRuntime {
         // A trace cannot be installed or removed concurrently during this
         // synchronous call. Sample once so the untraced hot path does not
         // enter the process-global tracer handle for every boundary.
-        let perfetto_active = PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some();
+        let perfetto_active = PERFETTO_TRACER.is_installed();
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
@@ -2653,7 +2739,7 @@ impl CoreRuntime {
         if self.iq7000_clock_seed.is_some() || self.iq7000_rtc.is_some() {
             active.push("IQ-7000 RTC protocol state");
         }
-        if PERFETTO_TRACER.enter().with_some(|_tracer| ()).is_some() {
+        if PERFETTO_TRACER.is_installed() {
             active.push("active Perfetto trace state");
         }
         if active.is_empty() {
