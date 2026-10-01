@@ -81,9 +81,8 @@ pub trait LcdHal: Send {
     /// Whether `handles` may claim any address in `[start, end]`
     /// (conservatively true without fixed windows).
     fn may_handle_span(&self, start: u32, end: u32) -> bool {
-        self.fixed_windows().map_or(true, |windows| {
-            windows.iter().any(|&(lo, hi)| start <= hi && lo <= end)
-        })
+        self.fixed_windows()
+            .is_none_or(|windows| windows.iter().any(|&(lo, hi)| start <= hi && lo <= end))
     }
     fn read(&mut self, address: u32) -> Option<u8>;
     fn write(&mut self, address: u32, value: u8);
