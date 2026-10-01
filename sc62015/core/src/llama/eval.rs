@@ -47,6 +47,8 @@ struct ExecContext {
     substep: Cell<u32>,
     last_pc: Cell<u32>,
     last_call_stack: Cell<PerfettoCallStack>,
+    /// `LlamaState::call_stack_stamp` of `last_call_stack`, or `u64::MAX`.
+    last_call_stack_stamp: Cell<u64>,
     preflight_depth: Cell<u32>,
 }
 
@@ -61,6 +63,7 @@ thread_local! {
                 len: 0,
                 frames: [0; PERFETTO_CALL_STACK_MAX_FRAMES],
             }),
+            last_call_stack_stamp: Cell::new(u64::MAX),
             preflight_depth: Cell::new(0),
         }
     };
@@ -131,6 +134,7 @@ pub fn reset_perf_counters() {
         ctx.current_op.set(u64::MAX);
         ctx.last_pc.set(0);
         ctx.last_call_stack.set(PerfettoCallStack::default());
+        ctx.last_call_stack_stamp.set(u64::MAX);
         ctx.substep.set(0);
     });
 }
@@ -3183,7 +3187,7 @@ impl LlamaExecutor {
         state: &mut LlamaState,
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
-    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
+    ) -> Result<(u8, Option<Box<DeferredInstructionTrace>>), &'static str> {
         self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true, false)
     }
 
@@ -3198,7 +3202,7 @@ impl LlamaExecutor {
         state: &mut LlamaState,
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
-    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
+    ) -> Result<(u8, Option<Box<DeferredInstructionTrace>>), &'static str> {
         self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true, true)
     }
 
@@ -3210,7 +3214,7 @@ impl LlamaExecutor {
         prepared_transfer: Option<ValidatedVectorTransfer>,
         defer_instruction_trace: bool,
         prevalidated: bool,
-    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
+    ) -> Result<(u8, Option<Box<DeferredInstructionTrace>>), &'static str> {
         if let Some(transfer) = prepared_transfer.as_ref() {
             let expected_vector = match self.lookup(opcode).map(|entry| entry.kind) {
                 Some(InstrKind::Ir) => INTERRUPT_VECTOR_ADDR,
@@ -3324,21 +3328,27 @@ impl LlamaExecutor {
         } else {
             PERF_INSTR_COUNTER.load(Ordering::Relaxed)
         };
-        let mut call_stack_snapshot = PerfettoCallStack::default();
-        let frames = state.call_stack();
-        let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
-        call_stack_snapshot.len = take as u8;
-        for (dst, src) in call_stack_snapshot
-            .frames
-            .iter_mut()
-            .take(take)
-            .zip(frames.iter())
-        {
-            *dst = *src & mask_for(RegName::PC);
-        }
+        let call_stack_stamp = state.call_stack_stamp();
         EXEC_CONTEXT.with(|ctx| {
             ctx.last_pc.set(trace_pc_snapshot);
-            ctx.last_call_stack.set(call_stack_snapshot);
+            // Equal stamps imply an identical call stack, so the published
+            // snapshot is already current.
+            if ctx.last_call_stack_stamp.get() != call_stack_stamp {
+                let mut call_stack_snapshot = PerfettoCallStack::default();
+                let frames = state.call_stack();
+                let take = PERFETTO_CALL_STACK_MAX_FRAMES.min(frames.len());
+                call_stack_snapshot.len = take as u8;
+                for (dst, src) in call_stack_snapshot
+                    .frames
+                    .iter_mut()
+                    .take(take)
+                    .zip(frames.iter())
+                {
+                    *dst = *src & mask_for(RegName::PC);
+                }
+                ctx.last_call_stack.set(call_stack_snapshot);
+                ctx.last_call_stack_stamp.set(call_stack_stamp);
+            }
             ctx.substep.set(0);
         });
 
@@ -3416,12 +3426,12 @@ impl LlamaExecutor {
         let mut deferred_trace = None;
         if let Some(regs) = trace_regs {
             if defer_instruction_trace && result.is_ok() {
-                deferred_trace = Some(DeferredInstructionTrace {
+                deferred_trace = Some(Box::new(DeferredInstructionTrace {
                     opcode: trace_opcode_snapshot,
                     regs,
                     instr_index,
                     pc: trace_pc_snapshot,
-                });
+                }));
             } else {
                 self.trace_instr(
                     trace_opcode_snapshot,

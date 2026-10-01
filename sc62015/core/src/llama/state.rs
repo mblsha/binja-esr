@@ -74,6 +74,16 @@ pub struct LlamaState {
     call_page_stack: Vec<u32>,
     call_return_widths: Vec<u8>,
     call_stack: Vec<u32>,
+    /// Identifies the contents of `call_stack`: 0 while empty since
+    /// construction/reset, otherwise a process-unique value renewed on every
+    /// mutation. Lets observers skip re-snapshotting an unchanged stack.
+    call_stack_stamp: u64,
+}
+
+static NEXT_CALL_STACK_STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn fresh_call_stack_stamp() -> u64 {
+    NEXT_CALL_STACK_STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +117,7 @@ impl LlamaState {
             call_page_stack: Vec::new(),
             call_return_widths: Vec::new(),
             call_stack: Vec::new(),
+            call_stack_stamp: 0,
         }
     }
 
@@ -135,6 +146,7 @@ impl LlamaState {
             call_page_stack: Vec::new(),
             call_return_widths: Vec::new(),
             call_stack: Vec::new(),
+            call_stack_stamp: 0,
         }
     }
 
@@ -295,6 +307,7 @@ impl LlamaState {
         self.call_page_stack.clear();
         self.call_return_widths.clear();
         self.call_stack.clear();
+        self.call_stack_stamp = 0;
     }
 
     pub fn call_depth_inc(&mut self) {
@@ -338,11 +351,19 @@ impl LlamaState {
     pub fn push_call_frame(&mut self, dest: u32, ret_bits: u8) {
         self.call_stack.push(dest & mask_for(RegName::PC));
         self.call_return_widths.push(ret_bits);
+        self.call_stack_stamp = fresh_call_stack_stamp();
     }
 
     pub fn pop_call_frame(&mut self) -> Option<u32> {
         let _ = self.call_return_widths.pop();
+        self.call_stack_stamp = fresh_call_stack_stamp();
         self.call_stack.pop()
+    }
+
+    /// See `call_stack_stamp`: equal stamps imply equal `call_stack()`.
+    #[inline]
+    pub fn call_stack_stamp(&self) -> u64 {
+        self.call_stack_stamp
     }
 
     pub fn peek_call_return_width(&self) -> Option<u8> {
@@ -383,6 +404,7 @@ impl LlamaState {
         self.call_page_stack.clear();
         self.call_return_widths.clear();
         self.call_stack.clear();
+        self.call_stack_stamp = 0;
     }
 
     pub fn snapshot_call_metrics(&self) -> CallMetricsSnapshot {
@@ -397,6 +419,7 @@ impl LlamaState {
 
     pub fn restore_call_metrics(&mut self, snapshot: CallMetricsSnapshot) {
         self.call_stack = snapshot.call_stack;
+        self.call_stack_stamp = fresh_call_stack_stamp();
         self.call_depth = snapshot.call_depth;
         self.call_sub_level = snapshot.call_sub_level;
         self.call_page_stack = snapshot.call_page_stack;
