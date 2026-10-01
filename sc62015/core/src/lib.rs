@@ -2369,7 +2369,16 @@ impl CoreRuntime {
                 }
 
                 if let Some((silent_opcode, timing, memo_slot)) = silent_prepared_opcode {
-                    let opcode = bus.fetch_instruction_byte(pc);
+                    let opcode = if memo_slot.is_some() {
+                        // The preflight cache just proved these bytes are
+                        // unmapped plain upper ROM equal to the validated
+                        // ones, where an architectural fetch only returns the
+                        // byte and counts one read.
+                        bus.mem.bump_read_count();
+                        silent_opcode
+                    } else {
+                        bus.fetch_instruction_byte(pc)
+                    };
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
                             "architectural opcode fetch at 0x{pc:05X} disagrees with preflight: \
