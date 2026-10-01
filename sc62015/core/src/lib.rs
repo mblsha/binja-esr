@@ -94,6 +94,27 @@ pub struct PerfettoGuard<'a> {
 }
 
 #[cfg(feature = "perfetto")]
+impl Drop for PerfettoGuard<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        // Keep the common never-entered case inline; release a real guard
+        // out of line.
+        if self.inner.is_some() {
+            self.release();
+        }
+    }
+}
+
+#[cfg(feature = "perfetto")]
+impl PerfettoGuard<'_> {
+    #[cold]
+    #[inline(never)]
+    fn release(&mut self) {
+        self.inner = None;
+    }
+}
+
+#[cfg(feature = "perfetto")]
 impl PerfettoHandle {
     pub const fn new(value: Option<PerfettoTracer>) -> Self {
         let installed = value.is_some();
