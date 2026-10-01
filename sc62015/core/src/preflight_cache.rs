@@ -13,6 +13,7 @@
 //! IR (0xFE) and RESET (0xFF) are never cached because their preflight also
 //! validates vector bytes and the vector destination.
 
+use crate::llama::eval::DecodeMemo;
 use crate::llama::timing::PreparedInstructionTiming;
 use crate::memory::MemoryImage;
 
@@ -28,6 +29,8 @@ struct Entry {
     /// The validated bytes, little-endian and zero-padded.
     word: u64,
     timing: PreparedInstructionTiming,
+    /// Execution decode memo for these exact bytes (reset on insert).
+    memo: DecodeMemo,
 }
 
 pub(crate) struct PreflightCache {
@@ -48,46 +51,60 @@ impl PreflightCache {
         (pc as usize) & (ENTRY_COUNT - 1)
     }
 
-    /// The cached `(opcode, timing)` for `pc` when its live bytes still match
-    /// the bytes that were validated. The caller must have established that no
-    /// device maps the upper ROM window.
+    /// The cached `(opcode, timing, slot)` for `pc` when its live bytes still
+    /// match the bytes that were validated. The caller must have established
+    /// that no device maps the upper ROM window.
     #[inline]
     pub(crate) fn lookup(
         &self,
         pc: u32,
         memory: &MemoryImage,
-    ) -> Option<(u8, PreparedInstructionTiming)> {
-        let entry = self.entries[Self::slot(pc)].as_ref()?;
+    ) -> Option<(u8, PreparedInstructionTiming, usize)> {
+        let slot = Self::slot(pc);
+        let entry = self.entries[slot].as_ref()?;
         if entry.pc != pc {
             return None;
         }
         let live = memory.plain_upper_rom_word(pc, usize::from(entry.len))?;
-        (live == entry.word).then_some((entry.word as u8, entry.timing))
+        (live == entry.word).then_some((entry.word as u8, entry.timing, slot))
     }
 
-    /// Record a successful preflight of the instruction at `pc`.
+    /// The decode memo of a slot returned by `lookup`/`insert`. Valid only
+    /// while that entry is not replaced.
+    #[inline]
+    pub(crate) fn memo_ptr(&mut self, slot: usize) -> *mut DecodeMemo {
+        self.entries[slot]
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |entry| {
+                &mut entry.memo as *mut DecodeMemo
+            })
+    }
+
+    /// Record a successful preflight of the instruction at `pc`, returning
+    /// its slot when cached.
     pub(crate) fn insert(
         &mut self,
         pc: u32,
         len: u8,
         timing: PreparedInstructionTiming,
         memory: &MemoryImage,
-    ) {
+    ) -> Option<usize> {
         let len_usize = usize::from(len);
         if len_usize == 0 || len_usize > MAX_CACHED_LEN {
-            return;
+            return None;
         }
-        let Some(word) = memory.plain_upper_rom_word(pc, len_usize) else {
-            return;
-        };
+        let word = memory.plain_upper_rom_word(pc, len_usize)?;
         if matches!(word as u8, 0xFE | 0xFF) || matches!(timing.resolved_opcode(), 0xFE | 0xFF) {
-            return;
+            return None;
         }
-        self.entries[Self::slot(pc)] = Some(Entry {
+        let slot = Self::slot(pc);
+        self.entries[slot] = Some(Entry {
             pc,
             len,
             word,
             timing,
+            memo: DecodeMemo::default(),
         });
+        Some(slot)
     }
 }
