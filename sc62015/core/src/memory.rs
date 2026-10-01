@@ -1350,7 +1350,7 @@ impl MemoryImage {
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
@@ -1378,6 +1378,7 @@ impl MemoryImage {
         self.store_with_pc(address, bits, value, None)
     }
 
+    #[inline(always)]
     pub fn store_with_pc(
         &mut self,
         address: u32,
@@ -1493,6 +1494,7 @@ impl MemoryImage {
         record_perfetto("external");
     }
 
+    #[cold]
     #[inline(never)]
     fn load_overlay_value(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         let bytes = (bits / 8).max(1) as usize;
@@ -1518,6 +1520,8 @@ impl MemoryImage {
         Some(value)
     }
 
+    #[cold]
+    #[inline(never)]
     fn store_overlay_value(
         &mut self,
         address: u32,
@@ -1696,7 +1700,7 @@ impl MemoryImage {
         matches!(offset, 0xF0..=0xF2)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn load_internal_value(&self, address: u32, bits: u8) -> Option<u32> {
         let bytes = bits.div_ceil(8).max(1) as usize;
         let index = Self::internal_index(address)?;
@@ -1881,6 +1885,7 @@ impl MemoryImage {
         false
     }
 
+    #[inline(always)]
     pub fn store_internal_value(&mut self, address: u32, bits: u8, value: u32) -> Option<()> {
         let bytes = bits.div_ceil(8).max(1) as usize;
         let index = Self::internal_index(address)?;
