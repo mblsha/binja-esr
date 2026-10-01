@@ -24,6 +24,7 @@ pub mod pce500;
 pub mod pce500_peripherals;
 pub mod perfetto;
 pub mod physical_keys;
+mod preflight_cache;
 pub mod run_control;
 pub mod sio;
 pub mod snapshot;
@@ -134,6 +135,21 @@ impl<'a> PerfettoGuard<'a> {
             return None;
         }
         self.entered().with_some(f)
+    }
+
+    pub fn with_ref<R>(&mut self, f: impl FnOnce(&Option<PerfettoTracer>) -> R) -> R {
+        self.entered().with_ref(f)
+    }
+
+    /// Arbitrary slot access; the installed flag is resynchronized afterwards.
+    pub fn with_mut<R>(&mut self, f: impl FnOnce(&mut Option<PerfettoTracer>) -> R) -> R {
+        let entered = self.entered();
+        let result = entered.with_mut(f);
+        let installed = entered.with_ref(|slot| slot.is_some());
+        self.handle
+            .installed
+            .store(installed, std::sync::atomic::Ordering::Release);
+        result
     }
 
     pub fn take(&mut self) -> Option<PerfettoTracer> {
@@ -536,6 +552,7 @@ pub struct CoreRuntime {
     external_interrupt_level: bool,
     lcd_bus_capture: Option<LcdBusCapture>,
     poisoned: Option<String>,
+    preflight_cache: preflight_cache::PreflightCache,
 }
 
 impl Default for CoreRuntime {
@@ -575,6 +592,7 @@ impl CoreRuntime {
             external_interrupt_level: false,
             lcd_bus_capture: None,
             poisoned: None,
+            preflight_cache: Default::default(),
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -1969,6 +1987,13 @@ impl CoreRuntime {
         // synchronous call. Sample once so the untraced hot path does not
         // enter the process-global tracer handle for every boundary.
         let perfetto_active = PERFETTO_TRACER.is_installed();
+        // Preflight results for plain upper-ROM code are memoized only while
+        // no device can claim that window (checked once per call because the
+        // LCD is a public, replaceable field).
+        let upper_rom_unmapped = self
+            .lcd
+            .as_ref()
+            .map_or(true, |lcd| !lcd.may_handle_span(0xC0000, 0xFFFFF));
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
@@ -2052,7 +2077,15 @@ impl CoreRuntime {
                 // bus first. A malformed current encoding takes precedence
                 // even when the IRQ destination aliases it, and must consume
                 // zero architectural reads.
-                let silent_prepared_opcode = if should_preflight && !irq_transfer_selected {
+                let cached_preflight =
+                    if should_preflight && !irq_transfer_selected && upper_rom_unmapped {
+                        self.preflight_cache.lookup(pc, bus.mem)
+                    } else {
+                        None
+                    };
+                let silent_prepared_opcode = if cached_preflight.is_some() {
+                    cached_preflight
+                } else if should_preflight && !irq_transfer_selected {
                     let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
                         CoreError::Other(format!(
                         "preflight opcode at 0x{pc:05X}: side-effect-free memory is unavailable"
@@ -2114,6 +2147,10 @@ impl CoreRuntime {
                             "preflight timing for opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
                         ))
                     })?;
+                    if upper_rom_unmapped {
+                        self.preflight_cache
+                            .insert(pc, instruction_len, timing, bus.mem);
+                    }
                     Some((silent_opcode, timing))
                 } else {
                     None
@@ -2537,7 +2574,9 @@ impl CoreRuntime {
                 };
                 let opcode = prepared_opcode;
                 let (instr_len, deferred_instruction_trace) =
-                    match self.executor.execute_with_vector_transfer_deferred_trace(
+                    // The preflight above (or its memoized result for identical
+                    // stable bytes) already proved every decode rejection.
+                    match self.executor.execute_prevalidated_deferred_trace(
                         opcode,
                         &mut self.state,
                         &mut bus,
