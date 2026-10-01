@@ -25,7 +25,8 @@ struct Entry {
     /// Instruction address, or `u32::MAX` for an empty slot.
     pc: u32,
     len: u8,
-    bytes: [u8; MAX_CACHED_LEN],
+    /// The validated bytes, little-endian and zero-padded.
+    word: u64,
     timing: PreparedInstructionTiming,
 }
 
@@ -60,9 +61,8 @@ impl PreflightCache {
         if entry.pc != pc {
             return None;
         }
-        let len = usize::from(entry.len);
-        let live = memory.plain_upper_rom_span(pc, len)?;
-        (live == &entry.bytes[..len]).then_some((entry.bytes[0], entry.timing))
+        let live = memory.plain_upper_rom_word(pc, usize::from(entry.len))?;
+        (live == entry.word).then_some((entry.word as u8, entry.timing))
     }
 
     /// Record a successful preflight of the instruction at `pc`.
@@ -77,18 +77,16 @@ impl PreflightCache {
         if len_usize == 0 || len_usize > MAX_CACHED_LEN {
             return;
         }
-        let Some(live) = memory.plain_upper_rom_span(pc, len_usize) else {
+        let Some(word) = memory.plain_upper_rom_word(pc, len_usize) else {
             return;
         };
-        if matches!(live[0], 0xFE | 0xFF) || matches!(timing.resolved_opcode(), 0xFE | 0xFF) {
+        if matches!(word as u8, 0xFE | 0xFF) || matches!(timing.resolved_opcode(), 0xFE | 0xFF) {
             return;
         }
-        let mut bytes = [0u8; MAX_CACHED_LEN];
-        bytes[..len_usize].copy_from_slice(live);
         self.entries[Self::slot(pc)] = Some(Entry {
             pc,
             len,
-            bytes,
+            word,
             timing,
         });
     }
