@@ -1180,7 +1180,7 @@ impl LlamaExecutor {
             RegName::FZ => "FZ",
             RegName::IMR => "IMR",
             RegName::Temp(_) => "TEMP",
-            RegName::Unknown(_) => "UNKNOWN",
+            RegName::Unknown => "UNKNOWN",
         }
     }
 
@@ -2204,7 +2204,7 @@ impl LlamaExecutor {
                 5 => RegName::Y,
                 6 => RegName::U,
                 7 => RegName::S,
-                _ => RegName::Unknown("regpair"),
+                _ => RegName::Unknown,
             }
         } else {
             match idx {
@@ -2216,7 +2216,7 @@ impl LlamaExecutor {
                 5 => RegName::Y,
                 6 => RegName::U,
                 7 => RegName::S,
-                _ => RegName::Unknown("regpair"),
+                _ => RegName::Unknown,
             }
         }
     }

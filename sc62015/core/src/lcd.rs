@@ -71,13 +71,19 @@ pub trait LcdHal: Send {
     fn kind(&self) -> LcdKind;
     fn reset(&mut self);
     fn handles(&self, address: u32) -> bool;
-    /// Whether `handles` may claim any address in the canonical 20-bit span
-    /// `[start, end]`. Hot bus paths use this to skip per-access routing
-    /// checks for spans (such as the upper ROM window) that the device never
-    /// maps. Implementations must not under-report; the default is
-    /// conservative.
-    fn may_handle_span(&self, _start: u32, _end: u32) -> bool {
-        true
+    /// The device's complete, fixed address map, when it has one: `handles`
+    /// is true exactly for `address & 0xFF_FFFF` inside one of these inclusive
+    /// windows. Hot bus paths use it to replace per-access virtual routing
+    /// with inline range checks. `None` (the default) keeps live routing.
+    fn fixed_windows(&self) -> Option<[(u32, u32); 2]> {
+        None
+    }
+    /// Whether `handles` may claim any address in `[start, end]`
+    /// (conservatively true without fixed windows).
+    fn may_handle_span(&self, start: u32, end: u32) -> bool {
+        self.fixed_windows().map_or(true, |windows| {
+            windows.iter().any(|&(lo, hi)| start <= hi && lo <= end)
+        })
     }
     fn read(&mut self, address: u32) -> Option<u8>;
     fn write(&mut self, address: u32, value: u8);
@@ -842,15 +848,9 @@ impl LcdController {
     }
 }
 
-/// Whether `[start, end]` intersects either of a controller's two fixed
-/// memory-mapped windows.
-fn span_intersects_windows(start: u32, end: u32, windows: [(u32, u32); 2]) -> bool {
-    windows.iter().any(|&(lo, hi)| start <= hi && lo <= end)
-}
-
 impl LcdHal for LcdController {
-    fn may_handle_span(&self, start: u32, end: u32) -> bool {
-        span_intersects_windows(start, end, [(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
+    fn fixed_windows(&self) -> Option<[(u32, u32); 2]> {
+        Some([(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -923,8 +923,8 @@ impl LcdHal for LcdController {
 }
 
 impl LcdHal for Iq7000LcdController {
-    fn may_handle_span(&self, start: u32, end: u32) -> bool {
-        span_intersects_windows(start, end, [(0x4000, 0x41FF), (0x6000, 0x61FF)])
+    fn fixed_windows(&self) -> Option<[(u32, u32); 2]> {
+        Some([(0x4000, 0x41FF), (0x6000, 0x61FF)])
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -1142,8 +1142,8 @@ impl Default for UnknownLcdController {
 }
 
 impl LcdHal for UnknownLcdController {
-    fn may_handle_span(&self, start: u32, end: u32) -> bool {
-        span_intersects_windows(start, end, [(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
+    fn fixed_windows(&self) -> Option<[(u32, u32); 2]> {
+        Some([(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -1382,6 +1382,29 @@ fn pixel_on(byte: u8, bit: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_windows_match_handles_for_builtin_controllers() {
+        let controllers: [Box<dyn LcdHal>; 3] = [
+            Box::new(LcdController::new()),
+            Box::new(Iq7000LcdController::new()),
+            Box::new(UnknownLcdController::default()),
+        ];
+        for lcd in controllers {
+            let windows = lcd.fixed_windows().expect("built-in maps are fixed");
+            for address in 0..=0x10_0100u32 {
+                let in_window = windows
+                    .iter()
+                    .any(|&(lo, hi)| (lo..=hi).contains(&(address & 0x00FF_FFFF)));
+                assert_eq!(
+                    lcd.handles(address),
+                    in_window,
+                    "{:?} @ {address:#x}",
+                    lcd.kind()
+                );
+            }
+        }
+    }
 
     #[test]
     fn status_read_reports_busy_and_display_on_per_datasheet() {

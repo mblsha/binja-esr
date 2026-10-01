@@ -530,6 +530,83 @@ impl LcdBusCapture {
     }
 }
 
+/// Routing facts computed once per `step_scheduler_boundaries` call that let
+/// `RuntimeBus` send plain memory accesses straight to `MemoryImage`.
+#[derive(Clone, Copy)]
+struct FastRouting {
+    /// The LCD (if any) can claim no internal-memory address.
+    internal_unmapped: bool,
+    /// LCD routing: `Some(windows)` when the map is fixed (empty windows when
+    /// there is no LCD), `None` when every access needs the live check.
+    lcd_windows: Option<[(u32, u32); 2]>,
+    /// No host (Python) ranges are configured.
+    no_host_ranges: bool,
+    /// An IQ-7000 clock-seed workspace may intercept reads.
+    clock_seed: bool,
+}
+
+impl FastRouting {
+    /// IMEM offsets that `RuntimeBus::load` routes to a device or patches:
+    /// KOL/KOH/KIL, EIL, UCR/USR/RXD/TXD and SSR.
+    const LOAD_SPECIAL_SFRS: u16 = 0b1000_0111_1010_0111;
+    /// IMEM offsets that `RuntimeBus::store` routes to a device or follows up:
+    /// KOL/KOH/KIL, EOL, UCR/USR/RXD/TXD and SCR.
+    const STORE_SPECIAL_SFRS: u16 = 0b0010_0111_1000_1111;
+
+    fn new(lcd: Option<&dyn LcdHal>, no_host_ranges: bool, clock_seed: bool) -> Self {
+        let lcd_windows = match lcd {
+            None => Some([(1, 0), (1, 0)]),
+            Some(lcd) => lcd.fixed_windows(),
+        };
+        let internal_span = (
+            INTERNAL_MEMORY_START,
+            INTERNAL_MEMORY_START + INTERNAL_ADDR_MASK,
+        );
+        let internal_unmapped = lcd.map_or(true, |lcd| {
+            !lcd.may_handle_span(internal_span.0, internal_span.1)
+        });
+        Self {
+            internal_unmapped,
+            lcd_windows,
+            no_host_ranges,
+            clock_seed,
+        }
+    }
+
+    /// Whether any IMEM offset in `[start, end]` (both <= 0xFF) is in the
+    /// special-function set `mask` (bit n = offset 0xF0 + n).
+    #[inline(always)]
+    fn span_hits(mask: u16, start: u32, end: u32) -> bool {
+        if end < 0xF0 {
+            return false;
+        }
+        (start.max(0xF0)..=end).any(|offset| mask & (1 << (offset - 0xF0)) != 0)
+    }
+
+    /// An external access of `bytes` at `addr` that no host range, clock-seed
+    /// workspace or LCD window (checked at `addr`, as the device chain does)
+    /// can intercept, and that cannot wrap into internal memory.
+    #[inline(always)]
+    fn external_ok(&self, addr: u32, bytes: u32) -> bool {
+        if !self.no_host_ranges || addr + bytes > EXTERNAL_SPACE as u32 {
+            return false;
+        }
+        if self.clock_seed
+            && addr <= iq7000::CLOCK_WORKSPACE_START + iq7000::CLOCK_WORKSPACE_LEN as u32
+            && addr + 4 >= iq7000::CLOCK_WORKSPACE_START
+        {
+            return false;
+        }
+        match self.lcd_windows {
+            Some(windows) => {
+                let masked = addr & 0x00FF_FFFF;
+                !windows.iter().any(|&(lo, hi)| (lo..=hi).contains(&masked))
+            }
+            None => false,
+        }
+    }
+}
+
 pub struct CoreRuntime {
     metadata: SnapshotMetadata,
     // Host pacing observation, not an architectural CPU counter or snapshot field.
@@ -1582,6 +1659,8 @@ impl CoreRuntime {
             lcd_ptr: Option<*mut dyn LcdHal>,
             /// No device can claim any address in 0xC0000..=0xFFFFF.
             upper_rom_unmapped: bool,
+            /// Precomputed routing facts for the plain-memory fast paths.
+            fast: FastRouting,
             sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
@@ -1603,6 +1682,52 @@ impl CoreRuntime {
             state_ptr: *const LlamaState,
             lcd_bus_capture: *mut LcdBusCapture,
         }
+        impl RuntimeBus<'_> {
+            /// Plain-memory load that the device chain in `load` provably
+            /// passes straight to `load_with_pc`; `None` means "use the chain".
+            #[inline(always)]
+            unsafe fn load_fast(&mut self, addr: u32, bits: u8) -> Option<u32> {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                if MemoryImage::is_internal(addr) {
+                    let start = addr - INTERNAL_MEMORY_START;
+                    let end = start + bytes - 1;
+                    if !self.fast.internal_unmapped
+                        || end > INTERNAL_ADDR_MASK
+                        || FastRouting::span_hits(FastRouting::LOAD_SPECIAL_SFRS, start, end)
+                    {
+                        return None;
+                    }
+                } else if !self.fast.external_ok(addr, bytes) {
+                    return None;
+                }
+                Some(
+                    (*self.mem)
+                        .load_with_pc(addr, bits, Some(self.pc))
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Store counterpart of `load_fast`.
+            #[inline(always)]
+            unsafe fn store_fast(&mut self, addr: u32, bits: u8, value: u32) -> bool {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                if MemoryImage::is_internal(addr) {
+                    let start = addr - INTERNAL_MEMORY_START;
+                    let end = start + bytes - 1;
+                    if !self.fast.internal_unmapped
+                        || end > INTERNAL_ADDR_MASK
+                        || FastRouting::span_hits(FastRouting::STORE_SPECIAL_SFRS, start, end)
+                    {
+                        return false;
+                    }
+                } else if !self.fast.external_ok(addr, bytes) {
+                    return false;
+                }
+                let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
+                true
+            }
+        }
+
         impl<'a> LlamaBus for RuntimeBus<'a> {
             fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
                 // Upper ROM cannot intersect keyboard/SIO/RTC ports or the
@@ -1628,6 +1753,9 @@ impl CoreRuntime {
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
                 unsafe {
+                    if let Some(value) = self.load_fast(addr, bits) {
+                        return value;
+                    }
                     // The SC62015 exposes keyboard registers as byte-wide ports (KOL/KOH/KIL),
                     // but firmware frequently uses word-sized access via KOL.w (touching 0xF0/0xF1).
                     // Split multi-byte accesses so the keyboard handler sees both bytes.
@@ -1750,6 +1878,9 @@ impl CoreRuntime {
             }
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
+                    if self.store_fast(addr, bits, value) {
+                        return;
+                    }
                     // See `load`: split word-sized KOL.w writes so KOH is updated too.
                     if bits > 8
                         && !self.keyboard_ptr.is_null()
@@ -2002,6 +2133,11 @@ impl CoreRuntime {
             .lcd
             .as_ref()
             .map_or(true, |lcd| !lcd.may_handle_span(0xC0000, 0xFFFFF));
+        let fast = FastRouting::new(
+            self.lcd.as_deref(),
+            self.memory.python_ranges().is_empty(),
+            self.iq7000_clock_seed.is_some(),
+        );
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
@@ -2062,6 +2198,7 @@ impl CoreRuntime {
                     keyboard_ptr,
                     lcd_ptr,
                     upper_rom_unmapped,
+                    fast,
                     sio_ptr,
                     host_read,
                     host_peek,
@@ -2566,6 +2703,7 @@ impl CoreRuntime {
                     keyboard_ptr,
                     lcd_ptr,
                     upper_rom_unmapped,
+                    fast,
                     sio_ptr,
                     host_read,
                     host_peek,
