@@ -31,6 +31,17 @@ impl KeyState {
     fn matrix_code(&self) -> u8 {
         (self.location.column << 3) | (self.location.row & 0x07)
     }
+
+    /// A key with no contact, no debounced level and no pending tick count.
+    /// Scanning such a key changes nothing and it contributes no KIL bit.
+    #[inline]
+    fn is_idle(&self) -> bool {
+        !self.pressed
+            && !self.debounced
+            && self.press_ticks == 0
+            && self.release_ticks == 0
+            && self.repeat_ticks == 0
+    }
 }
 
 // Matrix layout (row-major) copied from the Python keyboard map.
@@ -157,6 +168,9 @@ pub struct KeyboardMatrix {
     repeat_enabled: bool,
     scan_enabled: bool,
     states: Vec<KeyState>,
+    // Bit i is set iff states[i] is not idle; scans and KIL computation skip
+    // idle keys. Every mutation of `states` must keep this exact.
+    live_states: u128,
     // Electrical contacts indexed by row; each bit is a column. Derived from
     // pressed state, never from debounce/FIFO state, and rebuilt on restore.
     physical_columns_by_row: [u16; 8],
@@ -267,6 +281,7 @@ impl KeyboardMatrix {
             repeat_enabled: true,
             scan_enabled: true,
             states: Vec::new(),
+            live_states: 0,
             physical_columns_by_row: [0; 8],
             fifo_storage: [0; FIFO_SIZE],
             fifo_head: 0,
@@ -333,10 +348,34 @@ impl KeyboardMatrix {
         u32::from(self.active_column_mask()) & ((1u32 << COLUMN_COUNT) - 1)
     }
 
+    #[inline]
+    fn sync_live_state(&mut self, idx: usize) {
+        if idx < u128::BITS as usize {
+            let bit = 1u128 << idx;
+            if self.states[idx].is_idle() {
+                self.live_states &= !bit;
+            } else {
+                self.live_states |= bit;
+            }
+        }
+    }
+
+    fn rebuild_live_states(&mut self) {
+        self.live_states = 0;
+        for idx in 0..self.states.len() {
+            self.sync_live_state(idx);
+        }
+    }
+
     pub fn compute_kil(&self, allow_pending: bool) -> u8 {
         let mut value = 0u8;
         let active = self.active_column_mask();
-        for state in &self.states {
+        // Idle keys contribute no bit.
+        let mut live = self.live_states;
+        while live != 0 {
+            let idx = live.trailing_zeros() as usize;
+            live &= live - 1;
+            let state = &self.states[idx];
             if active & (1 << state.location.column) == 0 {
                 continue;
             }
@@ -444,6 +483,7 @@ impl KeyboardMatrix {
                 state.release_ticks = 0;
                 state.repeat_ticks = self.repeat_delay;
             }
+            self.sync_live_state(code as usize);
         }
         let events = self.enqueue_event(code & 0x7F, release, true);
         // Parity: matrix injection is used by host bridges/tests that do not always strobe KOL/KOH.
@@ -574,6 +614,7 @@ impl KeyboardMatrix {
             state.release_ticks = 0;
             state.repeat_ticks = 0;
         }
+        self.live_states = 0;
     }
 
     pub fn fifo_snapshot(&self) -> Vec<u8> {
@@ -824,6 +865,7 @@ impl KeyboardMatrix {
                     1 << state.location.column;
             }
         }
+        self.rebuild_live_states();
         Ok(())
     }
 
@@ -849,6 +891,7 @@ impl KeyboardMatrix {
             state.press_ticks = 0;
             state.release_ticks = 0;
             state.repeat_ticks = self.repeat_delay;
+            self.sync_live_state(code as usize);
             self.kil_latch = self.compute_kil(false);
             // Defer host-event enqueueing to timer-driven scan_tick; do not
             // push KIL into IMEM here. Raw KEYI is sampled independently.
@@ -869,6 +912,7 @@ impl KeyboardMatrix {
             state.press_ticks = 0;
             state.release_ticks = 0;
             state.repeat_ticks = 0;
+            self.sync_live_state(code as usize);
             self.kil_latch = self.compute_kil(false);
             // Defer host-event enqueueing to timer-driven scan_tick.
         }
@@ -929,7 +973,12 @@ impl KeyboardMatrix {
         let emit_events = self.emit_events;
         let active = self.strobed_column_mask();
         let mut events = 0usize;
-        for idx in 0..self.states.len() {
+        // Scanning an idle key is a no-op, so visit only live keys (in index
+        // order, which keeps any enqueued events in the original order).
+        let mut live = self.live_states;
+        while live != 0 {
+            let idx = live.trailing_zeros() as usize;
+            live &= live - 1;
             let mut enqueue: Option<(u8, bool)> = None;
             {
                 let state = &mut self.states[idx];
@@ -973,6 +1022,7 @@ impl KeyboardMatrix {
                     state.repeat_ticks = 0;
                 }
             }
+            self.sync_live_state(idx);
             if emit_events {
                 if let Some((code, release)) = enqueue {
                     events += self.enqueue_event(code, release, count_irq);
@@ -1059,6 +1109,7 @@ mod tests {
             state.debounced = false;
             state.press_ticks = DEFAULT_PRESS_TICKS.saturating_sub(1);
         }
+        kb.sync_live_state(0);
         let kil = kb.handle_read(0xF2, &mut mem).unwrap();
         assert_ne!(kil & 0x01, 0, "row 0 should be set for pending press");
         assert_eq!(kb.kil_read_count, 1);
