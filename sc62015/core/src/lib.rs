@@ -1666,7 +1666,6 @@ impl CoreRuntime {
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
             timer_ptr: *mut TimerContext,
             on_key_ssr_mask: u8,
-            #[cfg(target_arch = "wasm32")]
             tracing_active: bool,
             meta_ptr: *const SnapshotMetadata,
             lcd_bus_capture: *mut LcdBusCapture,
@@ -1754,10 +1753,11 @@ impl CoreRuntime {
                 }
                 self.load(addr, 8) as u8
             }
-            #[cfg(target_arch = "wasm32")]
             fn tracing_active_hint(&self) -> Option<bool> {
-                // Browser JS cannot change tracing while this synchronous
-                // WASM call owns the emulator. Stub callbacks are slice handoffs.
+                // A tracer cannot be installed or removed while this
+                // synchronous call owns the emulator (the scheduler samples
+                // it once per call); in the browser, stub callbacks are
+                // slice handoffs.
                 Some(self.dev().tracing_active)
             }
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
@@ -2202,7 +2202,6 @@ impl CoreRuntime {
                 }),
             timer_ptr: self.timer.as_mut() as *mut TimerContext,
             on_key_ssr_mask,
-            #[cfg(target_arch = "wasm32")]
             tracing_active: perfetto_active,
             meta_ptr: &self.metadata as *const SnapshotMetadata,
             lcd_bus_capture: self
