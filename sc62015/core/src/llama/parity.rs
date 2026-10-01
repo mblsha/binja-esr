@@ -474,7 +474,7 @@ fn reg_to_key(reg: RegName) -> &'static str {
         RegName::FZ => "flag_z",
         RegName::IMR => "reg_imr",
         RegName::Temp(_) => "reg_temp",
-        RegName::Unknown(_) => "reg_unknown",
+        RegName::Unknown => "reg_unknown",
     }
 }
 

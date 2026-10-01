@@ -35,7 +35,7 @@ pub fn mask_for(name: RegName) -> u32 {
         RegName::IMR => 0xFF,
         RegName::FC | RegName::FZ => 0x1,
         RegName::Temp(_) => 0xFFFFFF,
-        RegName::Unknown(_) => 0xFFFF_FFFF,
+        RegName::Unknown => 0xFFFF_FFFF,
     }
 }
 
@@ -178,7 +178,7 @@ impl LlamaState {
             RegName::Temp(index) if usize::from(index) < self.temps.len() => {
                 self.temps[usize::from(index)] = masked;
             }
-            RegName::Temp(_) | RegName::Unknown(_) => self.set_extra_reg(name, masked),
+            RegName::Temp(_) | RegName::Unknown => self.set_extra_reg(name, masked),
         }
     }
 
@@ -217,7 +217,7 @@ impl LlamaState {
             RegName::Temp(index) if usize::from(index) < self.temps.len() => {
                 self.temps[usize::from(index)]
             }
-            RegName::Temp(_) | RegName::Unknown(_) => self.get_extra_reg(name),
+            RegName::Temp(_) | RegName::Unknown => self.get_extra_reg(name),
         }
     }
 

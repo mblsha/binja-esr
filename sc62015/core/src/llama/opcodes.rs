@@ -26,7 +26,7 @@ pub enum RegName {
     FZ,
     IMR,
     Temp(u8),
-    Unknown(&'static str),
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +60,7 @@ pub enum OperandKind {
     RegIMR,
     RegF,
     Reg3,
-    Unknown(&'static str),
+    Unknown,
     Placeholder,
     ImemPtr, // generic IMEM pointer selector (e.g., Reg3)
 }
