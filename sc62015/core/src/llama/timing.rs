@@ -16,7 +16,7 @@ pub enum TimingProvenance {
     ProvisionalBoundary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PreparedInstructionTiming {
     resolved_opcode: u8,
     selector: Option<u8>,

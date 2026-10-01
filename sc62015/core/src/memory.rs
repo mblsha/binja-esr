@@ -535,6 +535,13 @@ impl MemoryImage {
         self.overlays.len() != previous_len
     }
 
+    /// Whether `address` lies in the union span of all overlays.
+    #[inline]
+    fn overlay_span_contains(&self, address: u32) -> bool {
+        self.overlay_span
+            .is_some_and(|(start, end)| address >= start && address <= end)
+    }
+
     // A conservative derived range rejects plain-memory accesses without
     // walking overlays. Addresses inside it retain the original ordered path.
     fn read_overlay_candidates(&self, address: u32) -> &[MemoryOverlay] {
@@ -1326,6 +1333,7 @@ impl MemoryImage {
         })
     }
 
+    #[inline]
     pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
@@ -1333,8 +1341,11 @@ impl MemoryImage {
         if let Some(value) = self.load_internal_value(address, bits) {
             return Some(value);
         }
-        if let Some(value) = self.load_overlay_value(address, bits, pc) {
-            return Some(value);
+        // The overlay path gives up unless an overlay serves the first byte.
+        if self.overlay_span_contains(address) {
+            if let Some(value) = self.load_overlay_value(address, bits, pc) {
+                return Some(value);
+            }
         }
         let address = self.mirror_internal_ram_address(address);
         let bytes = bits.div_ceil(8).max(1) as usize;
@@ -1363,7 +1374,10 @@ impl MemoryImage {
         if self.store_internal_value(address, bits, value).is_some() {
             return Some(());
         }
-        if self.store_overlay_value(address, bits, value, pc).is_some() {
+        // No overlay can accept the first byte outside the overlay span.
+        if self.overlay_span_contains(address)
+            && self.store_overlay_value(address, bits, value, pc).is_some()
+        {
             return Some(());
         }
         let bytes = bits.div_ceil(8).max(1) as usize;
@@ -1462,6 +1476,7 @@ impl MemoryImage {
         record_perfetto("external");
     }
 
+    #[inline(never)]
     fn load_overlay_value(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         let bytes = (bits / 8).max(1) as usize;
         let mut value = 0u32;

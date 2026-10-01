@@ -2293,7 +2293,31 @@ impl LlamaExecutor {
         Ok((decoded.imm.ok_or("missing relative")?.0 as u8, decoded.len))
     }
 
+    #[inline(always)]
     fn decode_with_prefix<B: LlamaBus>(
+        &mut self,
+        entry: &OpcodeEntry,
+        state: &LlamaState,
+        bus: &mut B,
+        pre: Option<&PreModes>,
+        pc_override: Option<u32>,
+        prefix_len: u8,
+    ) -> Result<DecodedOperands, &'static str> {
+        // SAFETY: see `decode_with_prefix_memo`.
+        if let Some(memo) = unsafe { bus.decode_memo_ptr().as_ref() } {
+            if memo.state == DecodeMemoState::Valid
+                && memo.opcode == entry.opcode
+                && memo.pc_override == pc_override
+                && memo.prefix_len == prefix_len
+            {
+                return Ok(Self::replay_decode(memo, bus));
+            }
+        }
+        self.decode_with_prefix_memo(entry, state, bus, pre, pc_override, prefix_len)
+    }
+
+    #[inline(never)]
+    fn decode_with_prefix_memo<B: LlamaBus>(
         &mut self,
         entry: &OpcodeEntry,
         state: &LlamaState,
@@ -2374,7 +2398,7 @@ impl LlamaExecutor {
 
     /// Re-run only the dynamic part of a memoized decode: the IMEM
     /// base-register reads (same calls, same order) and fetch accounting.
-    #[inline]
+    #[inline(always)]
     fn replay_decode<B: LlamaBus>(memo: &DecodeMemo, bus: &mut B) -> DecodedOperands {
         let mut decoded = memo.decoded;
         for slot in &memo.decoded.imem_slots[..usize::from(memo.decoded.imem_slot_count)] {

@@ -21,26 +21,34 @@ use crate::memory::MemoryImage;
 pub(crate) const MAX_CACHED_LEN: usize = 8;
 const ENTRY_COUNT: usize = 1 << 13;
 
+/// Hot per-PC preflight result; `pc == u32::MAX` marks an empty slot.
 #[derive(Clone, Copy)]
 struct Entry {
-    /// Instruction address, or `u32::MAX` for an empty slot.
     pc: u32,
     len: u8,
     /// The validated bytes, little-endian and zero-padded.
     word: u64,
     timing: PreparedInstructionTiming,
-    /// Execution decode memo for these exact bytes (reset on insert).
-    memo: DecodeMemo,
 }
 
+/// Compact lookup table plus a parallel table of execution decode memos
+/// (kept apart so the per-boundary lookup touches only small entries).
 pub(crate) struct PreflightCache {
-    entries: Box<[Option<Entry>]>,
+    entries: Box<[Entry]>,
+    memos: Box<[DecodeMemo]>,
 }
 
 impl Default for PreflightCache {
     fn default() -> Self {
+        let empty = Entry {
+            pc: u32::MAX,
+            len: 0,
+            word: 0,
+            timing: PreparedInstructionTiming::default(),
+        };
         Self {
-            entries: vec![None; ENTRY_COUNT].into_boxed_slice(),
+            entries: vec![empty; ENTRY_COUNT].into_boxed_slice(),
+            memos: vec![DecodeMemo::default(); ENTRY_COUNT].into_boxed_slice(),
         }
     }
 }
@@ -61,7 +69,7 @@ impl PreflightCache {
         memory: &MemoryImage,
     ) -> Option<(u8, PreparedInstructionTiming, usize)> {
         let slot = Self::slot(pc);
-        let entry = self.entries[slot].as_ref()?;
+        let entry = &self.entries[slot];
         if entry.pc != pc {
             return None;
         }
@@ -73,11 +81,7 @@ impl PreflightCache {
     /// while that entry is not replaced.
     #[inline]
     pub(crate) fn memo_ptr(&mut self, slot: usize) -> *mut DecodeMemo {
-        self.entries[slot]
-            .as_mut()
-            .map_or(std::ptr::null_mut(), |entry| {
-                &mut entry.memo as *mut DecodeMemo
-            })
+        &mut self.memos[slot] as *mut DecodeMemo
     }
 
     /// Record a successful preflight of the instruction at `pc`, returning
@@ -90,7 +94,7 @@ impl PreflightCache {
         memory: &MemoryImage,
     ) -> Option<usize> {
         let len_usize = usize::from(len);
-        if len_usize == 0 || len_usize > MAX_CACHED_LEN {
+        if len_usize == 0 || len_usize > MAX_CACHED_LEN || pc == u32::MAX {
             return None;
         }
         let word = memory.plain_upper_rom_word(pc, len_usize)?;
@@ -98,13 +102,13 @@ impl PreflightCache {
             return None;
         }
         let slot = Self::slot(pc);
-        self.entries[slot] = Some(Entry {
+        self.entries[slot] = Entry {
             pc,
             len,
             word,
             timing,
-            memo: DecodeMemo::default(),
-        });
+        };
+        self.memos[slot] = DecodeMemo::default();
         Some(slot)
     }
 }
