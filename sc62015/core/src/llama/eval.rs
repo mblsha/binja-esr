@@ -41,7 +41,8 @@ pub struct PerfettoCallStack {
 /// to publish a false context into each other's memory and trace callbacks.
 /// The fields share one thread-local so the per-instruction publish costs a
 /// single TLS lookup.
-struct ExecContext {
+#[doc(hidden)]
+pub struct ExecContext {
     current_pc: Cell<u32>,
     current_op: Cell<u64>,
     substep: Cell<u32>,
@@ -90,14 +91,35 @@ impl Drop for PreflightGuard {
     }
 }
 
-struct PerfettoContextGuard;
+/// This thread's execution context. Valid for the life of the thread, so a
+/// caller that stays on one thread may cache it (see `LlamaBus::exec_context`).
+pub(crate) fn exec_context_ptr() -> *const ExecContext {
+    EXEC_CONTEXT.with(|ctx| ctx as *const ExecContext)
+}
+
+/// Run `f` on this thread's execution context, using the bus's cached
+/// pointer when it has one (each `thread_local!` access can be a call).
+#[inline(always)]
+fn with_exec_context<B: LlamaBus + ?Sized, R>(bus: &B, f: impl FnOnce(&ExecContext) -> R) -> R {
+    let cached = bus.exec_context();
+    if cached.is_null() {
+        EXEC_CONTEXT.with(f)
+    } else {
+        // SAFETY: `exec_context` returns this thread's context pointer.
+        f(unsafe { &*cached })
+    }
+}
+
+struct PerfettoContextGuard(*const ExecContext);
 impl Drop for PerfettoContextGuard {
     fn drop(&mut self) {
-        EXEC_CONTEXT.with(|ctx| {
+        // SAFETY: built from this thread's context pointer.
+        let ctx = unsafe { &*self.0 };
+        {
             ctx.current_op.set(u64::MAX);
             ctx.current_pc.set(u32::MAX);
             ctx.substep.set(0);
-        });
+        }
     }
 }
 
@@ -486,6 +508,11 @@ pub trait LlamaBus {
     /// Reproduce the side effects of `count` instruction-byte fetches that a
     /// memoized decode skipped.
     fn account_instruction_fetches(&mut self, _count: u8) {}
+    /// This thread's execution context, cached by a bus that runs only on
+    /// the calling thread for its whole lifetime; null to look it up.
+    fn exec_context(&self) -> *const ExecContext {
+        std::ptr::null()
+    }
 }
 
 /// Adapter used by instruction validation. Its `load` path is assembled from
@@ -3353,7 +3380,7 @@ impl LlamaExecutor {
             PERF_INSTR_COUNTER.load(Ordering::Relaxed)
         };
         let call_stack_stamp = state.call_stack_stamp();
-        EXEC_CONTEXT.with(|ctx| {
+        with_exec_context(bus, |ctx| {
             ctx.last_pc.set(trace_pc_snapshot);
             // Equal stamps imply an identical call stack, so the published
             // snapshot is already current.
@@ -3383,11 +3410,12 @@ impl LlamaExecutor {
             state.set_reg(RegName::IMR, mem_imr as u32);
         }
 
-        EXEC_CONTEXT.with(|ctx| {
+        let ctx_ptr = with_exec_context(bus, |ctx| {
             ctx.current_op.set(instr_index);
             ctx.current_pc.set(trace_pc_snapshot);
+            ctx as *const ExecContext
         });
-        let _ctx_guard = PerfettoContextGuard;
+        let _ctx_guard = PerfettoContextGuard(ctx_ptr);
         let trace_regs = bus
             .tracing_active_hint()
             .unwrap_or_else(|| PERFETTO_TRACER.is_installed())
