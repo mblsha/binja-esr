@@ -2804,7 +2804,7 @@ impl CoreRuntime {
                     .unwrap_or(0);
                 let (mti_ticks, sti_ticks) = self.timer.tick_counts(new_cycle);
                 self.executor.emit_deferred_instruction_trace(
-                    trace,
+                    *trace,
                     mem_imr,
                     mem_isr,
                     Some(TimerTrace {
