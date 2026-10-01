@@ -1139,6 +1139,7 @@ impl MemoryImage {
         self.write_log.borrow().iter().cloned().collect()
     }
 
+    #[inline]
     pub fn requires_python(&self, address: u32) -> bool {
         let address = canonical_address(address);
         if Self::is_internal(address) {
@@ -1258,6 +1259,7 @@ impl MemoryImage {
     /// handling can intercept it. Read live backing storage (never cached bytes)
     /// and preserve architectural read accounting. Device routing is the caller's
     /// responsibility; this window cannot intersect the internal RAM mirror.
+    #[inline]
     pub(crate) fn fetch_plain_rom_byte(&self, address: u32) -> Option<u8> {
         let value = self.peek_plain_rom_byte(address)?;
         self.bump_read_count();
@@ -1266,6 +1268,7 @@ impl MemoryImage {
 
     /// Silent counterpart of the architectural ROM fetch. The caller must
     /// still exclude device mappings; never account a preflight as a bus read.
+    #[inline]
     pub(crate) fn peek_plain_rom_byte(&self, address: u32) -> Option<u8> {
         if !(0xc0000..=0xfffff).contains(&address)
             || self.requires_python(address)
@@ -1635,11 +1638,13 @@ impl MemoryImage {
         }
     }
 
+    #[inline]
     pub fn is_internal(address: u32) -> bool {
         let address = canonical_address(address);
         address >= INTERNAL_MEMORY_START && address < INTERNAL_MEMORY_START + INTERNAL_SPACE as u32
     }
 
+    #[inline]
     pub fn internal_index(address: u32) -> Option<usize> {
         let address = canonical_address(address);
         if address >= INTERNAL_MEMORY_START
@@ -1650,6 +1655,7 @@ impl MemoryImage {
         None
     }
 
+    #[inline]
     pub fn internal_offset(address: u32) -> Option<u32> {
         Self::internal_index(address).map(|idx| idx as u32)
     }
@@ -1658,6 +1664,7 @@ impl MemoryImage {
         matches!(offset, 0xF0..=0xF2)
     }
 
+    #[inline]
     pub fn load_internal_value(&self, address: u32, bits: u8) -> Option<u32> {
         let bytes = bits.div_ceil(8).max(1) as usize;
         let index = Self::internal_index(address)?;
@@ -1672,27 +1679,34 @@ impl MemoryImage {
             && crate::PERFETTO_TRACER.is_installed()
             && !imr_read_suppressed()
         {
-            let mut guard = perfetto_guard();
-            guard.with_some(|tracer| {
-                let ctx = crate::llama::eval::perfetto_instr_context();
-                let (op_idx, pc) = ctx.unwrap_or((
-                    crate::llama::eval::perfetto_last_instr_index(),
-                    crate::llama::eval::perfetto_last_pc(),
-                ));
-                tracer.record_imr_read(
-                    if op_idx == u64::MAX { None } else { Some(pc) },
-                    value as u8,
-                    if op_idx == u64::MAX {
-                        None
-                    } else {
-                        Some(op_idx)
-                    },
-                );
-            });
+            Self::trace_imr_load(value);
         }
         Some(value)
     }
 
+    #[cold]
+    #[inline(never)]
+    fn trace_imr_load(value: u32) {
+        let mut guard = perfetto_guard();
+        guard.with_some(|tracer| {
+            let ctx = crate::llama::eval::perfetto_instr_context();
+            let (op_idx, pc) = ctx.unwrap_or((
+                crate::llama::eval::perfetto_last_instr_index(),
+                crate::llama::eval::perfetto_last_pc(),
+            ));
+            tracer.record_imr_read(
+                if op_idx == u64::MAX { None } else { Some(pc) },
+                value as u8,
+                if op_idx == u64::MAX {
+                    None
+                } else {
+                    Some(op_idx)
+                },
+            );
+        });
+    }
+
+    #[inline]
     pub fn write_internal_byte(&mut self, offset: u32, value: u8) {
         if offset < INTERNAL_SPACE as u32 {
             let index = offset as usize;
@@ -1704,51 +1718,43 @@ impl MemoryImage {
             self.record_write_capture(INTERNAL_MEMORY_START + offset, value);
             self.mark_internal_dirty(INTERNAL_MEMORY_START + offset, value);
             self.invoke_imr_isr_hook(offset, prev, value);
-            let mut guard = perfetto_guard();
-            guard.with_some(|tracer| {
-                let (seq, pc) = perfetto_context_or_last();
-                let substep = crate::llama::eval::perfetto_next_substep();
-                tracer.record_mem_write_with_substep(
-                    seq,
-                    pc,
-                    INTERNAL_MEMORY_START + offset,
-                    value as u32,
-                    "internal",
-                    8,
-                    substep,
-                );
-                // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
-                if offset == 0xFC && (value & 0x04) != 0 {
-                    tracer.record_keyi_set(
-                        INTERNAL_MEMORY_START + offset,
-                        value,
-                        Some(seq),
-                        Some(pc),
-                    );
-                }
-            });
+            if crate::PERFETTO_TRACER.is_installed() {
+                Self::trace_internal_write(offset, value);
+            }
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    fn trace_internal_write(offset: u32, value: u8) {
+        let mut guard = perfetto_guard();
+        guard.with_some(|tracer| {
+            let (seq, pc) = perfetto_context_or_last();
+            let substep = crate::llama::eval::perfetto_next_substep();
+            tracer.record_mem_write_with_substep(
+                seq,
+                pc,
+                INTERNAL_MEMORY_START + offset,
+                value as u32,
+                "internal",
+                8,
+                substep,
+            );
+            // Diagnostic: emit KEYI_Set via perfetto when ISR is written with KEYI set.
+            if offset == 0xFC && (value & 0x04) != 0 {
+                tracer.record_keyi_set(INTERNAL_MEMORY_START + offset, value, Some(seq), Some(pc));
+            }
+        });
+    }
+
+    #[inline]
     pub fn read_internal_byte(&self, offset: u32) -> Option<u8> {
         if offset < INTERNAL_SPACE as u32 {
             self.memory_reads
                 .set(self.memory_reads.get().saturating_add(1));
             let val = self.internal[offset as usize];
             if offset == 0xFB && crate::PERFETTO_TRACER.is_installed() && !imr_read_suppressed() {
-                let mut guard = perfetto_guard();
-                guard.with_some(|tracer| {
-                    let (op_idx, pc) = perfetto_context_or_last();
-                    tracer.record_imr_read(
-                        if op_idx == u64::MAX { None } else { Some(pc) },
-                        val,
-                        if op_idx == u64::MAX {
-                            None
-                        } else {
-                            Some(op_idx)
-                        },
-                    );
-                });
+                Self::trace_imr_read_byte(val);
             }
             if (0xF0..=0xF2).contains(&offset) {
                 self.log_kio_read(offset, val);
@@ -1759,9 +1765,28 @@ impl MemoryImage {
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    fn trace_imr_read_byte(val: u8) {
+        let mut guard = perfetto_guard();
+        guard.with_some(|tracer| {
+            let (op_idx, pc) = perfetto_context_or_last();
+            tracer.record_imr_read(
+                if op_idx == u64::MAX { None } else { Some(pc) },
+                val,
+                if op_idx == u64::MAX {
+                    None
+                } else {
+                    Some(op_idx)
+                },
+            );
+        });
+    }
+
     /// Read an internal byte without emitting perfetto diagnostics. Intended for
     /// tracing-only snapshots (e.g., IMR/ISR sampling) to avoid creating extra
     /// IMR_Read events.
+    #[inline]
     pub fn read_internal_byte_silent(&self, offset: u32) -> Option<u8> {
         if offset < INTERNAL_SPACE as u32 {
             Some(self.internal[offset as usize])
@@ -1770,11 +1795,13 @@ impl MemoryImage {
         }
     }
 
+    #[inline]
     pub fn bump_read_count_by(&self, count: u64) {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(count));
     }
 
+    #[inline]
     pub fn bump_read_count(&self) {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
