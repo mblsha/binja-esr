@@ -1486,6 +1486,7 @@ impl LlamaExecutor {
         });
     }
 
+    #[inline]
     fn store_traced<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8, value: u32) {
         let bytes = bits.div_ceil(8).max(1);
         // SC62015 memory transfers are observable as ordered byte accesses,
@@ -1540,6 +1541,7 @@ impl LlamaExecutor {
         bytes.saturating_mul(8)
     }
 
+    #[inline]
     fn read_reg<B: LlamaBus>(state: &mut LlamaState, bus: &mut B, reg: RegName) -> u32 {
         if reg == RegName::IMR {
             let val = bus.peek_imem(IMEM_IMR_OFFSET) as u32;
@@ -1549,6 +1551,7 @@ impl LlamaExecutor {
         state.get_reg(reg)
     }
 
+    #[inline]
     fn fetch_byte<B: LlamaBus>(bus: &mut B, addr: u32) -> u8 {
         // The instruction stream is in the 20-bit external address space.
         // Fetching an operand after PC=0xFFFFF wraps to external 0x00000;
@@ -1622,6 +1625,7 @@ impl LlamaExecutor {
         (INTERNAL_MEMORY_START..(INTERNAL_MEMORY_START + 0x100)).contains(&addr)
     }
 
+    #[inline]
     fn load_wrapped<B: LlamaBus>(bus: &mut B, addr: u32, bits: u8) -> u32 {
         let bytes = bits.div_ceil(8).max(1);
         // PC-E500 HW-007 observes F1/F2 pointer-source reads as one bus access
