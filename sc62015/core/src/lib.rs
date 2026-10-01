@@ -1705,6 +1705,8 @@ impl CoreRuntime {
             tracing_active: bool,
             meta_ptr: *const SnapshotMetadata,
             lcd_bus_capture: *mut LcdBusCapture,
+            /// This thread's executor context (the call runs on one thread).
+            exec_context: *const crate::llama::eval::ExecContext,
         }
         struct RuntimeBus<'a> {
             mem: &'a mut MemoryImage,
@@ -2168,6 +2170,9 @@ impl CoreRuntime {
             fn decode_memo_ptr(&self) -> *mut crate::llama::eval::DecodeMemo {
                 self.decode_memo
             }
+            fn exec_context(&self) -> *const crate::llama::eval::ExecContext {
+                self.dev().exec_context
+            }
             fn account_instruction_fetches(&mut self, count: u8) {
                 // A memo is only exposed for plain upper-ROM bytes, whose
                 // fetch_instruction_byte effect is a single read count.
@@ -2246,6 +2251,7 @@ impl CoreRuntime {
                 .map_or(std::ptr::null_mut(), |capture| {
                     capture as *mut LcdBusCapture
                 }),
+            exec_context: crate::llama::eval::exec_context_ptr(),
         };
         // The quiet steady-state path below needs untraced execution, no loop
         // detector observation, and the memoized-ROM proof's unmapped window.
