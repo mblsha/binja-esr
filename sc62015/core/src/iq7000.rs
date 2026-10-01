@@ -2792,7 +2792,21 @@ impl Iq7000RtcPeripheral {
         (consumed, false)
     }
 
+    #[inline]
     pub fn advance_timing_units(&mut self, timing_units: u64, timebase_hz: u64) -> bool {
+        if timing_units != 0
+            && timebase_hz != 0
+            && timing_units < timebase_hz.saturating_sub(self.subsecond_timing_units)
+        {
+            // Within the current second: no clock or alarm state can change.
+            self.subsecond_timing_units += timing_units;
+            return false;
+        }
+        self.advance_timing_units_slow(timing_units, timebase_hz)
+    }
+
+    #[inline(never)]
+    fn advance_timing_units_slow(&mut self, timing_units: u64, timebase_hz: u64) -> bool {
         let was_asserted = self.alarm_wake_level();
         let mut remaining = timing_units;
         while remaining != 0 {
