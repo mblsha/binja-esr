@@ -2507,11 +2507,15 @@ impl CoreRuntime {
             }
 
             let in_interrupt_before = self.timer.in_interrupt;
-            let irq_source_before = self
-                .timer
-                .irq_source
-                .as_deref()
-                .map(LoopIrqSource::from_name);
+            // Only the loop detector consumes this classification.
+            let irq_source_before = if self.loop_detector.is_some() {
+                self.timer
+                    .irq_source
+                    .as_deref()
+                    .map(LoopIrqSource::from_name)
+            } else {
+                None
+            };
 
             let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
             let (prepared_opcode, prepared_transfer, prepared_timing) = prepared_instruction

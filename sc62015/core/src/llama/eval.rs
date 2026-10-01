@@ -3047,7 +3047,9 @@ impl LlamaExecutor {
             entry = self.lookup(next_opcode);
         }
 
-        if let (Some(pre_modes), Some(resolved_entry)) = (pre_modes_opt.as_ref(), entry) {
+        if let (false, Some(pre_modes), Some(resolved_entry)) =
+            (prevalidated, pre_modes_opt.as_ref(), entry)
+        {
             validate_canonical_pre(
                 effective_pre_opcode.ok_or("missing PRE opcode")?,
                 pre_modes,
