@@ -21,6 +21,11 @@ pub struct PreparedInstructionTiming {
     resolved_opcode: u8,
     selector: Option<u8>,
     prefix_count: u8,
+    // `timing_formula` evaluated once at preparation: base cost (including
+    // fused PRE bytes) for a not-taken / taken branch, and the per-I cost.
+    base_not_taken: u32,
+    base_taken: u32,
+    per_i: u32,
 }
 
 impl PreparedInstructionTiming {
@@ -55,25 +60,37 @@ impl PreparedInstructionTiming {
         if selector_is_timing_relevant(opcode) && selector.is_none() {
             return Err("instruction timing requires a stable selector byte");
         }
+        let (base_not_taken, per_i, _) = timing_formula(opcode, selector, false);
+        let (base_taken, per_i_taken, _) = timing_formula(opcode, selector, true);
+        debug_assert_eq!(per_i, per_i_taken);
+        let with_prefix =
+            |base: u64| u32::try_from(u64::from(prefix_count).saturating_add(base)).unwrap();
         Ok(Self {
             resolved_opcode: opcode,
             selector,
             prefix_count,
+            base_not_taken: with_prefix(base_not_taken),
+            base_taken: with_prefix(base_taken),
+            per_i: u32::try_from(per_i).unwrap(),
         })
     }
 
+    #[inline]
     pub fn timing_units(self, initial_i: u16, branch_taken: bool) -> u64 {
-        let (base, per_i, provenance) =
-            timing_formula(self.resolved_opcode, self.selector, branch_taken);
+        let base = if branch_taken {
+            self.base_taken
+        } else {
+            self.base_not_taken
+        };
+        if self.per_i == 0 {
+            return u64::from(base);
+        }
         let iterations = if initial_i == 0 {
             FULL_I_COUNT
         } else {
             u64::from(initial_i)
         };
-        let _ = provenance;
-        u64::from(self.prefix_count)
-            .saturating_add(base)
-            .saturating_add(per_i.saturating_mul(iterations))
+        u64::from(base).saturating_add(u64::from(self.per_i).saturating_mul(iterations))
     }
 
     pub fn provenance(self) -> TimingProvenance {
