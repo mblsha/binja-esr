@@ -1042,10 +1042,23 @@ impl CoreRuntime {
         }
     }
 
+    #[inline]
     fn refresh_sio_interrupts(&mut self) {
-        if self.sio.is_none() {
-            return;
+        // Only a ready receiver can add an ISR bit; otherwise this is a no-op.
+        if self.sio.is_some()
+            && self
+                .memory
+                .read_internal_byte_silent(IMEM_USR_OFFSET)
+                .unwrap_or(0)
+                & USR_RX_READY
+                != 0
+        {
+            self.refresh_sio_interrupts_rx_ready();
         }
+    }
+
+    #[inline(never)]
+    fn refresh_sio_interrupts_rx_ready(&mut self) {
         let usr = self
             .memory
             .read_internal_byte_silent(IMEM_USR_OFFSET)
@@ -1134,10 +1147,15 @@ impl CoreRuntime {
         self.external_interrupt_level
     }
 
+    #[inline]
     fn refresh_external_interrupt_level(&mut self) {
-        if !self.external_interrupt_level {
-            return;
+        if self.external_interrupt_level {
+            self.refresh_external_interrupt_level_asserted();
         }
+    }
+
+    #[inline(never)]
+    fn refresh_external_interrupt_level_asserted(&mut self) {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & ISR_EXI) == 0 {
             self.memory
@@ -1349,10 +1367,15 @@ impl CoreRuntime {
         }
     }
 
+    #[inline]
     fn refresh_on_key_interrupt_level(&mut self) {
-        if !self.effective_onk_level() {
-            return;
+        if self.effective_onk_level() {
+            self.refresh_on_key_interrupt_level_asserted();
         }
+    }
+
+    #[inline(never)]
+    fn refresh_on_key_interrupt_level_asserted(&mut self) {
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & ISR_ONKI) == 0 {
             self.memory
@@ -1417,6 +1440,7 @@ impl CoreRuntime {
         self.memory.write_internal_byte(0xF6, high);
     }
 
+    #[inline]
     fn raw_selected_kil(&self) -> u8 {
         // LCC.KSD disconnects keyboard scanning. Otherwise the physical level
         // is independent of debounce/FIFO policy and IMR.
@@ -1434,28 +1458,34 @@ impl CoreRuntime {
             .map_or(0, KeyboardMatrix::compute_physical_kil)
     }
 
+    #[inline]
     fn refresh_raw_key_irq_level(&mut self) {
         if self.raw_selected_kil() != 0 {
-            let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-            if (isr & ISR_KEYI) == 0 {
-                let new_isr = isr | ISR_KEYI;
-                self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
-                self.timer
-                    .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
-                self.timer.irq_isr = new_isr;
-            } else {
-                self.timer.irq_isr = isr;
-            }
-            self.timer.irq_pending = true;
-            if !self.timer.in_interrupt && self.timer.irq_source.is_none() {
-                self.timer.irq_source = Some("KEY".to_string());
-            }
-            self.timer.last_fired.clone_from(&self.timer.irq_source);
-            self.timer.irq_imr = self
-                .memory
-                .read_internal_byte(IMEM_IMR_OFFSET)
-                .unwrap_or(self.timer.irq_imr);
+            self.refresh_raw_key_irq_level_asserted();
         }
+    }
+
+    #[inline(never)]
+    fn refresh_raw_key_irq_level_asserted(&mut self) {
+        let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+        if (isr & ISR_KEYI) == 0 {
+            let new_isr = isr | ISR_KEYI;
+            self.memory.write_internal_byte(IMEM_ISR_OFFSET, new_isr);
+            self.timer
+                .record_bit_watch_transition("ISR", isr, new_isr, perfetto_last_pc());
+            self.timer.irq_isr = new_isr;
+        } else {
+            self.timer.irq_isr = isr;
+        }
+        self.timer.irq_pending = true;
+        if !self.timer.in_interrupt && self.timer.irq_source.is_none() {
+            self.timer.irq_source = Some("KEY".to_string());
+        }
+        self.timer.last_fired.clone_from(&self.timer.irq_source);
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
     }
 
     pub(crate) fn tick_timers_and_keyboard(&mut self, cycle: u64) {
@@ -1505,14 +1535,19 @@ impl CoreRuntime {
         }
     }
 
+    #[inline]
     fn arm_pending_irq_from_isr(&mut self) {
         if self.timer.irq_pending {
             return;
         }
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-        if isr == 0 {
-            return;
+        if isr != 0 {
+            self.arm_pending_irq_from_asserted_isr(isr);
         }
+    }
+
+    #[inline(never)]
+    fn arm_pending_irq_from_asserted_isr(&mut self, isr: u8) {
         let isr_effective = isr;
         let imr = self.memory.read_internal_byte(IMEM_IMR_OFFSET).unwrap_or(0);
         // Parity: Python marks irq_pending as soon as ISR bits are asserted, even if IMR master is 0
