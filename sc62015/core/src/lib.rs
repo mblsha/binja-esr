@@ -1681,6 +1681,8 @@ impl CoreRuntime {
             onk_level: bool,
             /// Record LCD bus writes (execution only, never preflight).
             capture_lcd: bool,
+            /// Decode memo for the executing stable-ROM instruction, or null.
+            decode_memo: *mut crate::llama::eval::DecodeMemo,
             cycle: u64,
             pc: u32,
         }
@@ -2127,6 +2129,14 @@ impl CoreRuntime {
             fn supports_timer_phase_clear(&self) -> bool {
                 !self.dev().timer_ptr.is_null()
             }
+            fn decode_memo_ptr(&self) -> *mut crate::llama::eval::DecodeMemo {
+                self.decode_memo
+            }
+            fn account_instruction_fetches(&mut self, count: u8) {
+                // A memo is only exposed for plain upper-ROM bytes, whose
+                // fetch_instruction_byte effect is a single read count.
+                self.mem.bump_read_count_by(u64::from(count));
+            }
             fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
                 unsafe {
                     if let Some(timer) = self.dev().timer_ptr.as_mut() {
@@ -2236,6 +2246,7 @@ impl CoreRuntime {
                     fast,
                     onk_level,
                     capture_lcd: false,
+                    decode_memo: std::ptr::null_mut(),
                     cycle: self.metadata.cycle_count,
                     pc: pc,
                 };
@@ -2249,8 +2260,9 @@ impl CoreRuntime {
                     } else {
                         None
                     };
-                let silent_prepared_opcode = if cached_preflight.is_some() {
-                    cached_preflight
+                let silent_prepared_opcode = if let Some((opcode, timing, slot)) = cached_preflight
+                {
+                    Some((opcode, timing, Some(slot)))
                 } else if should_preflight && !irq_transfer_selected {
                     let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
                         CoreError::Other(format!(
@@ -2313,11 +2325,13 @@ impl CoreRuntime {
                             "preflight timing for opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
                         ))
                     })?;
-                    if upper_rom_unmapped {
+                    let memo_slot = if upper_rom_unmapped {
                         self.preflight_cache
-                            .insert(pc, instruction_len, timing, bus.mem);
-                    }
-                    Some((silent_opcode, timing))
+                            .insert(pc, instruction_len, timing, bus.mem)
+                    } else {
+                        None
+                    };
+                    Some((silent_opcode, timing, memo_slot))
                 } else {
                     None
                 };
@@ -2354,7 +2368,7 @@ impl CoreRuntime {
                     let _discarded_opcode = bus.fetch_instruction_byte(pc);
                 }
 
-                if let Some((silent_opcode, timing)) = silent_prepared_opcode {
+                if let Some((silent_opcode, timing, memo_slot)) = silent_prepared_opcode {
                     let opcode = bus.fetch_instruction_byte(pc);
                     if opcode != silent_opcode {
                         return Err(CoreError::Other(format!(
@@ -2385,7 +2399,7 @@ impl CoreRuntime {
                         ),
                         _ => None,
                     };
-                    Some((opcode, transfer, timing))
+                    Some((opcode, transfer, timing, memo_slot))
                 } else {
                     None
                 }
@@ -2675,8 +2689,8 @@ impl CoreRuntime {
             };
 
             let pc_before = self.state.get_reg(RegName::PC) & ADDRESS_MASK;
-            let (prepared_opcode, prepared_transfer, prepared_timing) = prepared_instruction
-                .ok_or_else(|| {
+            let (prepared_opcode, prepared_transfer, prepared_timing, memo_slot) =
+                prepared_instruction.ok_or_else(|| {
                     CoreError::Other(
                         "running CPU reached execution without a prepared opcode".to_string(),
                     )
@@ -2691,6 +2705,9 @@ impl CoreRuntime {
                     fast,
                     onk_level,
                     capture_lcd: true,
+                    decode_memo: memo_slot.map_or(std::ptr::null_mut(), |slot| {
+                        self.preflight_cache.memo_ptr(slot)
+                    }),
                     cycle: self.metadata.cycle_count,
                     pc: pc_before,
                 };

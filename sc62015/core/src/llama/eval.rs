@@ -471,6 +471,17 @@ pub trait LlamaBus {
     fn cycle_count(&mut self) -> Option<u64> {
         None
     }
+    /// Memo slot for the instruction being executed, or null. A bus returns
+    /// a slot only when every byte of the instruction is stable plain memory
+    /// identical to the bytes the slot was recorded for, and when each
+    /// `fetch_instruction_byte` of those bytes has no effect beyond what
+    /// `account_instruction_fetches` reproduces.
+    fn decode_memo_ptr(&self) -> *mut DecodeMemo {
+        std::ptr::null_mut()
+    }
+    /// Reproduce the side effects of `count` instruction-byte fetches that a
+    /// memoized decode skipped.
+    fn account_instruction_fetches(&mut self, _count: u8) {}
 }
 
 /// Adapter used by instruction validation. Its `load` path is assembled from
@@ -581,6 +592,111 @@ struct DecodedOperands {
     transfer: Option<EmemImemTransfer>,
     reg3: Option<RegName>,
     reg_pair: Option<(RegName, RegName, u8)>, // (dst, src, bits)
+    /// IMem/IMemWidth operands in decode order, so a memoized decode can
+    /// recompute their base-register-relative addresses.
+    imem_slots: [ImemSlot; 2],
+    imem_slot_count: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ImemSlot {
+    /// false: `mem`, true: `mem2`.
+    second: bool,
+    mode: AddressingMode,
+    raw: u8,
+}
+
+impl Default for ImemSlot {
+    fn default() -> Self {
+        Self {
+            second: false,
+            mode: AddressingMode::N,
+            raw: 0,
+        }
+    }
+}
+
+/// Memoized execution decode of one stable instruction (see
+/// `LlamaBus::decode_memo_ptr`). Only operand forms whose decode depends on
+/// nothing but the instruction bytes and IMEM base registers are memoized.
+#[derive(Clone, Copy, Default)]
+pub struct DecodeMemo {
+    state: DecodeMemoState,
+    opcode: u8,
+    pc_override: Option<u32>,
+    prefix_len: u8,
+    /// Architectural instruction-byte fetches the decode performs.
+    fetches: u8,
+    decoded: DecodedOperands,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum DecodeMemoState {
+    #[default]
+    Empty,
+    Valid,
+    Unsupported,
+}
+
+/// Counts architectural instruction fetches made through it.
+struct FetchCountingBus<'a, B: LlamaBus> {
+    inner: &'a mut B,
+    fetches: u32,
+}
+
+impl<B: LlamaBus> LlamaBus for FetchCountingBus<'_, B> {
+    fn tracing_active_hint(&self) -> Option<bool> {
+        self.inner.tracing_active_hint()
+    }
+    fn load(&mut self, addr: u32, bits: u8) -> u32 {
+        self.inner.load(addr, bits)
+    }
+    fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
+        self.fetches += 1;
+        self.inner.fetch_instruction_byte(addr)
+    }
+    fn store(&mut self, addr: u32, bits: u8, value: u32) {
+        self.inner.store(addr, bits, value)
+    }
+    fn peek_byte_silent(&mut self, addr: u32) -> Option<u8> {
+        self.inner.peek_byte_silent(addr)
+    }
+    fn peek_byte_silent_at(&mut self, addr: u32, context_pc: u32) -> Option<u8> {
+        self.inner.peek_byte_silent_at(addr, context_pc)
+    }
+    fn vector_transfer_provenance(&self) -> (usize, u64) {
+        self.inner.vector_transfer_provenance()
+    }
+    fn instruction_byte_is_stable(&self, addr: u32) -> bool {
+        self.inner.instruction_byte_is_stable(addr)
+    }
+    fn resolve_emem(&mut self, base: u32) -> u32 {
+        self.inner.resolve_emem(base)
+    }
+    fn peek_imem(&mut self, offset: u32) -> u8 {
+        self.inner.peek_imem(offset)
+    }
+    fn peek_imem_silent(&mut self, offset: u32) -> u8 {
+        self.inner.peek_imem_silent(offset)
+    }
+    fn wait_cycles(&mut self, cycles: u32) {
+        self.inner.wait_cycles(cycles)
+    }
+    fn supports_wait_cycles(&self) -> bool {
+        self.inner.supports_wait_cycles()
+    }
+    fn supports_timer_phase_clear(&self) -> bool {
+        self.inner.supports_timer_phase_clear()
+    }
+    fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
+        self.inner.clear_timer_phases(clear_sti, clear_mti)
+    }
+    fn timer_trace(&mut self) -> Option<TimerTrace> {
+        self.inner.timer_trace()
+    }
+    fn cycle_count(&mut self) -> Option<u64> {
+        self.inner.cycle_count()
+    }
 }
 
 fn read_imem_byte<B: LlamaBus>(bus: &mut B, offset: u32) -> u8 {
@@ -1837,11 +1953,6 @@ impl LlamaExecutor {
                 }
                 OperandKind::IMem(bits) => {
                     let raw = u32::from(Self::fetch_byte(bus, pc + offset));
-                    let slot = if decoded.mem.is_none() {
-                        &mut decoded.mem
-                    } else {
-                        &mut decoded.mem2
-                    };
                     let mode_index = if single_pre || single_pre_operand {
                         0
                     } else {
@@ -1849,6 +1960,19 @@ impl LlamaExecutor {
                     };
                     let imem_mode = mode_for_operand(pre, mode_index);
                     validate_imem_selector(imem_mode, raw as u8)?;
+                    if usize::from(decoded.imem_slot_count) < decoded.imem_slots.len() {
+                        decoded.imem_slots[usize::from(decoded.imem_slot_count)] = ImemSlot {
+                            second: decoded.mem.is_some(),
+                            mode: imem_mode,
+                            raw: raw as u8,
+                        };
+                        decoded.imem_slot_count += 1;
+                    }
+                    let slot = if decoded.mem.is_none() {
+                        &mut decoded.mem
+                    } else {
+                        &mut decoded.mem2
+                    };
                     *slot = Some(MemOperand {
                         addr: imem_addr_for_mode(bus, imem_mode, raw as u8),
                         bits: *bits,
@@ -1859,11 +1983,6 @@ impl LlamaExecutor {
                 OperandKind::IMemWidth(bytes) => {
                     let bits = Self::bits_from_bytes(*bytes);
                     let raw = u32::from(Self::fetch_byte(bus, pc + offset));
-                    let slot = if decoded.mem.is_none() {
-                        &mut decoded.mem
-                    } else {
-                        &mut decoded.mem2
-                    };
                     let mode_index = if single_pre || single_pre_operand {
                         0
                     } else {
@@ -1871,6 +1990,19 @@ impl LlamaExecutor {
                     };
                     let imem_mode = mode_for_operand(pre, mode_index);
                     validate_imem_selector(imem_mode, raw as u8)?;
+                    if usize::from(decoded.imem_slot_count) < decoded.imem_slots.len() {
+                        decoded.imem_slots[usize::from(decoded.imem_slot_count)] = ImemSlot {
+                            second: decoded.mem.is_some(),
+                            mode: imem_mode,
+                            raw: raw as u8,
+                        };
+                        decoded.imem_slot_count += 1;
+                    }
+                    let slot = if decoded.mem.is_none() {
+                        &mut decoded.mem
+                    } else {
+                        &mut decoded.mem2
+                    };
                     *slot = Some(MemOperand {
                         addr: imem_addr_for_mode(bus, imem_mode, raw as u8),
                         bits,
@@ -2166,9 +2298,94 @@ impl LlamaExecutor {
         pc_override: Option<u32>,
         prefix_len: u8,
     ) -> Result<DecodedOperands, &'static str> {
+        let memo_ptr = bus.decode_memo_ptr();
+        // SAFETY: a non-null memo slot outlives the bus call that exposes it
+        // and is not otherwise accessed while this instruction executes.
+        if let Some(memo) = unsafe { memo_ptr.as_mut() } {
+            match memo.state {
+                DecodeMemoState::Valid
+                    if memo.opcode == entry.opcode
+                        && memo.pc_override == pc_override
+                        && memo.prefix_len == prefix_len =>
+                {
+                    return Ok(Self::replay_decode(memo, bus));
+                }
+                DecodeMemoState::Empty if Self::decode_is_memoizable(entry) => {
+                    let mut counting = FetchCountingBus {
+                        inner: bus,
+                        fetches: 0,
+                    };
+                    let mut decoded = self.decode_operands::<false, _>(
+                        entry,
+                        state,
+                        &mut counting,
+                        pre,
+                        pc_override,
+                    )?;
+                    decoded.len = decoded.len.saturating_add(prefix_len);
+                    if let Ok(fetches) = u8::try_from(counting.fetches) {
+                        *memo = DecodeMemo {
+                            state: DecodeMemoState::Valid,
+                            opcode: entry.opcode,
+                            pc_override,
+                            prefix_len,
+                            fetches,
+                            decoded,
+                        };
+                    }
+                    return Ok(decoded);
+                }
+                DecodeMemoState::Empty => memo.state = DecodeMemoState::Unsupported,
+                _ => {}
+            }
+        }
         let mut decoded = self.decode_operands::<false, _>(entry, state, bus, pre, pc_override)?;
         decoded.len = decoded.len.saturating_add(prefix_len);
         Ok(decoded)
+    }
+
+    /// Whether `decode_operands` for `entry` depends only on the instruction
+    /// bytes plus IMEM base-register reads made through `imem_addr_for_mode`.
+    fn decode_is_memoizable(entry: &OpcodeEntry) -> bool {
+        entry.opcode != 0xE3
+            && entry.operands.iter().all(|op| {
+                matches!(
+                    op,
+                    OperandKind::Imm(_)
+                        | OperandKind::ImmOffset
+                        | OperandKind::IMem(_)
+                        | OperandKind::IMemWidth(_)
+                        | OperandKind::EMemAddrWidth(_)
+                        | OperandKind::EMemAddrWidthOp(_)
+                        | OperandKind::Reg3
+                        | OperandKind::RegPair(_)
+                        | OperandKind::Reg(_, _)
+                        | OperandKind::RegB
+                        | OperandKind::RegIL
+                        | OperandKind::RegIMR
+                        | OperandKind::RegF
+                )
+            })
+    }
+
+    /// Re-run only the dynamic part of a memoized decode: the IMEM
+    /// base-register reads (same calls, same order) and fetch accounting.
+    #[inline]
+    fn replay_decode<B: LlamaBus>(memo: &DecodeMemo, bus: &mut B) -> DecodedOperands {
+        let mut decoded = memo.decoded;
+        for slot in &memo.decoded.imem_slots[..usize::from(memo.decoded.imem_slot_count)] {
+            let addr = imem_addr_for_mode(bus, slot.mode, slot.raw);
+            let target = if slot.second {
+                &mut decoded.mem2
+            } else {
+                &mut decoded.mem
+            };
+            if let Some(mem) = target.as_mut() {
+                mem.addr = addr;
+            }
+        }
+        bus.account_instruction_fetches(memo.fetches);
+        decoded
     }
 
     fn operand_reg(op: &OperandKind) -> Option<RegName> {

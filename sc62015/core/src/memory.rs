@@ -1764,6 +1764,11 @@ impl MemoryImage {
         }
     }
 
+    pub fn bump_read_count_by(&self, count: u64) {
+        self.memory_reads
+            .set(self.memory_reads.get().saturating_add(count));
+    }
+
     pub fn bump_read_count(&self) {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));
