@@ -848,6 +848,10 @@ impl CoreRuntime {
     }
 
     fn advance_iq7000_rtc_timing_units(&mut self, timing_units: u64) -> bool {
+        if self.iq7000_rtc.is_none() {
+            // No RTC: nothing advances and no alarm level can be asserted.
+            return false;
+        }
         let timebase_hz = self.device_model().timer_profile().timebase_hz;
         let newly_asserted = self
             .iq7000_rtc
@@ -1003,7 +1007,7 @@ impl CoreRuntime {
                 }
             }
         }
-        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.last_fired.clone_from(&self.timer.irq_source);
     }
 
     pub fn assert_sio_transmit_ready(&mut self) {
@@ -1079,7 +1083,7 @@ impl CoreRuntime {
                 }
                 _ => {}
             }
-            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.last_fired.clone_from(&self.timer.irq_source);
         }
     }
 
@@ -1099,7 +1103,7 @@ impl CoreRuntime {
         if !self.timer.in_interrupt {
             self.timer.irq_pending = true;
             self.timer.irq_source = Some(source.to_string());
-            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.last_fired.clone_from(&self.timer.irq_source);
         }
     }
 
@@ -1203,7 +1207,7 @@ impl CoreRuntime {
         }
         self.timer.irq_pending = true;
         self.timer.irq_source = Some("ONK".to_string());
-        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.last_fired.clone_from(&self.timer.irq_source);
         self.timer.irq_isr = self
             .memory
             .read_internal_byte(IMEM_ISR_OFFSET)
@@ -1294,7 +1298,7 @@ impl CoreRuntime {
                 }
                 _ => {}
             }
-            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.last_fired.clone_from(&self.timer.irq_source);
         }
     }
 
@@ -1369,7 +1373,7 @@ impl CoreRuntime {
             if !self.timer.in_interrupt && self.timer.irq_source.is_none() {
                 self.timer.irq_source = Some("KEY".to_string());
             }
-            self.timer.last_fired = self.timer.irq_source.clone();
+            self.timer.last_fired.clone_from(&self.timer.irq_source);
             self.timer.irq_imr = self
                 .memory
                 .read_internal_byte(IMEM_IMR_OFFSET)
@@ -1472,7 +1476,7 @@ impl CoreRuntime {
                 }
             }
         }
-        self.timer.last_fired = self.timer.irq_source.clone();
+        self.timer.last_fired.clone_from(&self.timer.irq_source);
         let kil = self
             .memory
             .read_internal_byte_silent(IMEM_KIL_OFFSET)
@@ -2298,7 +2302,7 @@ impl CoreRuntime {
                     .read_internal_byte(IMEM_IMR_OFFSET)
                     .unwrap_or(self.timer.irq_imr);
                 self.timer.irq_source = Some("ONK".to_string());
-                self.timer.last_fired = self.timer.irq_source.clone();
+                self.timer.last_fired.clone_from(&self.timer.irq_source);
                 if woke_after_rtc_idle {
                     // Alarm assertion and power wake consume an idle
                     // boundary. Fetch/delivery starts on the next boundary.
@@ -2422,7 +2426,7 @@ impl CoreRuntime {
                             };
                             self.timer.irq_source = Some(src.to_string());
                         }
-                        self.timer.last_fired = self.timer.irq_source.clone();
+                        self.timer.last_fired.clone_from(&self.timer.irq_source);
                     }
                 }
             }
@@ -2613,7 +2617,7 @@ impl CoreRuntime {
                 self.timer.in_interrupt = true;
                 self.timer.irq_pending = false;
                 self.timer.irq_source = Some("IR".to_string());
-                self.timer.last_fired = self.timer.irq_source.clone();
+                self.timer.last_fired.clone_from(&self.timer.irq_source);
                 self.timer.irq_isr = self
                     .memory
                     .read_internal_byte(IMEM_ISR_OFFSET)
