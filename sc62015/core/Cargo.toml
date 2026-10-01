@@ -54,3 +54,10 @@ required-features = ["cli"]
 name = "sc62015-bus-trace"
 path = "src/bin/sc62015_bus_trace.rs"
 required-features = ["cli"]
+
+# The emulator is an interpreter whose hot path spans crate and module
+# boundaries (CPU, bus, devices); whole-program optimization is measurably
+# faster. See docs/rust_emulator_performance.md.
+[profile.release]
+lto = "fat"
+codegen-units = 1

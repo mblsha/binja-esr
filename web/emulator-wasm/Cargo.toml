@@ -25,3 +25,10 @@ sc62015-core = { path = "../../sc62015/core", default-features = false, features
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+# The emulator is an interpreter whose hot path spans crate and module
+# boundaries (CPU, bus, devices); whole-program optimization is measurably
+# faster. See docs/rust_emulator_performance.md.
+[profile.release]
+lto = "fat"
+codegen-units = 1
