@@ -1653,14 +1653,11 @@ impl CoreRuntime {
         }
         let on_key_ssr_mask = self.device_model().on_key_ssr_mask();
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
-        struct RuntimeBus<'a> {
-            mem: &'a mut MemoryImage,
+        /// Device and host hooks fixed for one `step_scheduler_boundaries`
+        /// call; each boundary's `RuntimeBus` borrows them by pointer.
+        struct BusDevices {
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: Option<*mut dyn LcdHal>,
-            /// No device can claim any address in 0xC0000..=0xFFFFF.
-            upper_rom_unmapped: bool,
-            /// Precomputed routing facts for the plain-memory fast paths.
-            fast: FastRouting,
             sio_ptr: *mut SioStub,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
             host_peek: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
@@ -1668,21 +1665,32 @@ impl CoreRuntime {
             iq7000_clock_seed: Option<*const iq7000::Iq7000ClockSeed>,
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
             timer_ptr: *mut TimerContext,
-            onk_level: bool,
             on_key_ssr_mask: u8,
             #[cfg(target_arch = "wasm32")]
             tracing_active: bool,
-            #[allow(dead_code)]
-            cycle: u64,
-            #[allow(dead_code)]
-            pc: u32,
-            #[allow(dead_code)]
             meta_ptr: *const SnapshotMetadata,
-            #[allow(dead_code)]
-            state_ptr: *const LlamaState,
             lcd_bus_capture: *mut LcdBusCapture,
         }
+        struct RuntimeBus<'a> {
+            mem: &'a mut MemoryImage,
+            dev: *const BusDevices,
+            /// No device can claim any address in 0xC0000..=0xFFFFF.
+            upper_rom_unmapped: bool,
+            /// Precomputed routing facts for the plain-memory fast paths.
+            fast: FastRouting,
+            onk_level: bool,
+            /// Record LCD bus writes (execution only, never preflight).
+            capture_lcd: bool,
+            cycle: u64,
+            pc: u32,
+        }
         impl RuntimeBus<'_> {
+            #[inline(always)]
+            fn dev(&self) -> &BusDevices {
+                // SAFETY: points at a local that outlives every bus built from it.
+                unsafe { &*self.dev }
+            }
+
             /// Plain-memory load that the device chain in `load` provably
             /// passes straight to `load_with_pc`; `None` means "use the chain".
             #[inline(always)]
@@ -1735,7 +1743,7 @@ impl CoreRuntime {
                 unsafe {
                     if (0xc0000..=0xfffff).contains(&addr)
                         && (self.upper_rom_unmapped
-                            || !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
+                            || !self.dev().lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
                     {
                         if let Some(value) = (*self.mem).fetch_plain_rom_byte(addr) {
                             return value;
@@ -1748,7 +1756,7 @@ impl CoreRuntime {
             fn tracing_active_hint(&self) -> Option<bool> {
                 // Browser JS cannot change tracing while this synchronous
                 // WASM call owns the emulator. Stub callbacks are slice handoffs.
-                Some(self.tracing_active)
+                Some(self.dev().tracing_active)
             }
             fn load(&mut self, addr: u32, bits: u8) -> u32 {
                 // Route keyboard/LCD accesses to their devices for parity with Python overlays.
@@ -1760,7 +1768,7 @@ impl CoreRuntime {
                     // but firmware frequently uses word-sized access via KOL.w (touching 0xF0/0xF1).
                     // Split multi-byte accesses so the keyboard handler sees both bytes.
                     if bits > 8
-                        && !self.keyboard_ptr.is_null()
+                        && !self.dev().keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1777,26 +1785,26 @@ impl CoreRuntime {
                         }
                     }
                     let python_required = (*self.mem).requires_python(addr);
-                    if let Some(seed_ptr) = self.iq7000_clock_seed {
+                    if let Some(seed_ptr) = self.dev().iq7000_clock_seed {
                         if let Some(val) = (*seed_ptr).read(addr, bits) {
                             (*self.mem).bump_read_count();
                             return val;
                         }
                     }
                     if bits == 8
-                        && !self.iq7000_rtc.is_null()
+                        && !self.dev().iq7000_rtc.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if offset == iq7000::IMEM_EIL_OFFSET {
-                            let val = (*self.iq7000_rtc).handle_eil_read();
+                            let val = (*self.dev().iq7000_rtc).handle_eil_read();
                             let _ = (*self.mem).store(addr, bits, val as u32);
                             return val as u32;
                         }
                     }
                     if bits > 8
-                        && !self.sio_ptr.is_null()
+                        && !self.dev().sio_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1813,12 +1821,13 @@ impl CoreRuntime {
                         }
                     }
                     // Keyboard: internal IMEM offsets 0xF0-0xF2.
-                    if !self.keyboard_ptr.is_null()
+                    if !self.dev().keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
-                        if let Some(val) = (*self.keyboard_ptr).handle_read(offset, &mut *self.mem)
+                        if let Some(val) =
+                            (*self.dev().keyboard_ptr).handle_read(offset, &mut *self.mem)
                         {
                             (*self.mem).bump_read_count();
                             (*self.mem).log_kio_read(offset, val);
@@ -1826,7 +1835,7 @@ impl CoreRuntime {
                         }
                     }
                     // LCD controller mirrored at 0x2000/0xA000.
-                    if let Some(lcd_ptr) = self.lcd_ptr {
+                    if let Some(lcd_ptr) = self.dev().lcd_ptr {
                         let lcd = &mut *lcd_ptr;
                         if lcd.handles(addr) {
                             if let Some(val) = lcd.read(addr) {
@@ -1835,7 +1844,7 @@ impl CoreRuntime {
                             }
                         }
                     }
-                    if !self.sio_ptr.is_null()
+                    if !self.dev().sio_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1844,14 +1853,16 @@ impl CoreRuntime {
                             offset,
                             IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
                         ) {
-                            if let Some(val) = (*self.sio_ptr).handle_read(offset, &mut *self.mem) {
+                            if let Some(val) =
+                                (*self.dev().sio_ptr).handle_read(offset, &mut *self.mem)
+                            {
                                 return val as u32;
                             }
                         }
                     }
                     // Host overlay: delegate addresses flagged for external handling.
                     if python_required {
-                        if let Some(cb) = self.host_read {
+                        if let Some(cb) = self.dev().host_read {
                             if let Some(val) = (*cb)(addr) {
                                 (*self.mem).bump_read_count();
                                 return val as u32;
@@ -1866,7 +1877,7 @@ impl CoreRuntime {
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
                             if self.onk_level {
-                                val |= self.on_key_ssr_mask;
+                                val |= self.dev().on_key_ssr_mask;
                             }
                             return val as u32;
                         }
@@ -1883,7 +1894,7 @@ impl CoreRuntime {
                     }
                     // See `load`: split word-sized KOL.w writes so KOH is updated too.
                     if bits > 8
-                        && !self.keyboard_ptr.is_null()
+                        && !self.dev().keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1900,19 +1911,19 @@ impl CoreRuntime {
                     }
                     let python_required = (*self.mem).requires_python(addr);
                     if bits == 8
-                        && !self.iq7000_rtc.is_null()
+                        && !self.dev().iq7000_rtc.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if offset == iq7000::IMEM_EOL_OFFSET {
-                            (*self.iq7000_rtc).handle_eol_write(value as u8);
+                            (*self.dev().iq7000_rtc).handle_eol_write(value as u8);
                             let _ = (*self.mem).store(addr, bits, value);
                             return;
                         }
                     }
                     if bits > 8
-                        && !self.sio_ptr.is_null()
+                        && !self.dev().sio_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1928,13 +1939,13 @@ impl CoreRuntime {
                         }
                     }
                     // Keyboard KOL/KOH/KIL writes.
-                    if !self.keyboard_ptr.is_null()
+                    if !self.dev().keyboard_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if (0xF0..=0xF2).contains(&offset)
-                            && (*self.keyboard_ptr).handle_write(
+                            && (*self.dev().keyboard_ptr).handle_write(
                                 offset,
                                 value as u8,
                                 &mut *self.mem,
@@ -1948,13 +1959,18 @@ impl CoreRuntime {
                         }
                     }
                     // LCD writes.
-                    if let Some(lcd_ptr) = self.lcd_ptr {
+                    if let Some(lcd_ptr) = self.dev().lcd_ptr {
                         let lcd = &mut *lcd_ptr;
                         if lcd.handles(addr) {
                             lcd.write(addr, value as u8);
-                            if let Some(capture) = self.lcd_bus_capture.as_mut() {
+                            let capture_ptr = if self.capture_lcd {
+                                self.dev().lcd_bus_capture
+                            } else {
+                                std::ptr::null_mut()
+                            };
+                            if let Some(capture) = capture_ptr.as_mut() {
                                 capture.record(LcdBusWrite {
-                                    instruction_index: (*self.meta_ptr).instruction_count,
+                                    instruction_index: (*self.dev().meta_ptr).instruction_count,
                                     timing_units: self.cycle,
                                     pc: self.pc & ADDRESS_MASK,
                                     address: addr & ADDRESS_MASK,
@@ -1965,7 +1981,7 @@ impl CoreRuntime {
                             return;
                         }
                     }
-                    if !self.sio_ptr.is_null()
+                    if !self.dev().sio_ptr.is_null()
                         && MemoryImage::is_internal(addr)
                         && (addr - INTERNAL_MEMORY_START) <= INTERNAL_ADDR_MASK
                     {
@@ -1973,13 +1989,16 @@ impl CoreRuntime {
                         if matches!(
                             offset,
                             IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
-                        ) && (*self.sio_ptr).handle_write(offset, value as u8, &mut *self.mem)
-                        {
+                        ) && (*self.dev().sio_ptr).handle_write(
+                            offset,
+                            value as u8,
+                            &mut *self.mem,
+                        ) {
                             return;
                         }
                     }
                     if python_required {
-                        if let Some(cb) = self.host_write {
+                        if let Some(cb) = self.dev().host_write {
                             (*cb)(addr, value as u8);
                             // Parity: overlay writes should still count as memory writes and emit Perfetto traces.
                             (*self.mem).bump_write_count();
@@ -2019,7 +2038,7 @@ impl CoreRuntime {
                             == Some(IMEM_SCR_OFFSET)
                     });
                     if wrote_scr {
-                        if let Some(timer) = self.timer_ptr.as_mut() {
+                        if let Some(timer) = self.dev().timer_ptr.as_mut() {
                             let scr = (*self.mem)
                                 .read_internal_byte_silent(IMEM_SCR_OFFSET)
                                 .unwrap_or(0);
@@ -2041,49 +2060,49 @@ impl CoreRuntime {
                     // but custom LCD devices and memory overlays can.
                     if (0xc0000..=0xfffff).contains(&addr)
                         && (self.upper_rom_unmapped
-                            || !self.lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
+                            || !self.dev().lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
                     {
                         if let Some(value) = (*self.mem).peek_plain_rom_byte(addr) {
                             return Some(value);
                         }
                     }
-                    if let Some(seed_ptr) = self.iq7000_clock_seed {
+                    if let Some(seed_ptr) = self.dev().iq7000_clock_seed {
                         if let Some(value) = (*seed_ptr).read(addr, 8) {
                             return Some(value as u8);
                         }
                     }
                     if MemoryImage::is_internal(addr) {
                         let offset = MemoryImage::internal_offset(addr)?;
-                        if offset == iq7000::IMEM_EIL_OFFSET && !self.iq7000_rtc.is_null() {
+                        if offset == iq7000::IMEM_EIL_OFFSET && !self.dev().iq7000_rtc.is_null() {
                             return None;
                         }
                         if matches!(offset, IMEM_KOL_OFFSET | IMEM_KOH_OFFSET | IMEM_KIL_OFFSET)
-                            && !self.keyboard_ptr.is_null()
+                            && !self.dev().keyboard_ptr.is_null()
                         {
                             return None;
                         }
                         if matches!(
                             offset,
                             IMEM_UCR_OFFSET | IMEM_USR_OFFSET | IMEM_RXD_OFFSET | IMEM_TXD_OFFSET
-                        ) && !self.sio_ptr.is_null()
+                        ) && !self.dev().sio_ptr.is_null()
                         {
                             return None;
                         }
                         if offset == IMEM_SSR_OFFSET {
                             let mut value = (*self.mem).read_internal_byte_silent(offset)?;
                             if self.onk_level {
-                                value |= self.on_key_ssr_mask;
+                                value |= self.dev().on_key_ssr_mask;
                             }
                             return Some(value);
                         }
                     }
-                    if let Some(lcd_ptr) = self.lcd_ptr {
+                    if let Some(lcd_ptr) = self.dev().lcd_ptr {
                         if (&*lcd_ptr).handles(addr) {
                             return None;
                         }
                     }
                     if (*self.mem).requires_python(addr) {
-                        return self.host_peek.and_then(|peek| (*peek)(addr));
+                        return self.dev().host_peek.and_then(|peek| (*peek)(addr));
                     }
                     (*self.mem).read_byte_for_preflight(addr, Some(context_pc))
                 }
@@ -2106,11 +2125,11 @@ impl CoreRuntime {
                 // keyboard, and metadata updates share one outer-step path.
             }
             fn supports_timer_phase_clear(&self) -> bool {
-                !self.timer_ptr.is_null()
+                !self.dev().timer_ptr.is_null()
             }
             fn clear_timer_phases(&mut self, clear_sti: bool, clear_mti: bool) {
                 unsafe {
-                    if let Some(timer) = self.timer_ptr.as_mut() {
+                    if let Some(timer) = self.dev().timer_ptr.as_mut() {
                         if clear_mti {
                             timer.next_mti = self.cycle.wrapping_add(timer.mti_period);
                         }
@@ -2138,6 +2157,51 @@ impl CoreRuntime {
             self.memory.python_ranges().is_empty(),
             self.iq7000_clock_seed.is_some(),
         );
+        // Device and host hooks cannot be replaced during this call.
+        let devices = BusDevices {
+            keyboard_ptr: self
+                .keyboard
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |kb| kb as *mut KeyboardMatrix),
+            lcd_ptr: self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal),
+            sio_ptr: self
+                .sio
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub),
+            host_read: self
+                .host_read
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send)),
+            host_peek: self
+                .host_peek
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send)),
+            host_write: self
+                .host_write
+                .as_mut()
+                .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send)),
+            iq7000_clock_seed: self
+                .iq7000_clock_seed
+                .as_ref()
+                .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
+            iq7000_rtc: self
+                .iq7000_rtc
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |rtc| {
+                    rtc as *mut iq7000::Iq7000RtcPeripheral
+                }),
+            timer_ptr: self.timer.as_mut() as *mut TimerContext,
+            on_key_ssr_mask,
+            #[cfg(target_arch = "wasm32")]
+            tracing_active: perfetto_active,
+            meta_ptr: &self.metadata as *const SnapshotMetadata,
+            lcd_bus_capture: self
+                .lcd_bus_capture
+                .as_mut()
+                .map_or(std::ptr::null_mut(), |capture| {
+                    capture as *mut LcdBusCapture
+                }),
+        };
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
@@ -2165,59 +2229,15 @@ impl CoreRuntime {
             let prepared_instruction = {
                 let pc = self.state.pc() & ADDRESS_MASK;
                 let onk_level = self.effective_onk_level();
-                let keyboard_ptr = self
-                    .keyboard
-                    .as_mut()
-                    .map(|kb| kb as *mut KeyboardMatrix)
-                    .unwrap_or(std::ptr::null_mut());
-                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
-                let host_read = self
-                    .host_read
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                let host_peek = self
-                    .host_peek
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                let host_write = self
-                    .host_write
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
-                let sio_ptr = self
-                    .sio
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
-                let iq7000_rtc = self
-                    .iq7000_rtc
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |rtc| {
-                        rtc as *mut iq7000::Iq7000RtcPeripheral
-                    });
                 let mut bus = RuntimeBus {
                     mem: &mut self.memory,
-                    keyboard_ptr,
-                    lcd_ptr,
+                    dev: &devices,
                     upper_rom_unmapped,
                     fast,
-                    sio_ptr,
-                    host_read,
-                    host_peek,
-                    host_write,
-                    iq7000_clock_seed: self
-                        .iq7000_clock_seed
-                        .as_ref()
-                        .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
-                    iq7000_rtc,
-                    timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level,
-                    on_key_ssr_mask,
-                    #[cfg(target_arch = "wasm32")]
-                    tracing_active: perfetto_active,
+                    capture_lcd: false,
                     cycle: self.metadata.cycle_count,
-                    pc,
-                    meta_ptr: &self.metadata as *const SnapshotMetadata,
-                    state_ptr: &self.state as *const LlamaState,
-                    lcd_bus_capture: std::ptr::null_mut(),
+                    pc: pc,
                 };
                 // Fully validate the current instruction through the silent
                 // bus first. A malformed current encoding takes precedence
@@ -2664,65 +2684,15 @@ impl CoreRuntime {
             let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
             let (opcode, instr_len, pc_after, deferred_instruction_trace) = {
                 let onk_level = self.effective_onk_level();
-                let keyboard_ptr = self
-                    .keyboard
-                    .as_mut()
-                    .map(|kb| kb as *mut KeyboardMatrix)
-                    .unwrap_or(std::ptr::null_mut());
-                let lcd_ptr = self.lcd.as_mut().map(|lcd| lcd.as_mut() as *mut dyn LcdHal);
-                let host_read = self
-                    .host_read
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                let host_peek = self
-                    .host_peek
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32) -> Option<u8> + Send));
-                let host_write = self
-                    .host_write
-                    .as_mut()
-                    .map(|f| &mut **f as *mut (dyn FnMut(u32, u8) + Send));
-                let sio_ptr = self
-                    .sio
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |sio| sio as *mut SioStub);
-                let iq7000_rtc = self
-                    .iq7000_rtc
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |rtc| {
-                        rtc as *mut iq7000::Iq7000RtcPeripheral
-                    });
-                let lcd_bus_capture = self
-                    .lcd_bus_capture
-                    .as_mut()
-                    .map_or(std::ptr::null_mut(), |capture| {
-                        capture as *mut LcdBusCapture
-                    });
                 let mut bus = RuntimeBus {
                     mem: &mut self.memory,
-                    keyboard_ptr,
-                    lcd_ptr,
+                    dev: &devices,
                     upper_rom_unmapped,
                     fast,
-                    sio_ptr,
-                    host_read,
-                    host_peek,
-                    host_write,
-                    iq7000_clock_seed: self
-                        .iq7000_clock_seed
-                        .as_ref()
-                        .map(|seed| seed as *const iq7000::Iq7000ClockSeed),
-                    iq7000_rtc,
-                    timer_ptr: self.timer.as_mut() as *mut TimerContext,
                     onk_level,
-                    on_key_ssr_mask,
-                    #[cfg(target_arch = "wasm32")]
-                    tracing_active: perfetto_active,
+                    capture_lcd: true,
                     cycle: self.metadata.cycle_count,
                     pc: pc_before,
-                    meta_ptr: &self.metadata as *const SnapshotMetadata,
-                    state_ptr: &self.state as *const LlamaState,
-                    lcd_bus_capture,
                 };
                 let opcode = prepared_opcode;
                 let (instr_len, deferred_instruction_trace) =
