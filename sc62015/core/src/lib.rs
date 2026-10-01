@@ -2246,479 +2246,555 @@ impl CoreRuntime {
                     capture as *mut LcdBusCapture
                 }),
         };
+        // The quiet steady-state path below needs untraced execution, no loop
+        // detector observation, and the memoized-ROM proof's unmapped window.
+        let quiet_capable = !perfetto_active && self.loop_detector.is_none() && upper_rom_unmapped;
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
-            let halted_at_step_entry = self.state.is_halted();
-            let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
-            // Reject quarantined/invalid encodings before level re-latching,
-            // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
-            // advancement. A halted core with no current wake source does not
-            // fetch an instruction at all.
-            let asserted_isr = self
-                .memory
-                .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                .unwrap_or(0);
-            let should_preflight = if self.state.is_off() {
-                // OFF ignores every status source except ONKI.  In
-                // particular, do not perform an architectural opcode fetch
-                // merely because an unrelated ISR bit is set.
-                (asserted_isr & ISR_ONKI) != 0
+            // Quiet steady state: a running core that will not take an IRQ at
+            // this boundary, with no input level to re-latch and memoized
+            // stable ROM at PC. Every step of the general prelude is then a
+            // no-op except those repeated here, in the same order.
+            let quiet_hit = if quiet_capable
+                && !self.state.is_halted()
+                && !self.state.is_off()
+                && !self.external_interrupt_level
+                && !self.effective_onk_level()
+                && self.raw_selected_kil() == 0
+                && (self.sio.is_none()
+                    || self
+                        .memory
+                        .read_internal_byte_silent(IMEM_USR_OFFSET)
+                        .unwrap_or(0)
+                        & USR_RX_READY
+                        == 0)
+                && !self.irq_transfer_selected_at_step_entry()
+            {
+                self.preflight_cache
+                    .lookup(self.state.pc() & ADDRESS_MASK, &self.memory)
             } else {
-                !self.state.is_halted()
-                    || asserted_isr != 0
-                    || self.effective_onk_level()
-                    || self.external_interrupt_level
+                None
             };
-            let prepared_instruction = {
-                let pc = self.state.pc() & ADDRESS_MASK;
-                let onk_level = self.effective_onk_level();
-                let mut bus = RuntimeBus {
-                    mem: &mut self.memory,
-                    dev: &devices,
-                    upper_rom_unmapped,
-                    fast,
-                    onk_level,
-                    capture_lcd: false,
-                    decode_memo: std::ptr::null_mut(),
-                    cycle: self.metadata.cycle_count,
-                    pc: pc,
-                };
-                // Fully validate the current instruction through the silent
-                // bus first. A malformed current encoding takes precedence
-                // even when the IRQ destination aliases it, and must consume
-                // zero architectural reads.
-                let cached_preflight =
-                    if should_preflight && !irq_transfer_selected && upper_rom_unmapped {
-                        self.preflight_cache.lookup(pc, bus.mem)
-                    } else {
-                        None
-                    };
-                let silent_prepared_opcode = if let Some((opcode, timing, slot)) = cached_preflight
-                {
-                    Some((opcode, timing, Some(slot)))
-                } else if should_preflight && !irq_transfer_selected {
-                    let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
-                        CoreError::Other(format!(
-                        "preflight opcode at 0x{pc:05X}: side-effect-free memory is unavailable"
-                    ))
-                    })?;
-                    let instruction_len = self
-                        .executor
-                        .validate_before_scheduling_with_length(
-                            silent_opcode,
-                            &self.state,
-                            &mut bus,
-                        )
-                        .map_err(|error| {
-                            CoreError::Other(format!(
-                                "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
-                            ))
-                        })?;
-                    if (0..u32::from(instruction_len)).any(|offset| {
-                        !bus.instruction_byte_is_stable(pc.wrapping_add(offset) & ADDRESS_MASK)
-                    }) {
-                        return Err(CoreError::Other(format!(
-                            "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: \
-                         callback-backed instruction bytes cannot cross scheduler tick"
-                        )));
-                    }
-                    if silent_opcode == 0xFF {
-                        let (reset_target, reset_target_len) =
-                            crate::llama::eval::validate_vector_transfer_with_length(
-                                crate::pce500::ROM_RESET_VECTOR_ADDR,
-                                &self.state,
-                                &mut bus,
-                            )
-                            .map_err(|error| {
-                                CoreError::Other(format!("RESET vector preflight: {error}"))
-                            })?;
-                        if (0..3).any(|offset| {
-                            !bus.instruction_byte_is_stable(
-                                crate::pce500::ROM_RESET_VECTOR_ADDR.wrapping_add(offset)
-                                    & ADDRESS_MASK,
-                            )
-                        }) || (0..u32::from(reset_target_len)).any(|offset| {
-                            !bus.instruction_byte_is_stable(
-                                reset_target.wrapping_add(offset) & ADDRESS_MASK,
-                            )
-                        }) {
-                            return Err(CoreError::Other(
-                                "RESET vector preflight: callback-backed vector/target".to_string(),
-                            ));
-                        }
-                    }
-                    let timing = crate::llama::timing::PreparedInstructionTiming::prepare(
-                        silent_opcode,
-                        pc,
-                        crate::llama::dispatch::lookup,
-                        |address| bus.peek_byte_silent_at(address, pc),
-                    )
-                    .map_err(|error| {
-                        CoreError::Other(format!(
-                            "preflight timing for opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
-                        ))
-                    })?;
-                    let memo_slot = if upper_rom_unmapped {
-                        self.preflight_cache
-                            .insert(pc, instruction_len, timing, bus.mem)
-                    } else {
-                        None
-                    };
-                    Some((silent_opcode, timing, memo_slot))
-                } else {
-                    None
-                };
-
-                if irq_transfer_selected {
-                    // Prove the asynchronous IRQ vector and destination only
-                    // when this scheduling boundary can actually deliver it.
-                    // The final transfer performs its own one-shot validation.
-                    let (irq_target, irq_target_len) =
-                        crate::llama::eval::validate_vector_transfer_with_length(
-                            INTERRUPT_VECTOR_ADDR,
-                            &self.state,
-                            &mut bus,
-                        )
-                        .map_err(|error| {
-                            CoreError::Other(format!("IRQ vector preflight: {error}"))
-                        })?;
-                    if (0..3).any(|offset| {
-                        !bus.instruction_byte_is_stable(
-                            INTERRUPT_VECTOR_ADDR.wrapping_add(offset) & ADDRESS_MASK,
-                        )
-                    }) || (0..u32::from(irq_target_len)).any(|offset| {
-                        !bus.instruction_byte_is_stable(
-                            irq_target.wrapping_add(offset) & ADDRESS_MASK,
-                        )
-                    }) {
-                        return Err(CoreError::Other(
-                            "IRQ vector preflight: callback-backed vector/target".to_string(),
-                        ));
-                    }
-                    // A deliverable asynchronous IRQ replaces the current
-                    // instruction after exactly one opcode-byte fetch. Do not
-                    // decode or read operands from the discarded instruction.
-                    let _discarded_opcode = bus.fetch_instruction_byte(pc);
-                }
-
-                if let Some((silent_opcode, timing, memo_slot)) = silent_prepared_opcode {
-                    let opcode = if memo_slot.is_some() {
-                        // The preflight cache just proved these bytes are
-                        // unmapped plain upper ROM equal to the validated
-                        // ones, where an architectural fetch only returns the
-                        // byte and counts one read.
-                        bus.mem.bump_read_count();
-                        silent_opcode
-                    } else {
-                        bus.fetch_instruction_byte(pc)
-                    };
-                    if opcode != silent_opcode {
-                        return Err(CoreError::Other(format!(
-                            "architectural opcode fetch at 0x{pc:05X} disagrees with preflight: \
-                         fetched 0x{opcode:02X}, preflight 0x{silent_opcode:02X}"
-                        )));
-                    }
-                    let transfer = match opcode {
-                        0xFE => Some(
-                            crate::llama::eval::prepare_validated_vector(
-                                INTERRUPT_VECTOR_ADDR,
-                                &self.state,
-                                &mut bus,
-                            )
-                            .map_err(|error| {
-                                CoreError::Other(format!("IR vector transfer: {error}"))
-                            })?,
-                        ),
-                        0xFF => Some(
-                            crate::llama::eval::fetch_validated_vector(
-                                crate::pce500::ROM_RESET_VECTOR_ADDR,
-                                &self.state,
-                                &mut bus,
-                            )
-                            .map_err(|error| {
-                                CoreError::Other(format!("RESET vector transfer: {error}"))
-                            })?,
-                        ),
-                        _ => None,
-                    };
-                    Some((opcode, transfer, timing, memo_slot))
-                } else {
-                    None
-                }
-            };
-            if !self.state.is_off() {
+            let prepared_instruction = if let Some((opcode, timing, slot)) = quiet_hit {
+                // Architectural fetch of the proven plain-ROM opcode byte.
+                self.memory.bump_read_count();
                 let scr = self
                     .memory
                     .read_internal_byte_silent(IMEM_SCR_OFFSET)
                     .unwrap_or(0);
                 self.timer
                     .sync_scr_selection(scr, self.metadata.cycle_count);
-            }
-            if irq_transfer_selected {
-                // Materialize level-sensitive sources only after the silent
-                // vector proof and discarded-opcode fetch above. Delivery
-                // writes the frame, then performs the architectural vector
-                // reads. The recursive one-instruction step executes the
-                // selected handler within this caller's instruction budget.
-                self.refresh_on_key_interrupt_level();
-                self.refresh_external_interrupt_level();
-                self.refresh_sio_interrupts();
-                self.refresh_raw_key_irq_level();
+                if let Some(sio) = self.sio.as_mut() {
+                    if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
+                        self.metadata.instruction_count =
+                            self.metadata.instruction_count.saturating_add(1);
+                        self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                        self.advance_iq7000_rtc_timing_units(1);
+                        continue;
+                    }
+                }
+                if let Some(bridge) = self.pce500_peripherals.as_mut() {
+                    if bridge.maybe_short_circuit(
+                        self.state.pc(),
+                        &mut self.state,
+                        &mut self.memory,
+                    ) {
+                        self.metadata.instruction_count =
+                            self.metadata.instruction_count.saturating_add(1);
+                        self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                        self.advance_iq7000_rtc_timing_units(1);
+                        continue;
+                    }
+                }
+                // refresh_sio_interrupts and refresh_raw_key_irq_level are
+                // no-ops (receiver not ready, no strobed contact).
                 self.arm_pending_irq_from_isr();
-                self.deliver_pending_irq()?;
-                if !self.timer.in_interrupt {
-                    return Err(CoreError::Other(
-                        "selected IRQ boundary did not enter its handler".to_string(),
-                    ));
-                }
-                self.step(1)?;
-                continue;
-            }
-            if self.state.is_off() {
-                let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                let mut woke_after_rtc_idle = false;
-                if (isr & ISR_ONKI) == 0 && self.effective_onk_level() {
-                    // A held physical/RTC level may outlive a firmware clear
-                    // of ISR.ONKI. Re-latching it is itself this OFF idle
-                    // boundary, so execution waits for the next boundary.
-                    self.refresh_on_key_interrupt_level();
-                    isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                    woke_after_rtc_idle = (isr & ISR_ONKI) != 0;
-                }
-                if (isr & ISR_ONKI) == 0 {
-                    if self.iq7000_rtc.is_none() {
-                        self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(
-                            u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX),
-                        );
-                        return Ok(());
-                    }
-                    // The RTC has its own always-on timebase. Consume the
-                    // caller's remaining OFF-boundary budget efficiently,
-                    // but stop exactly when an alarm first asserts its
-                    // inferred ON/power-wake level.
-                    let boundary_budget = remaining.saturating_add(1);
-                    let timing_budget = u64::try_from(boundary_budget).unwrap_or(u64::MAX);
-                    let (consumed, alarm_asserted) =
-                        self.advance_iq7000_rtc_until_alarm(timing_budget);
-                    self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(consumed);
-                    remaining = boundary_budget
-                        .saturating_sub(usize::try_from(consumed).unwrap_or(boundary_budget));
-                    isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
-                    woke_after_rtc_idle = alarm_asserted && (isr & ISR_ONKI) != 0;
-                    if !woke_after_rtc_idle {
-                        return Ok(());
-                    }
-                }
-                // Hardware wake filtering is not evidence that ignored
-                // status bits are destroyed. Preserve the complete ISR image
-                // and only gate the OFF wake decision on ONKI.
-                self.timer.irq_isr = isr;
-                self.state.set_power_state(PowerState::Running);
-                self.timer.irq_pending = true;
-                self.timer.irq_imr = self
+                Some((opcode, None, timing, Some(slot)))
+            } else {
+                let halted_at_step_entry = self.state.is_halted();
+                let irq_transfer_selected = self.irq_transfer_selected_at_step_entry();
+                // Reject quarantined/invalid encodings before level re-latching,
+                // SIO/keyboard/device callbacks, IRQ wake/delivery, or timer
+                // advancement. A halted core with no current wake source does not
+                // fetch an instruction at all.
+                let asserted_isr = self
                     .memory
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(self.timer.irq_imr);
-                self.timer.irq_source = Some("ONK".to_string());
-                self.timer.last_fired.clone_from(&self.timer.irq_source);
-                if woke_after_rtc_idle {
-                    // Alarm assertion and power wake consume an idle
-                    // boundary. Fetch/delivery starts on the next boundary.
-                    continue;
-                }
-            }
-            // ONK and external interrupts are level-sensitive: firmware
-            // clears each ISR bit, waits one instruction, then retests the
-            // input. Re-latch once per runtime step while the corresponding
-            // neutral host level remains high, including before host-side
-            // instruction short-circuits.
-            self.refresh_on_key_interrupt_level();
-            self.refresh_external_interrupt_level();
-            if let Some(sio) = self.sio.as_mut() {
-                if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
-                    self.metadata.instruction_count =
-                        self.metadata.instruction_count.saturating_add(1);
-                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
-                    self.advance_iq7000_rtc_timing_units(1);
-                    continue;
-                }
-            }
-            if let Some(bridge) = self.pce500_peripherals.as_mut() {
-                if bridge.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
-                    self.metadata.instruction_count =
-                        self.metadata.instruction_count.saturating_add(1);
-                    self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
-                    self.advance_iq7000_rtc_timing_units(1);
-                    continue;
-                }
-            }
-            // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
-            if perfetto_active {
-                let mut guard = PERFETTO_TRACER.enter();
-                guard.with_some(|tracer| {
-                    let imr = self
-                        .memory
-                        .read_internal_byte_silent(IMEM_IMR_OFFSET)
-                        .unwrap_or(0);
-                    let isr = self
-                        .memory
-                        .read_internal_byte_silent(IMEM_ISR_OFFSET)
-                        .unwrap_or(0);
-                    let kil = self
-                        .memory
-                        .read_internal_byte_silent(IMEM_KIL_OFFSET)
-                        .unwrap_or(0);
-                    let imr_reg = self.state.get_reg(RegName::IMR) as u8;
-                    let pending_src = if let Some(source) = self.timer.irq_source.as_deref() {
-                        Some(source)
-                    } else {
-                        if (isr & ISR_RXI) != 0 {
-                            Some("RX")
-                        } else if (isr & ISR_EXI) != 0 {
-                            Some("EX")
-                        } else if (isr & ISR_TXI) != 0 {
-                            Some("TX")
-                        } else if (isr & ISR_ONKI) != 0 {
-                            Some("ONK")
-                        } else if (isr & ISR_KEYI) != 0 {
-                            Some("KEY")
-                        } else if (isr & ISR_STI) != 0 {
-                            Some("STI")
-                        } else if (isr & ISR_MTI) != 0 {
-                            Some("MTI")
+                    .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                    .unwrap_or(0);
+                let should_preflight = if self.state.is_off() {
+                    // OFF ignores every status source except ONKI.  In
+                    // particular, do not perform an architectural opcode fetch
+                    // merely because an unrelated ISR bit is set.
+                    (asserted_isr & ISR_ONKI) != 0
+                } else {
+                    !self.state.is_halted()
+                        || asserted_isr != 0
+                        || self.effective_onk_level()
+                        || self.external_interrupt_level
+                };
+                let prepared_instruction = {
+                    let pc = self.state.pc() & ADDRESS_MASK;
+                    let onk_level = self.effective_onk_level();
+                    let mut bus = RuntimeBus {
+                        mem: &mut self.memory,
+                        dev: &devices,
+                        upper_rom_unmapped,
+                        fast,
+                        onk_level,
+                        capture_lcd: false,
+                        decode_memo: std::ptr::null_mut(),
+                        cycle: self.metadata.cycle_count,
+                        pc: pc,
+                    };
+                    // Fully validate the current instruction through the silent
+                    // bus first. A malformed current encoding takes precedence
+                    // even when the IRQ destination aliases it, and must consume
+                    // zero architectural reads.
+                    let cached_preflight =
+                        if should_preflight && !irq_transfer_selected && upper_rom_unmapped {
+                            self.preflight_cache.lookup(pc, bus.mem)
                         } else {
                             None
+                        };
+                    let silent_prepared_opcode = if let Some((opcode, timing, slot)) =
+                        cached_preflight
+                    {
+                        Some((opcode, timing, Some(slot)))
+                    } else if should_preflight && !irq_transfer_selected {
+                        let silent_opcode = bus.peek_byte_silent(pc).ok_or_else(|| {
+                            CoreError::Other(format!(
+                            "preflight opcode at 0x{pc:05X}: side-effect-free memory is unavailable"
+                        ))
+                        })?;
+                        let instruction_len = self
+                            .executor
+                            .validate_before_scheduling_with_length(
+                                silent_opcode,
+                                &self.state,
+                                &mut bus,
+                            )
+                            .map_err(|error| {
+                                CoreError::Other(format!(
+                                    "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
+                                ))
+                            })?;
+                        if (0..u32::from(instruction_len)).any(|offset| {
+                            !bus.instruction_byte_is_stable(pc.wrapping_add(offset) & ADDRESS_MASK)
+                        }) {
+                            return Err(CoreError::Other(format!(
+                                "preflight opcode 0x{silent_opcode:02X} at 0x{pc:05X}: \
+                             callback-backed instruction bytes cannot cross scheduler tick"
+                            )));
                         }
+                        if silent_opcode == 0xFF {
+                            let (reset_target, reset_target_len) =
+                                crate::llama::eval::validate_vector_transfer_with_length(
+                                    crate::pce500::ROM_RESET_VECTOR_ADDR,
+                                    &self.state,
+                                    &mut bus,
+                                )
+                                .map_err(|error| {
+                                    CoreError::Other(format!("RESET vector preflight: {error}"))
+                                })?;
+                            if (0..3).any(|offset| {
+                                !bus.instruction_byte_is_stable(
+                                    crate::pce500::ROM_RESET_VECTOR_ADDR.wrapping_add(offset)
+                                        & ADDRESS_MASK,
+                                )
+                            }) || (0..u32::from(reset_target_len)).any(|offset| {
+                                !bus.instruction_byte_is_stable(
+                                    reset_target.wrapping_add(offset) & ADDRESS_MASK,
+                                )
+                            }) {
+                                return Err(CoreError::Other(
+                                    "RESET vector preflight: callback-backed vector/target"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        let timing = crate::llama::timing::PreparedInstructionTiming::prepare(
+                            silent_opcode,
+                            pc,
+                            crate::llama::dispatch::lookup,
+                            |address| bus.peek_byte_silent_at(address, pc),
+                        )
+                        .map_err(|error| {
+                            CoreError::Other(format!(
+                                "preflight timing for opcode 0x{silent_opcode:02X} at 0x{pc:05X}: {error}"
+                            ))
+                        })?;
+                        let memo_slot = if upper_rom_unmapped {
+                            self.preflight_cache
+                                .insert(pc, instruction_len, timing, bus.mem)
+                        } else {
+                            None
+                        };
+                        Some((silent_opcode, timing, memo_slot))
+                    } else {
+                        None
                     };
-                    tracer.record_irq_check(
-                        "IRQ_Check",
-                        self.state.pc() & ADDRESS_MASK,
-                        imr,
-                        isr,
-                        self.timer.irq_pending,
-                        self.timer.in_interrupt,
-                        pending_src,
-                        Some(kil),
-                        Some(imr_reg),
-                    );
-                });
-            }
-            // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
-            self.refresh_sio_interrupts();
-            // Sample the selected, undebounced matrix level. Host FIFO and
-            // debounce bookkeeping are not silicon KEYI sources.
-            self.refresh_raw_key_irq_level();
-            // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
-            self.arm_pending_irq_from_isr();
 
-            // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
-            if self.state.is_halted() {
-                if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
-                    // kb_irq_enabled controls host generation, not the
-                    // meaning of an already asserted silicon status bit.
-                    if isr != 0 {
-                        self.state.set_halted(false);
-                        self.timer.irq_pending = true;
-                        self.timer.irq_isr = isr;
-                        self.timer.irq_imr = self
-                            .memory
-                            .read_internal_byte(IMEM_IMR_OFFSET)
-                            .unwrap_or(self.timer.irq_imr);
-                        if self.timer.irq_source.is_none() {
-                            let src = if (isr & ISR_RXI) != 0 {
-                                "RX"
-                            } else if (isr & ISR_EXI) != 0 {
-                                "EX"
-                            } else if (isr & ISR_TXI) != 0 {
-                                "TX"
-                            } else if (isr & ISR_ONKI) != 0 {
-                                "ONK"
-                            } else if (isr & ISR_KEYI) != 0 {
-                                "KEY"
-                            } else if (isr & ISR_STI) != 0 {
-                                "STI"
-                            } else if (isr & ISR_MTI) != 0 {
-                                "MTI"
-                            } else {
-                                "IRQ"
-                            };
-                            self.timer.irq_source = Some(src.to_string());
+                    if irq_transfer_selected {
+                        // Prove the asynchronous IRQ vector and destination only
+                        // when this scheduling boundary can actually deliver it.
+                        // The final transfer performs its own one-shot validation.
+                        let (irq_target, irq_target_len) =
+                            crate::llama::eval::validate_vector_transfer_with_length(
+                                INTERRUPT_VECTOR_ADDR,
+                                &self.state,
+                                &mut bus,
+                            )
+                            .map_err(|error| {
+                                CoreError::Other(format!("IRQ vector preflight: {error}"))
+                            })?;
+                        if (0..3).any(|offset| {
+                            !bus.instruction_byte_is_stable(
+                                INTERRUPT_VECTOR_ADDR.wrapping_add(offset) & ADDRESS_MASK,
+                            )
+                        }) || (0..u32::from(irq_target_len)).any(|offset| {
+                            !bus.instruction_byte_is_stable(
+                                irq_target.wrapping_add(offset) & ADDRESS_MASK,
+                            )
+                        }) {
+                            return Err(CoreError::Other(
+                                "IRQ vector preflight: callback-backed vector/target".to_string(),
+                            ));
                         }
-                        self.timer.last_fired.clone_from(&self.timer.irq_source);
+                        // A deliverable asynchronous IRQ replaces the current
+                        // instruction after exactly one opcode-byte fetch. Do not
+                        // decode or read operands from the discarded instruction.
+                        let _discarded_opcode = bus.fetch_instruction_byte(pc);
                     }
-                }
-            }
 
-            // A HALT boundary remains an idle boundary even when a status
-            // level wakes the core. Execute the first foreground opcode
-            // on the next scheduler step, after it receives its own
-            // silent validation and architectural fetch.
-            if halted_at_step_entry {
-                let prev_cycle = self.metadata.cycle_count;
-                let new_cycle = prev_cycle.wrapping_add(1);
-                // HALT stops the SC62015 system clock, so the main timer
-                // and its keyboard scan retain phase.  The 32 kHz subclock
-                // continues and may wake the core through STI.
-                self.timer.defer_mti(1);
-                self.metadata.cycle_count = new_cycle;
-                self.advance_iq7000_rtc_timing_units(1);
-                self.tick_timers_and_keyboard_selected(new_cycle, false, true);
-                if self
-                    .memory
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .is_some_and(|isr| isr != 0)
-                {
-                    self.state.set_halted(false);
+                    if let Some((silent_opcode, timing, memo_slot)) = silent_prepared_opcode {
+                        let opcode = if memo_slot.is_some() {
+                            // The preflight cache just proved these bytes are
+                            // unmapped plain upper ROM equal to the validated
+                            // ones, where an architectural fetch only returns the
+                            // byte and counts one read.
+                            bus.mem.bump_read_count();
+                            silent_opcode
+                        } else {
+                            bus.fetch_instruction_byte(pc)
+                        };
+                        if opcode != silent_opcode {
+                            return Err(CoreError::Other(format!(
+                                "architectural opcode fetch at 0x{pc:05X} disagrees with preflight: \
+                             fetched 0x{opcode:02X}, preflight 0x{silent_opcode:02X}"
+                            )));
+                        }
+                        let transfer = match opcode {
+                            0xFE => Some(
+                                crate::llama::eval::prepare_validated_vector(
+                                    INTERRUPT_VECTOR_ADDR,
+                                    &self.state,
+                                    &mut bus,
+                                )
+                                .map_err(|error| {
+                                    CoreError::Other(format!("IR vector transfer: {error}"))
+                                })?,
+                            ),
+                            0xFF => Some(
+                                crate::llama::eval::fetch_validated_vector(
+                                    crate::pce500::ROM_RESET_VECTOR_ADDR,
+                                    &self.state,
+                                    &mut bus,
+                                )
+                                .map_err(|error| {
+                                    CoreError::Other(format!("RESET vector transfer: {error}"))
+                                })?,
+                            ),
+                            _ => None,
+                        };
+                        Some((opcode, transfer, timing, memo_slot))
+                    } else {
+                        None
+                    }
+                };
+                if !self.state.is_off() {
+                    let scr = self
+                        .memory
+                        .read_internal_byte_silent(IMEM_SCR_OFFSET)
+                        .unwrap_or(0);
+                    self.timer
+                        .sync_scr_selection(scr, self.metadata.cycle_count);
+                }
+                if irq_transfer_selected {
+                    // Materialize level-sensitive sources only after the silent
+                    // vector proof and discarded-opcode fetch above. Delivery
+                    // writes the frame, then performs the architectural vector
+                    // reads. The recursive one-instruction step executes the
+                    // selected handler within this caller's instruction budget.
+                    self.refresh_on_key_interrupt_level();
+                    self.refresh_external_interrupt_level();
+                    self.refresh_sio_interrupts();
+                    self.refresh_raw_key_irq_level();
                     self.arm_pending_irq_from_isr();
+                    self.deliver_pending_irq()?;
+                    if !self.timer.in_interrupt {
+                        return Err(CoreError::Other(
+                            "selected IRQ boundary did not enter its handler".to_string(),
+                        ));
+                    }
+                    self.step(1)?;
+                    continue;
                 }
-                self.refresh_raw_key_irq_level();
-                // With no trace active, a synchronous step call cannot
-                // receive new host input between idle boundaries. Skip to
-                // the next sub-timer deadline (or the end of the caller's
-                // budget) while preserving the frozen main-timer phase.
-                if self.state.is_halted() && !perfetto_active && remaining != 0 {
-                    let idle_budget = u64::try_from(remaining)
-                        .unwrap_or(u64::MAX)
-                        .min((1_u64 << 63) - 1);
-                    let end_cycle = new_cycle.wrapping_add(idle_budget);
-                    let target_cycle = self
-                        .timer
-                        .next_fire_cycle_in_span_selected(new_cycle, end_cycle, false, true)
-                        .unwrap_or(end_cycle);
-                    let skipped = target_cycle.wrapping_sub(new_cycle);
-                    if skipped != 0 {
-                        let (rtc_skipped, _) = self.advance_iq7000_rtc_until_alarm(skipped);
-                        let actual_target_cycle = new_cycle.wrapping_add(rtc_skipped);
-                        self.timer.defer_mti(rtc_skipped);
-                        self.metadata.cycle_count = actual_target_cycle;
-                        self.tick_timers_and_keyboard_selected(actual_target_cycle, false, true);
-                        remaining -= usize::try_from(rtc_skipped)
-                            .expect("idle skip is bounded by the usize input budget");
-                        if self
-                            .memory
-                            .read_internal_byte(IMEM_ISR_OFFSET)
-                            .is_some_and(|isr| isr != 0)
-                        {
-                            self.state.set_halted(false);
-                            self.arm_pending_irq_from_isr();
+                if self.state.is_off() {
+                    let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    let mut woke_after_rtc_idle = false;
+                    if (isr & ISR_ONKI) == 0 && self.effective_onk_level() {
+                        // A held physical/RTC level may outlive a firmware clear
+                        // of ISR.ONKI. Re-latching it is itself this OFF idle
+                        // boundary, so execution waits for the next boundary.
+                        self.refresh_on_key_interrupt_level();
+                        isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                        woke_after_rtc_idle = (isr & ISR_ONKI) != 0;
+                    }
+                    if (isr & ISR_ONKI) == 0 {
+                        if self.iq7000_rtc.is_none() {
+                            self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(
+                                u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX),
+                            );
+                            return Ok(());
                         }
-                        self.refresh_raw_key_irq_level();
+                        // The RTC has its own always-on timebase. Consume the
+                        // caller's remaining OFF-boundary budget efficiently,
+                        // but stop exactly when an alarm first asserts its
+                        // inferred ON/power-wake level.
+                        let boundary_budget = remaining.saturating_add(1);
+                        let timing_budget = u64::try_from(boundary_budget).unwrap_or(u64::MAX);
+                        let (consumed, alarm_asserted) =
+                            self.advance_iq7000_rtc_until_alarm(timing_budget);
+                        self.off_idle_timing_units =
+                            self.off_idle_timing_units.wrapping_add(consumed);
+                        remaining = boundary_budget
+                            .saturating_sub(usize::try_from(consumed).unwrap_or(boundary_budget));
+                        isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                        woke_after_rtc_idle = alarm_asserted && (isr & ISR_ONKI) != 0;
+                        if !woke_after_rtc_idle {
+                            return Ok(());
+                        }
+                    }
+                    // Hardware wake filtering is not evidence that ignored
+                    // status bits are destroyed. Preserve the complete ISR image
+                    // and only gate the OFF wake decision on ONKI.
+                    self.timer.irq_isr = isr;
+                    self.state.set_power_state(PowerState::Running);
+                    self.timer.irq_pending = true;
+                    self.timer.irq_imr = self
+                        .memory
+                        .read_internal_byte(IMEM_IMR_OFFSET)
+                        .unwrap_or(self.timer.irq_imr);
+                    self.timer.irq_source = Some("ONK".to_string());
+                    self.timer.last_fired.clone_from(&self.timer.irq_source);
+                    if woke_after_rtc_idle {
+                        // Alarm assertion and power wake consume an idle
+                        // boundary. Fetch/delivery starts on the next boundary.
+                        continue;
                     }
                 }
+                // ONK and external interrupts are level-sensitive: firmware
+                // clears each ISR bit, waits one instruction, then retests the
+                // input. Re-latch once per runtime step while the corresponding
+                // neutral host level remains high, including before host-side
+                // instruction short-circuits.
+                self.refresh_on_key_interrupt_level();
+                self.refresh_external_interrupt_level();
+                if let Some(sio) = self.sio.as_mut() {
+                    if sio.maybe_short_circuit(self.state.pc(), &mut self.state, &mut self.memory) {
+                        self.metadata.instruction_count =
+                            self.metadata.instruction_count.saturating_add(1);
+                        self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                        self.advance_iq7000_rtc_timing_units(1);
+                        continue;
+                    }
+                }
+                if let Some(bridge) = self.pce500_peripherals.as_mut() {
+                    if bridge.maybe_short_circuit(
+                        self.state.pc(),
+                        &mut self.state,
+                        &mut self.memory,
+                    ) {
+                        self.metadata.instruction_count =
+                            self.metadata.instruction_count.saturating_add(1);
+                        self.metadata.cycle_count = self.metadata.cycle_count.saturating_add(1);
+                        self.advance_iq7000_rtc_timing_units(1);
+                        continue;
+                    }
+                }
+                // Emit a diagnostic IRQ_Check parity marker mirroring Python’s early pending probe.
                 if perfetto_active {
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
-                        tracer.update_counters(
-                            self.metadata.instruction_count,
-                            self.state.call_depth(),
-                            self.memory.memory_read_count(),
-                            self.memory.memory_write_count(),
+                        let imr = self
+                            .memory
+                            .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                            .unwrap_or(0);
+                        let isr = self
+                            .memory
+                            .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                            .unwrap_or(0);
+                        let kil = self
+                            .memory
+                            .read_internal_byte_silent(IMEM_KIL_OFFSET)
+                            .unwrap_or(0);
+                        let imr_reg = self.state.get_reg(RegName::IMR) as u8;
+                        let pending_src = if let Some(source) = self.timer.irq_source.as_deref() {
+                            Some(source)
+                        } else {
+                            if (isr & ISR_RXI) != 0 {
+                                Some("RX")
+                            } else if (isr & ISR_EXI) != 0 {
+                                Some("EX")
+                            } else if (isr & ISR_TXI) != 0 {
+                                Some("TX")
+                            } else if (isr & ISR_ONKI) != 0 {
+                                Some("ONK")
+                            } else if (isr & ISR_KEYI) != 0 {
+                                Some("KEY")
+                            } else if (isr & ISR_STI) != 0 {
+                                Some("STI")
+                            } else if (isr & ISR_MTI) != 0 {
+                                Some("MTI")
+                            } else {
+                                None
+                            }
+                        };
+                        tracer.record_irq_check(
+                            "IRQ_Check",
+                            self.state.pc() & ADDRESS_MASK,
+                            imr,
+                            isr,
+                            self.timer.irq_pending,
+                            self.timer.in_interrupt,
+                            pending_src,
+                            Some(kil),
+                            Some(imr_reg),
                         );
                     });
                 }
-                continue;
-            }
+                // Mirror SIO hardware status bits into ISR before foreground/IRQ polling.
+                self.refresh_sio_interrupts();
+                // Sample the selected, undebounced matrix level. Host FIFO and
+                // debounce bookkeeping are not silicon KEYI sources.
+                self.refresh_raw_key_irq_level();
+                // If ISR already has pending bits (e.g., host write) arm a pending IRQ so delivery can occur once IMR allows it.
+                self.arm_pending_irq_from_isr();
+
+                // HALT wake-up: exit low-power state when any ISR bit is set, even if IMR is masked.
+                if self.state.is_halted() {
+                    if let Some(isr) = self.memory.read_internal_byte(IMEM_ISR_OFFSET) {
+                        // kb_irq_enabled controls host generation, not the
+                        // meaning of an already asserted silicon status bit.
+                        if isr != 0 {
+                            self.state.set_halted(false);
+                            self.timer.irq_pending = true;
+                            self.timer.irq_isr = isr;
+                            self.timer.irq_imr = self
+                                .memory
+                                .read_internal_byte(IMEM_IMR_OFFSET)
+                                .unwrap_or(self.timer.irq_imr);
+                            if self.timer.irq_source.is_none() {
+                                let src = if (isr & ISR_RXI) != 0 {
+                                    "RX"
+                                } else if (isr & ISR_EXI) != 0 {
+                                    "EX"
+                                } else if (isr & ISR_TXI) != 0 {
+                                    "TX"
+                                } else if (isr & ISR_ONKI) != 0 {
+                                    "ONK"
+                                } else if (isr & ISR_KEYI) != 0 {
+                                    "KEY"
+                                } else if (isr & ISR_STI) != 0 {
+                                    "STI"
+                                } else if (isr & ISR_MTI) != 0 {
+                                    "MTI"
+                                } else {
+                                    "IRQ"
+                                };
+                                self.timer.irq_source = Some(src.to_string());
+                            }
+                            self.timer.last_fired.clone_from(&self.timer.irq_source);
+                        }
+                    }
+                }
+
+                // A HALT boundary remains an idle boundary even when a status
+                // level wakes the core. Execute the first foreground opcode
+                // on the next scheduler step, after it receives its own
+                // silent validation and architectural fetch.
+                if halted_at_step_entry {
+                    let prev_cycle = self.metadata.cycle_count;
+                    let new_cycle = prev_cycle.wrapping_add(1);
+                    // HALT stops the SC62015 system clock, so the main timer
+                    // and its keyboard scan retain phase.  The 32 kHz subclock
+                    // continues and may wake the core through STI.
+                    self.timer.defer_mti(1);
+                    self.metadata.cycle_count = new_cycle;
+                    self.advance_iq7000_rtc_timing_units(1);
+                    self.tick_timers_and_keyboard_selected(new_cycle, false, true);
+                    if self
+                        .memory
+                        .read_internal_byte(IMEM_ISR_OFFSET)
+                        .is_some_and(|isr| isr != 0)
+                    {
+                        self.state.set_halted(false);
+                        self.arm_pending_irq_from_isr();
+                    }
+                    self.refresh_raw_key_irq_level();
+                    // With no trace active, a synchronous step call cannot
+                    // receive new host input between idle boundaries. Skip to
+                    // the next sub-timer deadline (or the end of the caller's
+                    // budget) while preserving the frozen main-timer phase.
+                    if self.state.is_halted() && !perfetto_active && remaining != 0 {
+                        let idle_budget = u64::try_from(remaining)
+                            .unwrap_or(u64::MAX)
+                            .min((1_u64 << 63) - 1);
+                        let end_cycle = new_cycle.wrapping_add(idle_budget);
+                        let target_cycle = self
+                            .timer
+                            .next_fire_cycle_in_span_selected(new_cycle, end_cycle, false, true)
+                            .unwrap_or(end_cycle);
+                        let skipped = target_cycle.wrapping_sub(new_cycle);
+                        if skipped != 0 {
+                            let (rtc_skipped, _) = self.advance_iq7000_rtc_until_alarm(skipped);
+                            let actual_target_cycle = new_cycle.wrapping_add(rtc_skipped);
+                            self.timer.defer_mti(rtc_skipped);
+                            self.metadata.cycle_count = actual_target_cycle;
+                            self.tick_timers_and_keyboard_selected(
+                                actual_target_cycle,
+                                false,
+                                true,
+                            );
+                            remaining -= usize::try_from(rtc_skipped)
+                                .expect("idle skip is bounded by the usize input budget");
+                            if self
+                                .memory
+                                .read_internal_byte(IMEM_ISR_OFFSET)
+                                .is_some_and(|isr| isr != 0)
+                            {
+                                self.state.set_halted(false);
+                                self.arm_pending_irq_from_isr();
+                            }
+                            self.refresh_raw_key_irq_level();
+                        }
+                    }
+                    if perfetto_active {
+                        let mut guard = PERFETTO_TRACER.enter();
+                        guard.with_some(|tracer| {
+                            tracer.update_counters(
+                                self.metadata.instruction_count,
+                                self.state.call_depth(),
+                                self.memory.memory_read_count(),
+                                self.memory.memory_write_count(),
+                            );
+                        });
+                    }
+                    continue;
+                }
+                prepared_instruction
+            };
 
             let in_interrupt_before = self.timer.in_interrupt;
             // Only the loop detector consumes this classification.
