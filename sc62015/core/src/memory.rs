@@ -267,6 +267,9 @@ pub struct MemoryImage {
     imr_isr_hook: Option<ImrIsrHook>,
     overlays: Vec<MemoryOverlay>,
     overlay_span: Option<(u32, u32)>,
+    /// No overlay or host range intersects the upper ROM window
+    /// 0xC0000..=0xFFFFF (kept exact by `refresh_upper_rom_plain`).
+    upper_rom_plain: bool,
     memory_card_state: MemoryCardState,
     retained_memory_card: Option<RetainedMemoryCard>,
     overlay_epoch: u64,
@@ -319,6 +322,7 @@ impl MemoryImage {
             imr_isr_hook: None,
             overlays: Vec::new(),
             overlay_span: None,
+            upper_rom_plain: true,
             memory_card_state: MemoryCardState::Unconfigured,
             retained_memory_card: None,
             overlay_epoch: 0,
@@ -479,6 +483,7 @@ impl MemoryImage {
 
     pub fn set_python_ranges(&mut self, ranges: Vec<(u32, u32)>) {
         self.python_ranges = ranges;
+        self.refresh_upper_rom_plain();
     }
 
     pub fn python_ranges(&self) -> &[(u32, u32)] {
@@ -519,6 +524,7 @@ impl MemoryImage {
             None => (overlay.start, overlay.end),
         });
         self.overlays.push(overlay);
+        self.refresh_upper_rom_plain();
         self.overlays
             .sort_by(|a, b| (a.start, a.end, &a.name).cmp(&(b.start, b.end, &b.name)));
     }
@@ -532,7 +538,15 @@ impl MemoryImage {
                 None => (overlay.start, overlay.end),
             })
         });
+        self.refresh_upper_rom_plain();
         self.overlays.len() != previous_len
+    }
+
+    fn refresh_upper_rom_plain(&mut self) {
+        const ROM: (u32, u32) = (0xC0000, 0xFFFFF);
+        let intersects = |(start, end): (u32, u32)| start <= ROM.1 && ROM.0 <= end;
+        self.upper_rom_plain = !self.overlay_span.is_some_and(intersects)
+            && !self.python_ranges.iter().copied().any(intersects);
     }
 
     /// Whether `address` lies in the union span of all overlays.
@@ -1296,6 +1310,9 @@ impl MemoryImage {
         let end = start.checked_add(len)?.checked_sub(1)?;
         if !(0xc0000..=0xfffff).contains(&start) || end > 0xfffff {
             return None;
+        }
+        if self.upper_rom_plain {
+            return self.external.get(start..=end);
         }
         if self
             .overlay_span
