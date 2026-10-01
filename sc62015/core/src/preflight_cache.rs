@@ -62,7 +62,7 @@ impl PreflightCache {
     /// The cached `(opcode, timing, slot)` for `pc` when its live bytes still
     /// match the bytes that were validated. The caller must have established
     /// that no device maps the upper ROM window.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn lookup(
         &self,
         pc: u32,

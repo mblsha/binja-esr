@@ -1535,7 +1535,7 @@ impl CoreRuntime {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn arm_pending_irq_from_isr(&mut self) {
         if self.timer.irq_pending {
             return;
@@ -1613,6 +1613,7 @@ impl CoreRuntime {
     /// Decide whether the IRQ transfer is already selected at this scheduling
     /// boundary using only side-effect-free state. Sources asserted later by a
     /// timer or device remain pending for the next boundary.
+    #[inline(always)]
     fn irq_transfer_selected_at_step_entry(&self) -> bool {
         if self.state.is_off() || self.state.is_halted() || self.timer.in_interrupt {
             return false;
