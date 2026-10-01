@@ -402,6 +402,9 @@ impl KeyboardMatrix {
     /// state, and the compatibility `raw_kil` presentation option do not
     /// participate.
     pub fn compute_physical_kil(&self) -> u8 {
+        if self.physical_columns_by_row == [0; 8] {
+            return 0;
+        }
         let active = self.active_column_mask();
         self.physical_columns_by_row
             .iter()
