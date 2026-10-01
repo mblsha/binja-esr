@@ -1256,6 +1256,30 @@ impl MemoryImage {
         Some(self.external[address as usize])
     }
 
+    /// The live backing bytes of `[address, address + len)` when the whole span
+    /// lies in the upper ROM window and no overlay or host range can intercept
+    /// any of it, i.e. when every byte would be served by `peek_plain_rom_byte`.
+    /// Device routing remains the caller's responsibility.
+    pub(crate) fn plain_upper_rom_span(&self, address: u32, len: usize) -> Option<&[u8]> {
+        let start = address as usize;
+        let end = start.checked_add(len)?.checked_sub(1)?;
+        if !(0xc0000..=0xfffff).contains(&start) || end > 0xfffff {
+            return None;
+        }
+        if self
+            .overlay_span
+            .is_some_and(|(lo, hi)| (lo as usize) <= end && start <= hi as usize)
+        {
+            return None;
+        }
+        if !self.python_ranges.is_empty()
+            && (start..=end).any(|addr| self.requires_python(addr as u32))
+        {
+            return None;
+        }
+        self.external.get(start..=end)
+    }
+
     pub fn load_with_pc(&self, address: u32, bits: u8, pc: Option<u32>) -> Option<u32> {
         self.memory_reads
             .set(self.memory_reads.get().saturating_add(1));

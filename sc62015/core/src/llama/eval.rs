@@ -2927,7 +2927,7 @@ impl LlamaExecutor {
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
     ) -> Result<u8, &'static str> {
-        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, false)
+        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, false, false)
             .map(|(length, deferred_trace)| {
                 debug_assert!(deferred_trace.is_none());
                 length
@@ -2943,7 +2943,22 @@ impl LlamaExecutor {
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
     ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
-        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true)
+        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true, false)
+    }
+
+    /// Like `execute_with_vector_transfer_deferred_trace`, for a caller that
+    /// has already run `validate_before_scheduling_with_length` (with vector
+    /// targets) on this exact instruction and guarantees its bytes are stable
+    /// between that preflight and this call. The validation outcome depends
+    /// only on those bytes, so repeating it here cannot change the result.
+    pub(crate) fn execute_prevalidated_deferred_trace<B: LlamaBus>(
+        &mut self,
+        opcode: u8,
+        state: &mut LlamaState,
+        bus: &mut B,
+        prepared_transfer: Option<ValidatedVectorTransfer>,
+    ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
+        self.execute_with_vector_transfer_inner(opcode, state, bus, prepared_transfer, true, true)
     }
 
     fn execute_with_vector_transfer_inner<B: LlamaBus>(
@@ -2953,6 +2968,7 @@ impl LlamaExecutor {
         bus: &mut B,
         prepared_transfer: Option<ValidatedVectorTransfer>,
         defer_instruction_trace: bool,
+        prevalidated: bool,
     ) -> Result<(u8, Option<DeferredInstructionTrace>), &'static str> {
         if let Some(transfer) = prepared_transfer.as_ref() {
             let expected_vector = match self.lookup(opcode).map(|entry| entry.kind) {
@@ -2966,13 +2982,15 @@ impl LlamaExecutor {
         }
         // Complete every rejection-capable decode/data check before reserving
         // a trace index or publishing last-PC/call-stack context.
-        self.validate_before_scheduling_with_options(
-            opcode,
-            state,
-            bus,
-            true,
-            prepared_transfer.is_none(),
-        )?;
+        if !prevalidated {
+            self.validate_before_scheduling_with_options(
+                opcode,
+                state,
+                bus,
+                true,
+                prepared_transfer.is_none(),
+            )?;
+        }
         let start_pc = state.pc() & mask_for(RegName::PC);
         // For perfetto parity with Python, keep tracing anchored to the prefix byte/PC.
         let trace_pc_snapshot = start_pc;

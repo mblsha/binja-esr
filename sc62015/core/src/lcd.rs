@@ -71,6 +71,14 @@ pub trait LcdHal: Send {
     fn kind(&self) -> LcdKind;
     fn reset(&mut self);
     fn handles(&self, address: u32) -> bool;
+    /// Whether `handles` may claim any address in the canonical 20-bit span
+    /// `[start, end]`. Hot bus paths use this to skip per-access routing
+    /// checks for spans (such as the upper ROM window) that the device never
+    /// maps. Implementations must not under-report; the default is
+    /// conservative.
+    fn may_handle_span(&self, _start: u32, _end: u32) -> bool {
+        true
+    }
     fn read(&mut self, address: u32) -> Option<u8>;
     fn write(&mut self, address: u32, value: u8);
     fn read_placeholder(&self, address: u32) -> u32;
@@ -834,7 +842,17 @@ impl LcdController {
     }
 }
 
+/// Whether `[start, end]` intersects either of a controller's two fixed
+/// memory-mapped windows.
+fn span_intersects_windows(start: u32, end: u32, windows: [(u32, u32); 2]) -> bool {
+    windows.iter().any(|&(lo, hi)| start <= hi && lo <= end)
+}
+
 impl LcdHal for LcdController {
+    fn may_handle_span(&self, start: u32, end: u32) -> bool {
+        span_intersects_windows(start, end, [(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
@@ -905,6 +923,10 @@ impl LcdHal for LcdController {
 }
 
 impl LcdHal for Iq7000LcdController {
+    fn may_handle_span(&self, start: u32, end: u32) -> bool {
+        span_intersects_windows(start, end, [(0x4000, 0x41FF), (0x6000, 0x61FF)])
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
@@ -1120,6 +1142,10 @@ impl Default for UnknownLcdController {
 }
 
 impl LcdHal for UnknownLcdController {
+    fn may_handle_span(&self, start: u32, end: u32) -> bool {
+        span_intersects_windows(start, end, [(0x2000, 0x2FFF), (0xA000, 0xAFFF)])
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
