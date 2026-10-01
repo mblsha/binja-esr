@@ -1724,86 +1724,11 @@ impl CoreRuntime {
             pc: u32,
         }
         impl RuntimeBus<'_> {
-            #[inline(always)]
-            fn dev(&self) -> &BusDevices {
-                // SAFETY: points at a local that outlives every bus built from it.
-                unsafe { &*self.dev }
-            }
-
-            /// Plain-memory load that the device chain in `load` provably
-            /// passes straight to `load_with_pc`; `None` means "use the chain".
-            #[inline(always)]
-            unsafe fn load_fast(&mut self, addr: u32, bits: u8) -> Option<u32> {
-                let bytes = u32::from(bits.div_ceil(8).max(1));
-                if MemoryImage::is_internal(addr) {
-                    let start = addr - INTERNAL_MEMORY_START;
-                    let end = start + bytes - 1;
-                    if !self.fast.internal_unmapped
-                        || end > INTERNAL_ADDR_MASK
-                        || FastRouting::span_hits(FastRouting::LOAD_SPECIAL_SFRS, start, end)
-                    {
-                        return None;
-                    }
-                } else if !self.fast.external_ok(addr, bytes) {
-                    return None;
-                }
-                Some(
-                    (*self.mem)
-                        .load_with_pc(addr, bits, Some(self.pc))
-                        .unwrap_or(0),
-                )
-            }
-
-            /// Store counterpart of `load_fast`.
-            #[inline(always)]
-            unsafe fn store_fast(&mut self, addr: u32, bits: u8, value: u32) -> bool {
-                let bytes = u32::from(bits.div_ceil(8).max(1));
-                if MemoryImage::is_internal(addr) {
-                    let start = addr - INTERNAL_MEMORY_START;
-                    let end = start + bytes - 1;
-                    if !self.fast.internal_unmapped
-                        || end > INTERNAL_ADDR_MASK
-                        || FastRouting::span_hits(FastRouting::STORE_SPECIAL_SFRS, start, end)
-                    {
-                        return false;
-                    }
-                } else if !self.fast.external_ok(addr, bytes) {
-                    return false;
-                }
-                let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
-                true
-            }
-        }
-
-        impl<'a> LlamaBus for RuntimeBus<'a> {
-            fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
-                // Upper ROM cannot intersect keyboard/SIO/RTC ports or the
-                // IQ clock workspace. LcdHal is extensible, so check it even here.
+            /// The full device-routing chain for loads that the fast path
+            /// does not take.
+            #[inline(never)]
+            unsafe fn load_routed(&mut self, addr: u32, bits: u8) -> u32 {
                 unsafe {
-                    if (0xc0000..=0xfffff).contains(&addr)
-                        && (self.upper_rom_unmapped
-                            || !self.dev().lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
-                    {
-                        if let Some(value) = (*self.mem).fetch_plain_rom_byte(addr) {
-                            return value;
-                        }
-                    }
-                }
-                self.load(addr, 8) as u8
-            }
-            fn tracing_active_hint(&self) -> Option<bool> {
-                // A tracer cannot be installed or removed while this
-                // synchronous call owns the emulator (the scheduler samples
-                // it once per call); in the browser, stub callbacks are
-                // slice handoffs.
-                Some(self.dev().tracing_active)
-            }
-            fn load(&mut self, addr: u32, bits: u8) -> u32 {
-                // Route keyboard/LCD accesses to their devices for parity with Python overlays.
-                unsafe {
-                    if let Some(value) = self.load_fast(addr, bits) {
-                        return value;
-                    }
                     // The SC62015 exposes keyboard registers as byte-wide ports (KOL/KOH/KIL),
                     // but firmware frequently uses word-sized access via KOL.w (touching 0xF0/0xF1).
                     // Split multi-byte accesses so the keyboard handler sees both bytes.
@@ -1927,11 +1852,12 @@ impl CoreRuntime {
                         .unwrap_or(0)
                 }
             }
-            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+
+            /// The full device-routing chain for stores that the fast path
+            /// does not take.
+            #[inline(never)]
+            unsafe fn store_routed(&mut self, addr: u32, bits: u8, value: u32) {
                 unsafe {
-                    if self.store_fast(addr, bits, value) {
-                        return;
-                    }
                     // See `load`: split word-sized KOL.w writes so KOH is updated too.
                     if bits > 8
                         && !self.dev().keyboard_ptr.is_null()
@@ -2084,6 +2010,100 @@ impl CoreRuntime {
                                 .unwrap_or(0);
                             timer.sync_scr_selection(scr, self.cycle);
                         }
+                    }
+                }
+            }
+
+            #[inline(always)]
+            fn dev(&self) -> &BusDevices {
+                // SAFETY: points at a local that outlives every bus built from it.
+                unsafe { &*self.dev }
+            }
+
+            /// Plain-memory load that the device chain in `load` provably
+            /// passes straight to `load_with_pc`; `None` means "use the chain".
+            #[inline(always)]
+            unsafe fn load_fast(&mut self, addr: u32, bits: u8) -> Option<u32> {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                if MemoryImage::is_internal(addr) {
+                    let start = addr - INTERNAL_MEMORY_START;
+                    let end = start + bytes - 1;
+                    if !self.fast.internal_unmapped
+                        || end > INTERNAL_ADDR_MASK
+                        || FastRouting::span_hits(FastRouting::LOAD_SPECIAL_SFRS, start, end)
+                    {
+                        return None;
+                    }
+                } else if !self.fast.external_ok(addr, bytes) {
+                    return None;
+                }
+                Some(
+                    (*self.mem)
+                        .load_with_pc(addr, bits, Some(self.pc))
+                        .unwrap_or(0),
+                )
+            }
+
+            /// Store counterpart of `load_fast`.
+            #[inline(always)]
+            unsafe fn store_fast(&mut self, addr: u32, bits: u8, value: u32) -> bool {
+                let bytes = u32::from(bits.div_ceil(8).max(1));
+                if MemoryImage::is_internal(addr) {
+                    let start = addr - INTERNAL_MEMORY_START;
+                    let end = start + bytes - 1;
+                    if !self.fast.internal_unmapped
+                        || end > INTERNAL_ADDR_MASK
+                        || FastRouting::span_hits(FastRouting::STORE_SPECIAL_SFRS, start, end)
+                    {
+                        return false;
+                    }
+                } else if !self.fast.external_ok(addr, bytes) {
+                    return false;
+                }
+                let _ = (*self.mem).store_with_pc(addr, bits, value, Some(self.pc));
+                true
+            }
+        }
+
+        impl<'a> LlamaBus for RuntimeBus<'a> {
+            fn fetch_instruction_byte(&mut self, addr: u32) -> u8 {
+                // Upper ROM cannot intersect keyboard/SIO/RTC ports or the
+                // IQ clock workspace. LcdHal is extensible, so check it even here.
+                unsafe {
+                    if (0xc0000..=0xfffff).contains(&addr)
+                        && (self.upper_rom_unmapped
+                            || !self.dev().lcd_ptr.is_some_and(|lcd| (*lcd).handles(addr)))
+                    {
+                        if let Some(value) = (*self.mem).fetch_plain_rom_byte(addr) {
+                            return value;
+                        }
+                    }
+                }
+                self.load(addr, 8) as u8
+            }
+            fn tracing_active_hint(&self) -> Option<bool> {
+                // A tracer cannot be installed or removed while this
+                // synchronous call owns the emulator (the scheduler samples
+                // it once per call); in the browser, stub callbacks are
+                // slice handoffs.
+                Some(self.dev().tracing_active)
+            }
+            #[inline(always)]
+            fn load(&mut self, addr: u32, bits: u8) -> u32 {
+                // SAFETY: see `load_fast`/`load_routed`.
+                unsafe {
+                    match self.load_fast(addr, bits) {
+                        Some(value) => value,
+                        None => self.load_routed(addr, bits),
+                    }
+                }
+            }
+            #[inline(always)]
+            fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                // SAFETY: see `store_fast`/`store_routed`.
+                unsafe {
+                    if !self.store_fast(addr, bits, value) {
+                        self.store_routed(addr, bits, value);
                     }
                 }
             }
