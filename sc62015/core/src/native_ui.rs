@@ -61,18 +61,24 @@ impl<E> ControlInbox<E> {
         self.quit.store(true, Ordering::Release);
     }
     pub fn toggle_pause(&self) {
-        let _ = self
-            .pause
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some(((old & !1).wrapping_add(2)) | ((old & 1) ^ 1))
-            });
+        self.update_pause(|old| ((old & !1).wrapping_add(2)) | ((old & 1) ^ 1));
     }
     pub fn request_pause(&self) {
-        let _ = self
-            .pause
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                Some((old & !1).wrapping_add(2) | 1)
-            });
+        self.update_pause(|old| (old & !1).wrapping_add(2) | 1);
+    }
+    /// Atomically replace the pause word with `next(current)` (the
+    /// `fetch_update(AcqRel, Acquire, ..)` loop, spelled out so it builds
+    /// without deprecation warnings on every toolchain).
+    fn update_pause(&self, next: impl Fn(u64) -> u64) {
+        let mut current = self.pause.load(Ordering::Acquire);
+        while let Err(observed) = self.pause.compare_exchange_weak(
+            current,
+            next(current),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            current = observed;
+        }
     }
     pub fn release_all(&self) {
         let mut events = self.events.lock().unwrap();
