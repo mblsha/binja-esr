@@ -3097,14 +3097,12 @@ fn resolve_key_seq_key(model: DeviceModel, raw: &str) -> Result<AutoKeyKind, Str
             return Ok(key);
         }
     }
-    for prefix in ["event"] {
-        if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
-            rest.strip_prefix(':')
-                .or_else(|| rest.strip_prefix('='))
-                .map(str::trim)
-        }) {
-            return Ok(AutoKeyKind::Event(parse_u8_value(value)?));
-        }
+    if let Some(value) = lowered.strip_prefix("event").and_then(|rest| {
+        rest.strip_prefix(':')
+            .or_else(|| rest.strip_prefix('='))
+            .map(str::trim)
+    }) {
+        return Ok(AutoKeyKind::Event(parse_u8_value(value)?));
     }
     for prefix in ["digitizer", "input", "raw-input", "raw_event", "raw-event"] {
         if let Some(value) = lowered.strip_prefix(prefix).and_then(|rest| {
