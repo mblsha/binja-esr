@@ -2263,7 +2263,9 @@ impl LlamaExecutor {
                     let r1_code = (raw >> 4) & 0x7;
                     let r2_code = raw & 0x7;
                     let legal = match entry.opcode {
-                        0x44 | 0x4C => (2..=3).contains(&r1_code) && r2_code <= 3,
+                        // OZ-707 54E57 uses 44 25 (ADD BA,Y): a pointer
+                        // source is truncated to the opcode's 16-bit width.
+                        0x44 | 0x4C => (2..=3).contains(&r1_code),
                         0x45 | 0x4D => (4..=7).contains(&r1_code),
                         0x46 | 0x4E => r1_code <= 1 && r2_code <= 1,
                         _ => true,
@@ -6543,6 +6545,8 @@ mod tests {
     #[test]
     fn mixed_width_add_sub_register_pairs_follow_rom_selector_classes() {
         let cases = [
+            (0x44, 0x25, RegName::BA, 0, RegName::Y, 0x12345, 0x2345),
+            (0x4C, 0x25, RegName::BA, 0x2346, RegName::Y, 0x12345, 1),
             (0x44, 0x30, RegName::I, 0x1000, RegName::A, 0x34, 0x1034),
             (
                 0x45,
