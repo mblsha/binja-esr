@@ -3169,10 +3169,10 @@ class RegPair(HasOperands, Reg3):
         reg1_code = (raw >> 4) & 7
         reg2_code = raw & 7
         arithmetic_classes = {
-            0x44: (range(2, 4), range(0, 4)),  # ADD r2,r1 or r2,r2
+            0x44: (range(2, 4), range(0, 8)),  # OZ-707 54E57: ADD BA,Y, low word
             0x45: (range(4, 8), range(0, 8)),  # ADD r3,r
             0x46: (range(0, 2), range(0, 2)),  # ADD r1,r1
-            0x4C: (range(2, 4), range(0, 4)),  # SUB r2,r1 or r2,r2
+            0x4C: (range(2, 4), range(0, 8)),  # SUB r2,r, low word
             0x4D: (range(4, 8), range(0, 8)),  # SUB r3,r
             0x4E: (range(0, 2), range(0, 2)),  # SUB r1,r1
         }

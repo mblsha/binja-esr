@@ -333,8 +333,8 @@ def test_add_sub_register_pair_assembler_matrix_round_trips_or_fails_closed() ->
     """The assembler and decoder must agree on every register-pair selector.
 
     The legal matrices include mixed-width ROM forms such as ``ADD Y, BA`` and
-    ``SUB I, A``; invalid wider sources must be rejected instead of emitting an
-    instruction that immediately becomes undecodable.
+    ``SUB I, A`` and OZ-707's ``ADD BA, Y``. Byte destinations still reject
+    wider sources; word destinations accept pointer sources' low words.
     """
 
     registers = ("A", "IL", "BA", "I", "X", "Y", "U", "S")
@@ -347,13 +347,7 @@ def test_add_sub_register_pair_assembler_matrix_round_trips_or_fails_closed() ->
         for dest_code, dest in enumerate(registers):
             for src_code, src in enumerate(registers):
                 source = f"{mnemonic} {dest}, {src}"
-                legal = (
-                    src_code <= 1
-                    if dest_code <= 1
-                    else src_code <= 3
-                    if dest_code <= 3
-                    else True
-                )
+                legal = src_code <= 1 if dest_code <= 1 else True
                 if not legal:
                     with pytest.raises(
                         AssemblerError, match="Invalid arithmetic register pair"
