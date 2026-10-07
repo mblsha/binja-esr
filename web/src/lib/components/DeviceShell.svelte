@@ -2,6 +2,9 @@
 	import type { RomModel } from '../rom_model';
 	import type { InputContact } from '../emulator/host_inputs';
 	import { deviceLayout, rectStyle } from '../device_layout';
+	import OzTabletSurface from './OzTabletSurface.svelte';
+	import { OZ_PANEL } from '../oz9600_panel';
+	import type { TabletContact } from '../emulator/oz9600_replay';
 	import VirtualKeyboard from './VirtualKeyboard.svelte';
 	import type { HostKeyboardMode } from '../keymap';
 
@@ -12,6 +15,7 @@
 	export let deliveredContacts = new Set<InputContact>();
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
+	export let onTablet: (contact: TabletContact, owner: string, cancel: boolean) => void = () => {};
 	export let onCancelAll: () => void;
 	$: layout = deviceLayout(model);
 </script>
@@ -31,7 +35,19 @@
 			data-layout-version={layout.version}
 			style={`aspect-ratio:${layout.width}/${layout.height};`}
 		>
-			{#if model === 'iq-7000'}
+			{#if model === 'oz-9600'}
+				<div class="oz-brand" aria-hidden="true">SHARP <small>OZ-9600 · WIZARD 256KB</small></div>
+				<div class="oz-panel" aria-label="Fixed printed tablet panel; artwork outside LCD">
+					{#each OZ_PANEL as [name, x, y]}
+						<div class:search={name === 'Search'} class="printed">
+							<OzTabletSurface label={name} fixed={[x, y]} {disabled} onContact={onTablet}
+								><span>{name}</span></OzTabletSurface
+							>
+						</div>
+					{/each}
+				</div>
+				<div class="oz-indicator-labels" aria-hidden="true">BATT<br />CARD<br />EDIT<br />2nd<br />CAPS</div>
+			{:else if model === 'iq-7000'}
 				<div class="left-case" aria-hidden="true"></div>
 				<div class="right-case" aria-hidden="true"></div>
 				<div class="hinge" aria-hidden="true"></div>
@@ -56,7 +72,10 @@
 				<div class="pc-glass" aria-hidden="true"></div>
 				<div class="key-divider" aria-hidden="true"></div>
 			{/if}
-			<div class="lcd-window" style={rectStyle(layout.lcd, layout)}><slot /></div>
+			<div class="lcd-window" style={rectStyle(layout.lcd, layout)}>
+				{#if model === 'oz-9600'}<OzTabletSurface label="LCD" {disabled} onContact={onTablet}><slot /></OzTabletSurface
+					>{:else}<slot />{/if}
+			</div>
 			<VirtualKeyboard
 				{model}
 				{layout}
@@ -73,6 +92,61 @@
 </section>
 
 <style>
+	.oz-9600 {
+		width: 100%;
+		min-width: 720px;
+		max-width: 1080px;
+		border: 4px solid #202522;
+		border-radius: 30px;
+		background: linear-gradient(#41433b 0%, #33362e 54%, #716e59 55%, #666454 100%);
+		box-shadow:
+			inset 0 2px 5px #aaa,
+			0 12px 20px #10181b88;
+	}
+	.oz-brand {
+		position: absolute;
+		left: 6%;
+		top: 55%;
+		color: #e9d999;
+		font: bold 2.3cqw Arial;
+	}
+	.oz-brand small {
+		font-size: 1.5cqw;
+		margin-left: 1em;
+	}
+	.oz-panel {
+		position: absolute;
+		left: 7%;
+		top: 4.75%;
+		width: 19.5%;
+		height: 48.43%;
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		grid-template-rows: repeat(6, 1fr);
+		background: #d5d5b9;
+		color: #3a3e31;
+		border: 2px solid #6f7461;
+	}
+	.printed {
+		border: 1px solid #74795e;
+		display: flex;
+		text-align: center;
+		font: 1.05cqw Arial;
+	}
+	.printed :global(span) {
+		display: block;
+		padding-top: 20%;
+	}
+	.printed.search {
+		grid-column: 1/4;
+	}
+	.oz-indicator-labels {
+		position: absolute;
+		top: 17%;
+		right: 2.7%;
+		font: 1.15cqw/2.8 Arial;
+		color: #dddac0;
+	}
 	.bench {
 		border: 1px solid #35434a;
 		border-radius: 16px;
@@ -298,6 +372,61 @@
 		max-height: 100%;
 	}
 	@media (max-width: 700px) {
+		.oz-9600 {
+			width: 100%;
+			min-width: 720px;
+			max-width: 1080px;
+			border: 4px solid #202522;
+			border-radius: 30px;
+			background: linear-gradient(#41433b 0%, #33362e 54%, #716e59 55%, #666454 100%);
+			box-shadow:
+				inset 0 2px 5px #aaa,
+				0 12px 20px #10181b88;
+		}
+		.oz-brand {
+			position: absolute;
+			left: 6%;
+			top: 55%;
+			color: #e9d999;
+			font: bold 2.3cqw Arial;
+		}
+		.oz-brand small {
+			font-size: 1.5cqw;
+			margin-left: 1em;
+		}
+		.oz-panel {
+			position: absolute;
+			left: 7%;
+			top: 4.75%;
+			width: 19.5%;
+			height: 48.43%;
+			display: grid;
+			grid-template-columns: repeat(3, 1fr);
+			grid-template-rows: repeat(6, 1fr);
+			background: #d5d5b9;
+			color: #3a3e31;
+			border: 2px solid #6f7461;
+		}
+		.printed {
+			border: 1px solid #74795e;
+			display: flex;
+			text-align: center;
+			font: 1.05cqw Arial;
+		}
+		.printed :global(span) {
+			display: block;
+			padding-top: 20%;
+		}
+		.printed.search {
+			grid-column: 1/4;
+		}
+		.oz-indicator-labels {
+			position: absolute;
+			top: 17%;
+			right: 2.7%;
+			font: 1.15cqw/2.8 Arial;
+			color: #dddac0;
+		}
 		.bench {
 			padding: 14px 10px 12px;
 		}

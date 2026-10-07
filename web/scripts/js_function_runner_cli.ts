@@ -44,7 +44,7 @@ Usage:
   cat script.js | npm run fnr:cli -- [options] --stdin
 
 Options:
-  --model <iq-7000|pc-e500>   ROM preset (default: Rust runtime default)
+  --model <iq-7000|pc-e500|oz-9600>   ROM preset (default: Rust runtime default)
   --rom <path>               Explicit ROM path (overrides --model)
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
@@ -185,6 +185,8 @@ function reportRelativePath(model: RomModel): string {
 	switch (model) {
 		case 'iq-7000':
 			return 'rom-analysis/iq-7000/bnida.json';
+		case 'oz-9600':
+			return 'rom-analysis/oz-9600/bnida.json';
 		case 'pc-e500':
 			return 'rom-analysis/pc-e500/en/bnida.json';
 	}
@@ -492,7 +494,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 			const next = argv[++i];
 			if (!next) die('error: --model requires a value');
 			const parsed = normalizeRomModel(next);
-			if (!parsed) die(`error: unknown --model '${next}' (expected: iq-7000|pc-e500)`);
+			if (!parsed) die(`error: unknown --model '${next}' (expected: iq-7000|pc-e500|oz-9600)`);
 			model = parsed;
 			continue;
 		}

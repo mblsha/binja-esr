@@ -76,13 +76,41 @@ describe('matrixCodeForKeyEvent', () => {
 			expect(matrixCodeForKeyEvent({ code: 'F12' } as KeyboardEvent, model)).toBe('on');
 	});
 
+	it('uses OZ matrix contacts and a separate ON input without inheriting PC mode keys', () => {
+		expect(physicalKey('oz-9600', 'SPACE')).toBe(38);
+		expect(physicalKey('oz-9600', 'ENTER')).toBe(78);
+		expect(physicalKey('oz-9600', 'Q')).toBe(3);
+		expect(physicalKey('oz-9600', 'CALENDAR')).toBeNull();
+		expect(physicalKey('oz-9600', 'OFF')).toBe(1);
+		expect(matrixCodeForKeyEvent({ code: 'F12' } as KeyboardEvent, 'oz-9600')).toBe('on');
+		const expected = {
+			F1: 48,
+			F2: 49,
+			F9: 5,
+			F10: 6,
+			F11: 86,
+			Escape: 9,
+			PageUp: 72,
+			PageDown: 81,
+			NumpadEnter: 78,
+			ArrowLeft: 56,
+			ArrowDown: 57,
+			ArrowUp: 64,
+			ArrowRight: 65,
+		};
+		for (const [code, value] of Object.entries(expected))
+			expect(matrixCodeForKeyEvent({ code } as KeyboardEvent, 'oz-9600')).toBe(value);
+		for (const code of ['F3', 'F4', 'F5', 'F6', 'F7', 'F8'])
+			expect(matrixCodeForKeyEvent({ code } as KeyboardEvent, 'oz-9600')).toBeNull();
+		expect(virtualKeysForModel('oz-9600').filter((k) => k.code === 'on')).toHaveLength(1);
+	});
 	it('returns null for unmapped keys', () => {
 		expect(matrixCodeForKeyEvent({ code: 'Unidentified' } as KeyboardEvent)).toBeNull();
 		expect(matrixCodeForKeyEvent({ code: 'Comma' } as KeyboardEvent, 'iq-7000')).toBeNull();
 	});
 
 	it('shares complete letter/digit contacts between native data, browser host keys and buttons', () => {
-		for (const model of ['pc-e500', 'iq-7000'] as const) {
+		for (const model of ['pc-e500', 'iq-7000', 'oz-9600'] as const) {
 			const virtual = virtualKeysForModel(model);
 			expect(new Set(virtual.map((key) => key.testId)).size).toBe(virtual.length);
 			for (const char of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') {

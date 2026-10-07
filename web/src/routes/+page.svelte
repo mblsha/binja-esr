@@ -16,7 +16,18 @@
 	import { automaticHostSlice, type ExecutionMode, type PacingStatus } from '$lib/emulator/host_pacing';
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
 	import { HostInputs, InputBufferOverflow, applyContact, type InputContact } from '$lib/emulator/host_inputs';
+	import { runOzPhysicalReplay, type OzProfile, type TabletContact } from '$lib/emulator/oz9600_replay';
+	import { TabletInputs } from '$lib/emulator/tablet_inputs';
 	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
+	import { AudioPlayback, AudioDelivery } from '$lib/emulator/oz_audio';
+	import {
+		SerialCapture,
+		SerialDelivery,
+		serialInput,
+		queueSerialInput,
+		type SerialFormat,
+		type SerialEnding,
+	} from '$lib/emulator/oz_serial';
 
 	const ROM_MODEL_STORAGE_KEY = 'sc62015:rom-model';
 	const romModelStore = createPersistedStore<RomModel>(ROM_MODEL_STORAGE_KEY, 'pc-e500', {
@@ -73,7 +84,120 @@
 	let romModelWasPersisted = false;
 	$: romModel = $romModelStore;
 
+	let ozProfile: OzProfile = 'provisional-v1';
+	let ozLoadedProfile: OzProfile = 'strict';
+	let ozReplayReport: any = null;
+	let ozReplayStatus = '';
 	let running = false;
+	let soundEnabled = false;
+	let soundBusy = false;
+	let soundError = '';
+	let serialFormat: SerialFormat = 'text';
+	let serialEnding: SerialEnding = 'crlf';
+	let serialText = '';
+	let serialBusy = false;
+	let serialError = '';
+	let serialNotice = '';
+	let serialRevision = 0;
+	const serialCapture = new SerialCapture();
+	let serialStatus = serialCapture.status();
+	let serialPreview = '';
+	$: {
+		serialRevision;
+		serialStatus = serialCapture.status();
+		serialPreview = serialCapture.preview();
+	}
+	const fallbackSerial = new SerialDelivery((packet) => {
+		serialCapture.push(packet);
+		serialRevision++;
+		fallbackSerial.consumed(packet.generation, packet.epoch, packet.sequence);
+	});
+	function resetFallbackSerial() {
+		serialCapture.begin(fallbackSerial.reset(romLoadGeneration));
+		serialRevision++;
+		serialNotice = serialError = '';
+	}
+	function pumpFallbackSerial() {
+		if (!worker && romModel === 'oz-9600' && emulator?.has_rom())
+			fallbackSerial.pump(() => emulator.sio_drain_tx_bytes());
+	}
+	async function sendSerial() {
+		if (
+			serialBusy ||
+			loadingRom ||
+			stepBusy ||
+			functionRunnerBusy ||
+			controlPending ||
+			!romLoaded ||
+			workerHealth !== 'ready'
+		)
+			return;
+		const generation = romLoadGeneration;
+		serialBusy = true;
+		serialError = '';
+		try {
+			const bytes = serialInput(serialText, serialFormat, serialEnding);
+			const result = worker
+				? await workerCall('serial_send', { generation, bytes }, [bytes.buffer])
+				: { queued: queueSerialInput(emulator, bytes) };
+			if (generation === romLoadGeneration)
+				serialNotice = `${result.queued} bytes queued for the device${running ? '' : ' — Resume or Step to receive them'}`;
+		} catch (error) {
+			if (generation === romLoadGeneration) serialError = String(error);
+		} finally {
+			serialBusy = false;
+		}
+	}
+	function downloadSerial() {
+		const bytes = serialCapture.bytes();
+		downloadBlob(
+			new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }),
+			'oz-9600-serial.raw',
+		);
+	}
+	const audioPlayback = new AudioPlayback();
+	let fallbackSoundActive = false;
+	const fallbackAudio = new AudioDelivery((packet) => {
+		audioPlayback.push(packet);
+		fallbackAudio.consumed(packet.generation, packet.epoch, packet.sequence);
+	});
+	function syncFallbackAudio(force = false) {
+		const enabled =
+			soundEnabled &&
+			running &&
+			romModel === 'oz-9600' &&
+			emulator?.execution_mode() === 'interactive' &&
+			!document.hidden;
+		if (force || enabled !== fallbackSoundActive) {
+			if (romModel === 'oz-9600' && emulator?.has_rom()) emulator.set_oz9600_audio_enabled(enabled);
+			fallbackSoundActive = enabled;
+			const reset = fallbackAudio.reset(romLoadGeneration, enabled);
+			audioPlayback.begin(reset.generation, reset.epoch, reset.enabled);
+		}
+	}
+	async function pushSoundPreference() {
+		if (worker)
+			await workerCall('set_audio', { enabled: soundEnabled && !document.hidden, generation: romLoadGeneration });
+		else syncFallbackAudio(true);
+	}
+	async function toggleSound() {
+		if (soundBusy) return;
+		soundBusy = true;
+		soundError = '';
+		try {
+			if (soundEnabled) {
+				soundEnabled = false;
+				audioPlayback.disable();
+			} else soundEnabled = await audioPlayback.enable();
+			await pushSoundPreference();
+		} catch (error) {
+			soundEnabled = false;
+			audioPlayback.disable();
+			soundError = String(error);
+		} finally {
+			soundBusy = false;
+		}
+	}
 	let targetFps = 30;
 
 	let functionRunnerBusy = false;
@@ -99,6 +223,15 @@
 	let lcdOnly = false;
 	const pendingVirtualRelease = new Map<number, number>();
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+	const fallbackTablet = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+	const fallbackHostInputs = {
+		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
+		advance: (n: number) => {
+			fallbackInputs.advance(n);
+			fallbackTablet.advance(n);
+		},
+		typingBoostBudget: fallbackInputs.typingBoostBudget,
+	};
 	let assistedTaps = true;
 	let lastInputAck: string | null = null;
 	const IMEM_BASE = 0x100000;
@@ -203,11 +336,12 @@
 		if (!workerRequests) return Promise.reject(new Error('worker not ready'));
 		const id = workerNextId++;
 		const message = { id, type, ...payload };
-		const timeoutMs = type === 'stop' ? 1_000 : type === 'eval_js' ? 300_000 : 30_000;
+		const timeoutMs = type === 'stop' ? 1_000 : type === 'eval_js' || type === 'oz_replay' ? 300_000 : 30_000;
 		return workerRequests.request<T>(message, transfer, timeoutMs);
 	}
 
 	function failWorker(message: string) {
+		audioPlayback.pause();
 		lastError = `${message}. Use Reset machine to replace the worker; unsaved emulator state will be lost.`;
 		workerHealth = 'faulted';
 		running = false;
@@ -239,6 +373,55 @@
 			if (worker !== thisWorker) return;
 			const data = event.data;
 			if (!data) return;
+			if (data.type === 'audio_reset' && data.generation === romLoadGeneration) {
+				audioPlayback.begin(data.generation, data.epoch, data.enabled && soundEnabled && controlPending !== 'stop');
+				return;
+			}
+			if (data.type === 'audio') {
+				try {
+					if (data.generation === romLoadGeneration) audioPlayback.push(data);
+				} catch (error) {
+					soundError = String(error);
+					soundEnabled = false;
+					audioPlayback.disable();
+				} finally {
+					workerPost({
+						id: workerNextId++,
+						type: 'audio_consumed',
+						generation: data.generation,
+						epoch: data.epoch,
+						sequence: data.sequence,
+					});
+				}
+				return;
+			}
+			if (data.type === 'audio_error' && data.generation === romLoadGeneration) {
+				soundError = data.error;
+				soundEnabled = false;
+				audioPlayback.disable();
+				return;
+			}
+			if (data.type === 'serial_reset' && data.generation === romLoadGeneration) {
+				serialCapture.begin(data);
+				serialRevision++;
+				serialNotice = serialError = '';
+			}
+			if (data.type === 'serial_tx') {
+				try {
+					if (data.generation === romLoadGeneration && serialCapture.push(data)) serialRevision++;
+				} catch (error) {
+					serialError = String(error);
+				} finally {
+					worker?.postMessage({
+						id: 0,
+						type: 'serial_consumed',
+						generation: data.generation,
+						epoch: data.epoch,
+						sequence: data.sequence,
+					});
+				}
+			}
+			if (data.type === 'oz_replay_progress') ozReplayStatus = `${data.step} steps completed`;
 			if (data.type === 'reply') {
 				workerRequests?.reply(data);
 				return;
@@ -488,6 +671,7 @@
 			});
 		else if (emulator) {
 			fallbackInputs.releaseSource(source);
+			if (source === 'virtual' && romModel === 'oz-9600') fallbackTablet.clear();
 			typingStatus = fallbackInputs.typingStatus();
 			pasteStatus = fallbackInputs.pasteStatus();
 			updateDeliveredContacts(emulator.input_contacts());
@@ -638,7 +822,7 @@
 	}
 
 	function applyVirtualReleaseBudget(stepped: number) {
-		fallbackInputs.advance(stepped);
+		fallbackHostInputs.advance(stepped);
 	}
 
 	async function ensureEmulator(): Promise<any> {
@@ -729,24 +913,36 @@
 		releaseAllPhysicalHeldCodes();
 		resetSymbols();
 		if (worker) {
-			await workerCall('load_rom', { bytes, romSource: source, model, generation }, [bytes.buffer]);
+			await workerCall(
+				'load_rom',
+				{ bytes, romSource: source, model, generation, ...(model === 'oz-9600' ? { ozProfile } : {}) },
+				[bytes.buffer],
+			);
 		} else {
 			const emu = await ensureEmulator();
 			if (generation !== romLoadGeneration) return;
-			fallbackInputs.clear();
-			if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
+			if (model === 'oz-9600') emu.load_oz9600(bytes, new Uint8Array(), ozProfile);
+			else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 			else emu.load_rom(bytes);
+			fallbackInputs.clear();
+			resetFallbackSerial();
 			refreshAllNow();
 		}
 		if (generation !== romLoadGeneration) return;
+		if (model === 'oz-9600') ozLoadedProfile = ozProfile;
+		ozReplayReport = null;
+		ozReplayStatus = '';
+		fallbackTablet.discard();
 		romSource = source;
 		installedRom = { bytes: originalBytes, model, source };
 		romLoaded = true;
+		await pushSoundPreference();
 		lastError = null;
 		if (callStackOpen) void ensureSymbols();
 	}
 
 	function refreshFast() {
+		pumpFallbackSerial();
 		if (worker) return;
 		if (!emulator) return;
 		updateDeliveredContacts(emulator.input_contacts());
@@ -771,7 +967,7 @@
 			// ignore
 		}
 		lcdAnnunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? null;
-		if (lcdChipsOpen) lcdChipPixels = emulator.lcd_chip_pixels();
+		if (lcdChipsOpen && romModel !== 'oz-9600') lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
 		} catch {
@@ -834,7 +1030,8 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-			const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoAddresses =
+				romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
 			const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
 			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -877,7 +1074,8 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0);
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1);
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2);
-			const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoAddresses =
+				romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoHead) : undefined;
 			const fifoTail = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoTail) : undefined;
 			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -998,8 +1196,11 @@
 		try {
 			await stepBounded(emulator, count, {
 				signal: fallbackStepAbort.signal,
-				limitBudget: fallbackInputs.limitBudget,
-				onProgress: applyVirtualReleaseBudget,
+				limitBudget: fallbackHostInputs.limitBudget,
+				onProgress: (used) => {
+					applyVirtualReleaseBudget(used);
+					pumpFallbackSerial();
+				},
 			});
 			refreshFast();
 			const nowMs = performance.now();
@@ -1015,7 +1216,7 @@
 	}
 
 	function stepCore(count: number) {
-		return automaticHostSlice(emulator, count, fallbackInputs, typingCatchUp);
+		return automaticHostSlice(emulator, count, fallbackHostInputs, typingCatchUp);
 	}
 
 	function pumpEmulator(id: number) {
@@ -1023,10 +1224,20 @@
 		let waitMs: number;
 		try {
 			waitMs = stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
+			pumpFallbackSerial();
 		} catch (err) {
 			lastError = String(err);
 			running = false;
+			syncFallbackAudio();
 			return;
+		}
+		try {
+			if (fallbackSoundActive) fallbackAudio.pump(() => emulator.take_oz9600_audio());
+		} catch (error) {
+			soundError = String(error);
+			soundEnabled = false;
+			audioPlayback.disable();
+			syncFallbackAudio();
 		}
 		setTimeout(() => pumpEmulator(id), waitMs);
 	}
@@ -1046,6 +1257,7 @@
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
+		input.value = '';
 		if (
 			installedRom &&
 			!window.confirm(
@@ -1055,6 +1267,7 @@
 			input.value = '';
 			return;
 		}
+		const previousGeneration = romLoadGeneration;
 		const generation = ++romLoadGeneration;
 		const model = romModel;
 		loadingRom = true;
@@ -1065,7 +1278,16 @@
 			await ensureWorker();
 			await installRom(bytes, model, file.name, generation);
 		} catch (err) {
-			if (generation === romLoadGeneration) lastError = String(err);
+			if (generation === romLoadGeneration) {
+				lastError = String(err);
+				if (installedRom?.model === model) {
+					romLoadGeneration = previousGeneration;
+					romLoaded = true;
+					loadingRom = false;
+					releaseAllPhysicalHeldCodes();
+					releaseInputSource('virtual');
+				}
+			}
 		} finally {
 			if (generation === romLoadGeneration) loadingRom = false;
 		}
@@ -1122,6 +1344,25 @@
 
 	async function resetSession() {
 		if (!installedRom || loadingRom) return;
+		if (installedRom.model === 'oz-9600' && workerHealth === 'ready') {
+			if (!(await stop())) return;
+			try {
+				releaseAllPhysicalHeldCodes();
+				releaseInputSource('virtual');
+				if (worker) await workerCall('oz_reset');
+				else {
+					emulator.reset();
+					fallbackTablet.discard();
+					resetFallbackSerial();
+					refreshAllNow();
+				}
+				lastError = null;
+			} catch (error) {
+				lastError = `OZ reset failed: ${String(error)}`;
+			}
+			return;
+		}
+
 		if (
 			!window.confirm(
 				'Reset the machine and discard all session changes? This reloads the last successfully loaded ROM, not a saved session.',
@@ -1136,6 +1377,7 @@
 		}
 		const generation = ++romLoadGeneration;
 		workerRequests?.fail(new Error('Machine reset by user'));
+		audioPlayback.pause();
 		worker?.terminate();
 		worker = null;
 		workerRequests = null;
@@ -1172,6 +1414,87 @@
 		}
 	}
 
+	async function exportOzRetained() {
+		if (!romLoaded || !(await stop())) return;
+		try {
+			const bytes: Uint8Array = worker ? await workerCall('oz_retained_export') : emulator.export_oz9600_retained();
+			downloadBlob(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }), 'oz-9600.ozbat');
+		} catch (error) {
+			lastError = String(error);
+		}
+	}
+	async function importOzRetained(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !romLoaded || !(await stop())) return;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (worker) await workerCall('oz_retained_restore', { bytes }, [bytes.buffer]);
+			else {
+				emulator.restore_oz9600_retained(bytes);
+				fallbackInputs.clear();
+				fallbackTablet.discard();
+				resetFallbackSerial();
+				refreshAllNow();
+			}
+			lastError = null;
+			ozReplayStatus = `Restored ${file.name}; fresh CPU`;
+		} catch (error) {
+			lastError = String(error);
+		}
+	}
+	async function replayOz(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !romLoaded || !(await stop())) return;
+		functionRunnerBusy = true;
+		ozReplayReport = null;
+		ozReplayStatus = 'Validating physical replay…';
+		try {
+			const document = await file.text();
+			if (worker) ozReplayReport = await workerCall('oz_replay', { document });
+			else {
+				emulator.validate_oz9600_replay(document);
+				fallbackInputs.clear();
+				fallbackTablet.clear();
+				fallbackStepAbort = new AbortController();
+				const reports: object[] = [];
+				const boundaries = await runOzPhysicalReplay(emulator, document, {
+					signal: fallbackStepAbort.signal,
+					onProgress: pumpFallbackSerial,
+					onStep: async (index, state) => {
+						reports.push({ step: index, ...state });
+						refreshAllNow();
+					},
+				});
+				ozReplayReport = { boundaries, reports };
+			}
+			ozReplayStatus = `Completed ${ozReplayReport.reports.length} steps`;
+			lastError = null;
+		} catch (error) {
+			lastError = String(error);
+			ozReplayStatus = 'Replay stopped; partial state retained';
+		} finally {
+			functionRunnerBusy = false;
+			fallbackStepAbort = null;
+		}
+	}
+	function tabletContact(contact: TabletContact, owner: string, cancel: boolean) {
+		if (!romLoaded || romModel !== 'oz-9600' || functionRunnerBusy) return;
+		if (worker)
+			void workerCall('oz_tablet', { contact, owner, cancel, generation: romLoadGeneration }).catch((error) => {
+				lastError = String(error);
+			});
+		else {
+			try {
+				fallbackTablet.set(owner, contact, cancel);
+			} catch (error) {
+				lastError = String(error);
+			}
+		}
+	}
 	async function setExecutionMode(event: Event) {
 		const select = event.currentTarget as HTMLSelectElement;
 		const mode = select.value as ExecutionMode;
@@ -1198,6 +1521,16 @@
 	async function start() {
 		if (!romLoaded || running || controlPending || stepBusy || functionRunnerBusy || workerHealth !== 'ready') return;
 		if (executionMode === 'deterministic') return;
+		if (soundEnabled) {
+			try {
+				await audioPlayback.enable();
+			} catch (error) {
+				soundError = String(error);
+				soundEnabled = false;
+				audioPlayback.disable();
+				await pushSoundPreference();
+			}
+		}
 		lastLcdTextUpdateMs = 0;
 		if (worker) {
 			controlPending = 'start';
@@ -1213,12 +1546,14 @@
 		}
 		emulator.rebase_pacing();
 		running = true;
+		syncFallbackAudio();
 		runLoopId += 1;
 		pumpEmulator(runLoopId);
 		pumpRender(runLoopId);
 	}
 
 	async function stop(): Promise<boolean> {
+		audioPlayback.pause();
 		if (worker) {
 			controlPending = 'stop';
 			try {
@@ -1237,6 +1572,7 @@
 		emulator?.rebase_pacing();
 		running = false;
 		runLoopId += 1;
+		syncFallbackAudio();
 		return true;
 	}
 
@@ -1303,14 +1639,28 @@
 	function onVisibilityChange() {
 		if (document.hidden) releaseAllPhysicalHeldCodes();
 	}
+	function onAudioVisibilityChange() {
+		audioPlayback.pause();
+		if (romLoaded)
+			void pushSoundPreference().catch((error) => {
+				soundError = String(error);
+			});
+	}
 	function onFocusIn(event: FocusEvent) {
 		if (isHostControl(event.target)) releaseAllPhysicalHeldCodes();
 	}
 
 	onMount(() => {
 		mounted = true;
+		document.addEventListener('visibilitychange', onAudioVisibilityChange);
 		try {
-			romModelWasPersisted = normalizeRomModel(window.localStorage.getItem(ROM_MODEL_STORAGE_KEY)) !== null;
+			const requestedModel = normalizeRomModel(new URL(window.location.href).searchParams.get('model'));
+			if (requestedModel) {
+				$romModelStore = requestedModel;
+				romModelWasPersisted = true;
+			} else {
+				romModelWasPersisted = normalizeRomModel(window.localStorage.getItem(ROM_MODEL_STORAGE_KEY)) !== null;
+			}
 		} catch {
 			romModelWasPersisted = false;
 		}
@@ -1334,6 +1684,8 @@
 	}
 
 	onDestroy(() => {
+		document.removeEventListener('visibilitychange', onAudioVisibilityChange);
+		audioPlayback.close();
 		uninstallPhysicalKeyboardHook();
 		physicalHeldCodes.clear();
 		if (!worker && emulator) fallbackInputs.clear();
@@ -1374,8 +1726,18 @@
 				>{running || stepBusy || functionRunnerBusy ? 'Pause' : 'Resume'}</button
 			>
 			<button aria-label="More options" aria-expanded={menuOpen} on:click={() => (menuOpen = !menuOpen)}>⋯</button>
+			{#if romModel === 'oz-9600'}
+				<button
+					data-testid="sound-toggle"
+					aria-pressed={soundEnabled}
+					disabled={!romLoaded || loadingRom || soundBusy || !!controlPending}
+					title="Organizer sound at normal speed; pitches and speaker response are approximate"
+					on:click={toggleSound}>Sound {soundEnabled ? 'on' : 'off'}</button
+				>
+			{/if}
 		</div>
 	</header>
+	{#if soundError}<p role="status">Sound unavailable: {soundError}</p>{/if}
 	{#if menuOpen}
 		<section class="quick-options" aria-label="Device options">
 			<label
@@ -1440,13 +1802,16 @@
 			<strong>Keyboard shortcuts</strong>
 			<button on:click={() => (shortcutsOpen = false)}>Close shortcuts</button>
 			<p class="hint">
-				Click the device to type. F9 = device SHIFT · F10 = CAPS · F12 = ON. Device CAPS controls letter case; host
-				Shift selects mapped punctuation.
+				Click the device to type. F9 = device SHIFT · F10 = CAPS · {romModel === 'oz-9600'
+					? 'F11 = 2nd · F12 = ON'
+					: 'F12 = ON'}. Device CAPS controls letter case; host Shift selects mapped punctuation.
 			</p>
 			<p class="hint">
 				{romModel === 'iq-7000'
 					? 'F1–F8: Calendar, Schedule, TEL, MEMO, Calc, Card, World, Home. Enter stores; F11 or Shift+Enter inserts a newline. Page Up/Down searches.'
-					: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
+					: romModel === 'oz-9600'
+						? 'F1: New Entry. F2: Edit. F11: 2nd. Escape: Cancel. Page Up/Down: Prev/Next. Printed mode labels use the tablet.'
+						: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
 			</p>
 			<p class="hint">
 				Letters, digits, Space, arrows, Backspace, Delete and Insert use device keys. Hover a key for its host binding.
@@ -1559,6 +1924,62 @@
 		</div>
 	{/if}
 	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
+	{#if romModel === 'oz-9600'}
+		<details class="serial-panel" data-testid="serial-panel">
+			<summary>Serial</summary>
+			<label
+				>Send format <select data-testid="serial-format" bind:value={serialFormat}>
+					<option value="text">Text (UTF-8)</option><option value="hex">Hex bytes</option>
+				</select></label
+			>
+			<label
+				>Line ending <select data-testid="serial-ending" bind:value={serialEnding}>
+					<option value="none">None</option><option value="cr">CR</option>
+					<option value="lf">LF</option><option value="crlf">CR + LF</option>
+				</select></label
+			>
+			<label
+				>Send to device <textarea data-testid="serial-input" bind:value={serialText} rows="3" maxlength="12288"
+				></textarea></label
+			>
+			<button
+				data-testid="serial-send"
+				on:click={sendSerial}
+				disabled={!romLoaded ||
+					loadingRom ||
+					serialBusy ||
+					stepBusy ||
+					functionRunnerBusy ||
+					!!controlPending ||
+					workerHealth !== 'ready'}>Send to device</button
+			>
+			{#if serialNotice}<p class="hint" role="status" data-testid="serial-notice">{serialNotice}</p>{/if}
+			{#if serialError}<p class="error" role="alert" data-testid="serial-error">{serialError}</p>{/if}
+			<label
+				>From device <textarea data-testid="serial-output" readonly value={serialPreview} rows="4"></textarea></label
+			>
+			<p class="hint" data-testid="serial-count">
+				{serialStatus.received} bytes received; {serialStatus.retained} bytes retained
+			</p>
+			{#if serialStatus.captureDropped || serialStatus.transportDropped}<p class="error" role="status">
+					{serialStatus.captureDropped} bytes exceeded capture capacity; {serialStatus.transportDropped} bytes lost in transport
+				</p>{/if}
+			<button data-testid="serial-download" on:click={downloadSerial} disabled={!serialStatus.retained}
+				>Save raw bytes</button
+			>
+			<button
+				data-testid="serial-clear"
+				on:click={() => {
+					serialCapture.clear();
+					serialRevision++;
+				}}>Clear display</button
+			>
+			<p class="hint">
+				Open Terminal and choose Connect on the device. Send at most 4096 bytes at once. The preview shows the last 2048
+				bytes; downloads retain up to 4 MiB. Device time is frozen while paused.
+			</p>
+		</details>
+	{/if}
 	<div
 		class="keyboard-target"
 		role="group"
@@ -1579,7 +2000,8 @@
 		{:else}
 			<DeviceShell
 				model={romModel}
-				disabled={!romLoaded || workerHealth !== 'ready'}
+				disabled={!romLoaded || workerHealth !== 'ready' || functionRunnerBusy}
+				onTablet={tabletContact}
 				{hostKeyboardMode}
 				{physicalHighlights}
 				{deliveredContacts}
@@ -1605,9 +2027,11 @@
 		<details data-testid="session-safety">
 			<summary>Session safety & recovery</summary>
 			<p class="hint">
-				Browser sessions are held in memory only. Reload, reset or ROM/model replacement loses device RAM changes.
-				Complete WASM snapshot restoration is not available: native snapshot routines are not exposed here, and they
-				reject active RTC/peripheral/serial state they cannot represent. We do not silently save a partial snapshot.
+				Browser sessions are held in memory only. Reload or ROM/model replacement loses device RAM changes. OZ reset
+				preserves logical RAM/RTC; export that backing with Save RAM/RTC for later restoration. It is not a running
+				CPU/peripheral snapshot. Complete WASM snapshot restoration is not available: native snapshot routines are not
+				exposed here, and they reject active RTC/peripheral/serial state they cannot represent. We do not silently save
+				a partial snapshot.
 			</p>
 			<p class="hint">
 				LCD PNGs and diagnostics can preserve evidence, not a resumable machine. Device OFF is not emulator Pause: the
@@ -1626,15 +2050,66 @@
 					<select value={$romModelStore} on:change={selectModel} data-testid="rom-model">
 						<option value="iq-7000">IQ-7000</option>
 						<option value="pc-e500">PC-E500</option>
+						<option value="oz-9600">OZ-9600 (experimental hardware)</option>
 					</select>
 				</label>
 
 				<label>
 					Load ROM file:
-					<input type="file" accept=".bin,.rom,.img" on:change={onSelectRom} />
+					<input type="file" accept=".bin,.rom,.img,.ozrom" data-testid="rom-file" on:change={onSelectRom} />
 				</label>
 			</div>
 		</header>
+
+		{#if romModel === 'oz-9600'}
+			<section aria-label="OZ configuration" data-testid="oz-configuration">
+				<label
+					>Profile for next ROM load:
+					<select bind:value={ozProfile} data-testid="oz-profile"
+						><option value="provisional-v1">OZ-9600 v1 (provisional hardware)</option>
+						<option value="strict">Strict</option><option value="experimental">Experimental ROM workflows</option>
+						<option value="experimental-isr-clear-only">ISR experiment: clear-only</option>
+						<option value="experimental-isr-mti-writable">ISR experiment: writable timer pending</option>
+						<option value="experimental-on-edge">ON experiment: one interrupt per press</option>
+						<option value="experimental-irq-imr">IRQ experiment: IMR controls acceptance</option>
+						<option value="experimental-rtc">RTC experiment: clock and ordinary alarms</option>
+						<option value="experimental-rtc-irq-imr">RTC and IRQ experiment: clock with resumable input</option></select
+					>
+				</label>
+				<p class="hint">
+					Loaded profile: {ozLoadedProfile}. v1 uses provisional power-on and timing assumptions. Load an OZROM01
+					bundle; Save RAM/RTC preserves organizer entries for later restoration.
+				</p>
+				<label
+					>Restore RAM/RTC <input
+						type="file"
+						accept=".ozbat,.bin"
+						data-testid="oz-retained-file"
+						on:change={importOzRetained}
+						disabled={!romLoaded || functionRunnerBusy}
+					/></label
+				>
+				<button data-testid="oz-retained-export" on:click={exportOzRetained} disabled={!romLoaded || functionRunnerBusy}
+					>Save RAM/RTC</button
+				>
+				<label
+					>Physical replay <input
+						type="file"
+						accept=".json"
+						data-testid="oz-replay-file"
+						on:change={replayOz}
+						disabled={!romLoaded || functionRunnerBusy}
+					/></label
+				>
+				<p role="status" data-testid="oz-replay-status">{ozReplayStatus}</p>
+				{#if ozReplayReport}<button
+						data-testid="oz-replay-report"
+						on:click={() =>
+							downloadBlob(new Blob([safeJson(ozReplayReport)], { type: 'application/json' }), 'oz-9600-replay.json')}
+						>Download replay observations</button
+					>{/if}
+			</section>
+		{/if}
 
 		<div class="controls">
 			<label>
@@ -1741,8 +2216,8 @@
 		</p>
 		<p class="hint" id="keyboard-help">
 			Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT ·
-			F10 = CAPS · F12 = ON (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the
-			browser. Hover a device key for its host bindings.
+			F10 = CAPS · {romModel === 'oz-9600' ? 'F11 = 2nd · F12 = ON' : 'F12 = ON'} (your keyboard may require Fn). Text fields
+			and Ctrl/Cmd/Alt shortcuts stay with the browser. Hover a device key for its host bindings.
 		</p>
 		<details class="keyboard-help">
 			<summary>Keyboard mappings & letter case</summary>
@@ -1750,10 +2225,13 @@
 				{#if romModel === 'iq-7000'}
 					F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
 					Store; F11 = newline (also Shift+Enter in Letters & symbols).
+				{:else if romModel === 'oz-9600'}
+					F1 = New Entry; F2 = Edit; Escape = Cancel; Page Up/Down = Prev/Next. Printed application labels and the LCD
+					send tablet contacts.
 				{:else}
 					F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
 				{/if}
-				Both: letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
+				Letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
 			</p>
 			<p class="hint">
 				Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
@@ -1990,6 +2468,30 @@
 </main>
 
 <style>
+	.serial-panel {
+		margin: 0.75rem 0;
+		padding: 0.75rem;
+		border: 1px solid #32414b;
+		border-radius: 8px;
+		background: #0d1920;
+	}
+	.serial-panel summary {
+		cursor: pointer;
+		font-weight: 600;
+	}
+	.serial-panel label {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0.75rem 0;
+	}
+	.serial-panel textarea {
+		width: min(70ch, 75%);
+		font-family: monospace;
+	}
+	.serial-panel button {
+		margin-right: 0.5rem;
+	}
 	.paste-preview {
 		padding: 16px;
 		border: 1px solid #526169;
