@@ -100,7 +100,7 @@ mod tests {
             let p = probe.lock().unwrap();
             assert_eq!(p.log.len(), 10);
             assert_eq!(p.timing, [1, 2, 3, 4, 5]);
-            for pair in p.log.chunks_exact(2) {
+            for pair in p.log.as_chunks::<2>().0 {
                 assert_eq!(pair[0].0, "before");
                 assert_eq!(pair[1].0, "after");
                 assert_eq!(pair[1].2, u64::from(power != PowerState::Off));
