@@ -52,6 +52,10 @@ F6 Symbol. Numpad operators map to their physical calculator contacts. Pointer
 presses on the printed panel and LCD drive raw tablet samples using the ROM's
 default calibration. Those samples have not been measured on a physical unit.
 
+Clock is a momentary popup. Hold the printed Clock target to keep the ROM
+view visible; release closes it after input processing. Exact physical release
+timing is unqualified.
+
 ON and OFF keycaps appear below the fixed panel. F12 holds the separate CPU
 ON contact; Pause holds the matrix OFF contact. The ON key uses the same shared
 API as physical replays and the browser. It does not expose a guessed RTC B0
