@@ -881,6 +881,7 @@ impl CoreRuntime {
             .map_err(|error| CoreError::Other(format!("power-on reset: {error}")));
         if result.is_ok() {
             self.poisoned = None;
+            self.refresh_reset_bookkeeping();
             if let Some(sio) = self.sio.as_mut() {
                 sio.reset_register_uart(&mut self.memory);
             }
@@ -896,6 +897,22 @@ impl CoreRuntime {
             }
         }
         result
+    }
+
+    /// Reconcile host metadata only after RESET has successfully committed.
+    /// Both reset entry points discard the old IRQ/call context while retaining
+    /// timer counters, bit-watch history and guest memory/register values.
+    fn refresh_reset_bookkeeping(&mut self) {
+        self.timer.irq_imr = self
+            .memory
+            .read_internal_byte(IMEM_IMR_OFFSET)
+            .unwrap_or(self.timer.irq_imr);
+        self.timer.irq_isr = self
+            .memory
+            .read_internal_byte(IMEM_ISR_OFFSET)
+            .unwrap_or(self.timer.irq_isr);
+        self.timer.clear_pending_for_reset();
+        self.state.reset_call_metrics();
     }
 
     /// Provide an optional host overlay reader for IMEM regions that require Python/device handling
@@ -3085,18 +3102,7 @@ impl CoreRuntime {
             if opcode == 0xFF {
                 // RESET intrinsic: Python only adjusts IMEM + PC; preserve timer/counter state and
                 // refresh mirrors from IMEM without clearing counters/bit-watch.
-                self.timer.irq_imr = self
-                    .memory
-                    .read_internal_byte(IMEM_IMR_OFFSET)
-                    .unwrap_or(self.timer.irq_imr);
-                self.timer.irq_isr = self
-                    .memory
-                    .read_internal_byte(IMEM_ISR_OFFSET)
-                    .unwrap_or(self.timer.irq_isr);
-                // Align IRQ bookkeeping with the cleared IMEM registers so pending/latched state
-                // does not survive a soft RESET.
-                self.timer.clear_pending_for_reset();
-                self.state.reset_call_metrics();
+                self.refresh_reset_bookkeeping();
             }
             // IR intrinsic bookkeeping: align timer metadata with Python intrinsic IRQ handling.
             if opcode == 0xFE {
@@ -5425,6 +5431,92 @@ mod tests {
     }
 
     #[test]
+    fn host_reset_exits_a_delivered_interrupt_without_erasing_ram_or_counters() {
+        let mut rt = CoreRuntime::new();
+        rt.state.set_pc(0x100);
+        rt.state.set_reg(RegName::S, 0x8000);
+        rt.state.set_reg(RegName::BA, 0x1234);
+        rt.memory.write_internal_byte(memory::IMEM_BP_OFFSET, 0xd0);
+        for (vector, target) in [(INTERRUPT_VECTOR_ADDR, 0x300_u32), (0xffffd, 0x200)] {
+            for byte in 0..3 {
+                rt.memory
+                    .write_external_byte(vector + byte, (target >> (byte * 8)) as u8);
+            }
+            rt.memory.write_external_byte(target, 0x00); // NOP
+        }
+        rt.memory.write_external_byte(0x9000, 0xa5);
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".into());
+        rt.deliver_pending_irq()
+            .expect("deliver ordinary IRQ frame");
+        assert!(rt.timer.in_interrupt);
+        assert!(!rt.timer.interrupt_stack.is_empty());
+        let external = rt.memory.external_slice().to_vec();
+        let instructions = rt.instruction_count();
+        let cycles = rt.cycle_count();
+        let counts = [
+            rt.timer.irq_total,
+            rt.timer.irq_key,
+            rt.timer.irq_mti,
+            rt.timer.irq_sti,
+        ];
+        let stack = rt.state.get_reg(RegName::S);
+
+        rt.power_on_reset().expect("host reset after IRQ delivery");
+
+        assert!(
+            !rt.timer.in_interrupt,
+            "host RESET must leave the old IRQ context"
+        );
+        assert!(!rt.timer.irq_pending);
+        assert!(rt.timer.irq_source.is_none());
+        assert!(rt.timer.interrupt_stack.is_empty());
+        assert!(rt.timer.delivered_masks.is_empty());
+        assert!(rt.timer.last_irq_src.is_none());
+        assert_eq!(rt.timer.next_interrupt_id, 0);
+        assert_eq!(rt.timer.irq_isr, 0);
+        assert_eq!(
+            rt.timer.irq_imr,
+            rt.memory
+                .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                .unwrap()
+        );
+        assert_eq!(
+            [
+                rt.timer.irq_total,
+                rt.timer.irq_key,
+                rt.timer.irq_mti,
+                rt.timer.irq_sti
+            ],
+            counts
+        );
+        assert_eq!(rt.instruction_count(), instructions);
+        assert_eq!(rt.cycle_count(), cycles);
+        assert_eq!(rt.state.pc(), 0x200);
+        assert_eq!(rt.state.get_reg(RegName::BA), 0x1234);
+        assert_eq!(rt.state.get_reg(RegName::S), stack);
+        assert_eq!(
+            rt.memory.read_internal_byte_silent(memory::IMEM_BP_OFFSET),
+            Some(0xd0)
+        );
+        assert_eq!(rt.memory.external_slice(), external);
+        rt.step(1).expect("ordinary execution after host RESET");
+        rt.memory
+            .write_internal_byte(IMEM_IMR_OFFSET, IMR_MASTER | IMR_KEY);
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, ISR_KEYI);
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".into());
+        rt.step(1).expect("new IRQ after reset must be accepted");
+        assert_eq!(rt.timer.irq_total, counts[0] + 1);
+        assert!(rt.timer.in_interrupt);
+        assert_eq!(rt.timer.interrupt_stack.len(), 1);
+        assert_eq!(rt.state.pc(), 0x301);
+    }
+
+    #[test]
     fn core_power_on_reset_rejects_bad_vector_without_mutation() {
         let mut rt = CoreRuntime::new();
         rt.state.set_reg(RegName::PC, 0x012345);
@@ -5435,6 +5527,11 @@ mod tests {
         rt.memory.write_external_byte(0x0FFFFE, 0x56);
         rt.memory.write_external_byte(0x0FFFFF, 0xF4);
         rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0xA5);
+        rt.timer.in_interrupt = true;
+        rt.timer.irq_pending = true;
+        rt.timer.irq_source = Some("KEY".into());
+        rt.timer.interrupt_stack = vec![7];
+        let interrupts_before = rt.timer.interrupt_snapshot();
 
         let external_before = rt.memory.external_slice().to_vec();
         let internal_before = rt.memory.internal_slice().to_vec();
@@ -5453,6 +5550,7 @@ mod tests {
         assert_eq!(rt.memory.external_slice(), external_before);
         assert_eq!(rt.memory.internal_slice(), internal_before);
         assert_eq!(rt.memory.memory_write_count(), writes_before);
+        assert_eq!(rt.timer.interrupt_snapshot(), interrupts_before);
     }
 
     #[test]
