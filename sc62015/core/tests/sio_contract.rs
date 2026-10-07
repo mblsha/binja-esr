@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/peripherals/serial.py
+// Python serial-device contract counterpart.
+
 use sc62015_core::memory::{IMEM_EIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET, IMEM_USR_OFFSET};
 use sc62015_core::{MemoryImage, SioInputLines, SioStub, SioTimedEvent, SioTimingConfig};
 

@@ -116,6 +116,11 @@ impl Sc62015Emulator {
         options: JsValue,
     ) -> Result<u32, JsValue> {
         self.require_no_active_call()?;
+        if self.model == DeviceModel::Oz9600 {
+            return Err(JsValue::from_str(
+                "OZ debugger function-call capture is not available; use normal physical input",
+            ));
+        }
         let id = self
             .next_call_id
             .checked_add(1)

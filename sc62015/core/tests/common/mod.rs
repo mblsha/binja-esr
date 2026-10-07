@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/tests/vector_fixtures.py
+// Python ROM harness fixture counterpart; individual ROM tests remain model-specific.
+
 use sc62015_core::lcd_text::Pce500FontMap;
 use sc62015_core::llama::opcodes::RegName;
 use sc62015_core::pce500::pce500_font_map_from_rom;

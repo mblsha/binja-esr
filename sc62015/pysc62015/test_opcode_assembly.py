@@ -382,17 +382,33 @@ def test_add_sub_register_pair_assembler_matrix_round_trips_or_fails_closed() ->
     assert assembler.assemble("SUB I, A").as_binary().hex() == "4c30"
 
 
-def test_direct_instruction_encoder_rejects_invalid_arithmetic_reg_pair() -> None:
-    """The lower-level encoder used outside ``sc_asm.Assembler`` is strict too."""
+@pytest.mark.parametrize(
+    ("destination", "source", "selector", "expected"),
+    [
+        ("X", "BA", 0x42, None),
+        ("BA", "X", 0x24, bytes.fromhex("4424")),
+        ("BA", "IL", 0x21, bytes.fromhex("4421")),
+    ],
+)
+def test_direct_instruction_encoder_checks_word_arithmetic_source(
+    destination: str, source: str, selector: int, expected: bytes | None
+) -> None:
+    """Word destinations stay restricted while accepting byte/pointer sources."""
 
     pair = RegPair(size=2)
-    pair.reg1 = Reg("BA")
-    pair.reg2 = Reg("X")
-    pair.reg_raw = 0x24
+    pair.reg1 = Reg(destination)
+    pair.reg2 = Reg(source)
+    pair.reg_raw = selector
     instr = ADD("ADD", operands=[pair], cond=None, ops_reversed=None)
     instr.opcode = 0x44
-    with pytest.raises(InvalidInstruction, match="Invalid arithmetic register pair"):
-        encode(instr, 0)
+    instr.set_length(2)
+    if expected is None:
+        with pytest.raises(
+            InvalidInstruction, match="Invalid arithmetic register pair"
+        ):
+            encode(instr, 0)
+    else:
+        assert encode(instr, 0) == expected
 
 
 def test_mv_ex_register_pair_assembler_preserves_meaning_or_fails_closed() -> None:

@@ -11,7 +11,8 @@
 //! bytes and finding them identical, so it never needs explicit invalidation.
 //!
 //! IR (0xFE) and RESET (0xFF) are never cached because their preflight also
-//! validates vector bytes and the vector destination.
+//! validates vector bytes and the vector destination. Byte ADD/SUB are also
+//! excluded because selector validity depends on the explicit source policy.
 
 use crate::llama::eval::DecodeMemo;
 use crate::llama::timing::PreparedInstructionTiming;
@@ -98,7 +99,9 @@ impl PreflightCache {
             return None;
         }
         let word = memory.plain_upper_rom_word(pc, len_usize)?;
-        if matches!(word as u8, 0xFE | 0xFF) || matches!(timing.resolved_opcode(), 0xFE | 0xFF) {
+        if matches!(word as u8, 0x46 | 0x4E | 0xFE | 0xFF)
+            || matches!(timing.resolved_opcode(), 0x46 | 0x4E | 0xFE | 0xFF)
+        {
             return None;
         }
         let slot = Self::slot(pc);

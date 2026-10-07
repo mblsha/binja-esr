@@ -120,6 +120,9 @@ class CPU:
         reset_on_init: bool = True,
         backend: Optional[str] = None,
         timer_scale: float | None = None,
+        block_transfer_policy: str = "independent",
+        byte_arithmetic_source_policy: str = "strict",
+        isr_software_write_policy: str = "replace",
     ) -> None:
         backend_name, rust_module = select_backend(backend)
 
@@ -130,6 +133,9 @@ class CPU:
         legacy = Emulator(
             memory,
             reset_on_init=reset_on_init if backend_name == "python" else False,
+            block_transfer_policy=block_transfer_policy,
+            byte_arithmetic_source_policy=byte_arithmetic_source_policy,
+            isr_software_write_policy=isr_software_write_policy,
         )
         self._impl: Any
         if backend_name == "python":
@@ -142,7 +148,12 @@ class CPU:
             rust_cpu_cls = getattr(rust_module, "LlamaCPU")
             scale = 1.0 if timer_scale is None else float(timer_scale)
             self._impl = rust_cpu_cls(
-                memory=memory, reset_on_init=reset_on_init, timer_scale=scale
+                memory=memory,
+                reset_on_init=reset_on_init,
+                timer_scale=scale,
+                block_transfer_policy=block_transfer_policy,
+                byte_arithmetic_source_policy=byte_arithmetic_source_policy,
+                isr_software_write_policy=isr_software_write_policy,
             )
             self.regs = _RustRegisterProxy(self._impl)
             self.state = _RustStateProxy(self._impl)
@@ -150,6 +161,9 @@ class CPU:
 
         self.memory = memory
         self.backend: CPUBackendName = backend_name
+        self._block_transfer_policy = block_transfer_policy
+        self._byte_arithmetic_source_policy = byte_arithmetic_source_policy
+        self._isr_software_write_policy = isr_software_write_policy
         # A backend contract mismatch is detected only after the native core
         # has executed.  Retrying could therefore apply the same instruction's
         # side effects twice.  Preserve the first mismatch until a complete
@@ -181,6 +195,9 @@ class CPU:
         scope = {
             "execution_scope": "cpu-only",
             "scheduler_owner": "python-caller",
+            "block_transfer_policy": self._block_transfer_policy,
+            "byte_arithmetic_source_policy": self._byte_arithmetic_source_policy,
+            "isr_software_write_policy": self._isr_software_write_policy,
         }
         if self.backend == "python":
             return {"backend": "python", **scope}
@@ -293,6 +310,7 @@ class CPU:
             self.regs,
             vector_address,
             source_pc=source_pc,
+            byte_arithmetic_source_policy=self._byte_arithmetic_source_policy,
         )
 
     def preflight_vector_transfer_for_scheduling(
@@ -307,6 +325,7 @@ class CPU:
             vector_address,
             target,
             require_metadata=True,
+            byte_arithmetic_source_policy=self._byte_arithmetic_source_policy,
         )
         return target
 
@@ -358,6 +377,7 @@ class CPU:
             target,
             require_immutable=True,
             require_metadata=True,
+            byte_arithmetic_source_policy=self._byte_arithmetic_source_policy,
         )
         try:
             return self.prepare_vector_transfer(
@@ -529,6 +549,9 @@ class CPU:
         stepper = CPUStepper(
             default_memory_value=default_memory_value,
             backend=self.backend,
+            block_transfer_policy=self._block_transfer_policy,
+            byte_arithmetic_source_policy=self._byte_arithmetic_source_policy,
+            isr_software_write_policy=self._isr_software_write_policy,
         )
         return stepper.step(registers, memory_image)
 

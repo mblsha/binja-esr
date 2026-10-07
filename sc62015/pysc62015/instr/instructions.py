@@ -265,11 +265,9 @@ class RetInstruction(Instruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         pop_val = _lift_s_pop(il, self.addr_size())
         if self.addr_size() == 2:
-            high = il.and_expr(
-                3,
-                il.reg(3, RegisterName("PC")),
-                il.const(3, PC_PAGE_MASK),
-            )
+            # Near RET keeps the page after fetching its opcode, including
+            # page/bus wrap. Static LLIL has no emulator-style PC advance.
+            high = il.const(3, (addr + self.length()) & PC_PAGE_MASK)
             pop_val = il.or_expr(
                 3,
                 _resize_unsigned(il, pop_val, 2, 3),
@@ -380,6 +378,10 @@ class MV(MoveInstruction):
 
 
 class MVL(MoveInstruction):
+    # Execution profiles may opt in; static lifting and SC62015 retain the
+    # default. The ESR-P variant is inferred from firmware, not silicon-tested.
+    block_transfer_policy = "independent"
+
     def modify_addr_il(
         self, il: LowLevelILFunction
     ) -> Callable[[int, ExpressionIndex, ExpressionIndex], ExpressionIndex]:
@@ -482,6 +484,14 @@ class MVL(MoveInstruction):
 
             if is_predec_dst:
                 dst_func = il.sub
+
+            if self.block_transfer_policy == "coupled_predecrement" and not isinstance(
+                self, MVLD
+            ):
+                if is_predec_src and isinstance(dst, IMem8):
+                    dst_func = il.sub
+                if is_predec_dst and isinstance(src, IMem8):
+                    src_func = il.sub
 
             # Update destination address with wrapping for IMem8
             self._update_address_with_wrap(il, dst_reg, dst_func, dst)
@@ -1937,6 +1947,12 @@ class OFF(MiscInstruction):
 #
 # 3. After pushing IMR, bit 7 (IRM) of IMR is forcibly cleared to 0.
 class IR(MiscInstruction):
+    def analyze(self, info: InstructionInfo, addr: int) -> None:
+        super().analyze(info, addr)
+        # The interrupt vector is read from memory; execution does not fall
+        # through to the byte following the software interrupt.
+        info.add_branch(BranchType.UnresolvedBranch)
+
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
         # Fail-closed target proof is silent. HW-014 then requires the five
         # observable frame writes before the low-to-high architectural vector

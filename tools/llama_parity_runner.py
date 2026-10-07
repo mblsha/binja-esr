@@ -49,6 +49,7 @@ class Snapshot:
     mem_imr: int
     mem_isr: int
     backend: str
+    wait_cycles: List[int]
     perfetto_path: str | None = None
 
     def to_json(self) -> str:
@@ -59,6 +60,7 @@ class Snapshot:
                 "mem_imr": self.mem_imr,
                 "mem_isr": self.mem_isr,
                 "backend": self.backend,
+                "wait_cycles": self.wait_cycles,
                 "perfetto_path": self.perfetto_path,
             },
             sort_keys=True,
@@ -69,7 +71,14 @@ class TrackedMemory(Memory):
     def __init__(self):
         self._backing = bytearray(ADDRESS_SPACE_SIZE)
         self._writes: List[Tuple[int, int, int, str]] = []
+        self._wait_cycles: List[int] = []
         super().__init__(self._read_byte, self._write_byte)
+
+    def wait_cycles(self, cycles: int) -> None:
+        self._wait_cycles.append(int(cycles))
+
+    def waits(self) -> List[int]:
+        return list(self._wait_cycles)
 
     def _read_byte(self, address: int) -> int:
         address &= 0xFFFFFF
@@ -341,6 +350,7 @@ def run_once(payload: str) -> Snapshot:
         mem_imr=mem_imr,
         mem_isr=mem_isr,
         backend=cpu.backend,
+        wait_cycles=mem.waits(),
         perfetto_path=perfetto_out,
     )
 

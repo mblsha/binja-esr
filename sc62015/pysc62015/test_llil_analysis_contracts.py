@@ -3,10 +3,33 @@
 import pytest
 from binja_test_mocks.mock_llil import MockIntrinsic, MockLowLevelILFunction
 
-from .instr import OPCODES, decode
+from .instr import OPCODES, decode, RegF
 from . import CPU, RegisterName
+from .emulator import Registers
 from .constants import ADDRESS_SPACE_SIZE, INTERNAL_MEMORY_START
-from binja_test_mocks.eval_llil import Memory
+from binja_test_mocks.eval_llil import Memory, State, evaluate_llil
+
+
+@pytest.mark.parametrize("image", range(4))
+def test_restored_flag_expressions_are_boolean_before_mock_normalization(
+    image: int,
+) -> None:
+    il = MockLowLevelILFunction()
+    RegF().lift_assign_validated(il, il.const(1, image))
+    regs = Registers()
+    memory = Memory(lambda _address: 0, lambda _address, _value: None)
+    state = State()
+    expected = {"C": image & 1, "Z": (image >> 1) & 1}
+    actual = {}
+    for node in il.ils:
+        assert node.bare_op() == "SET_FLAG"
+        # The mock SET_FLAG evaluator normalizes every nonzero input to 1.
+        # Check its input directly, as Binary Ninja retains the numeric value.
+        value, _ = evaluate_llil(
+            node.ops[1], regs, memory, state, regs.get_flag, regs.set_flag
+        )
+        actual[node.ops[0].name] = value
+    assert actual == expected
 
 
 @pytest.mark.parametrize(

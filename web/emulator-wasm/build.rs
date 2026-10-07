@@ -1,3 +1,6 @@
+// PY_SOURCE: scripts/capture_snapshot.py
+// Artifact-identity tooling reference only; this WASM packaging step is Rust-only.
+
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 

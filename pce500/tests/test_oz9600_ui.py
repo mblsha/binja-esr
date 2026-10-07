@@ -1,0 +1,105 @@
+"""Full controller geometry and host-contact lifetime regression checks."""
+
+import pytest
+
+from pce500.display.lcd_frame import LcdFrame
+from pce500.oz9600.ui import (
+    HEIGHT,
+    INK,
+    LCD,
+    PAPER,
+    WIDTH,
+    Contacts,
+    HostKeys,
+    contains,
+    window_point,
+    lcd_into,
+    lcd_tablet,
+)
+
+
+def test_pointer_conversion_inverts_scaling_and_rejects_outside_samples():
+    for factor in (1, 2, 3, 4):
+        for x, y in ((0, 0), (125, 95), (WIDTH - 1, HEIGHT - 1)):
+            assert window_point(
+                x * factor, y * factor, WIDTH * factor, HEIGHT * factor
+            ) == (x, y)
+    assert window_point(float("nan"), 1, WIDTH, HEIGHT) is None
+    assert window_point(-1, 1, WIDTH, HEIGHT) is None
+    assert window_point(WIDTH, 1, WIDTH, HEIGHT) is None
+    assert window_point(1, 1, 0, HEIGHT) is None
+
+
+def test_short_host_taps_keep_edges_and_repeat_does_not_create_new_tap():
+    keys = HostKeys()
+    assert keys.events([("Q", True), ("Q", False)]) == {"Q"}
+    assert keys.down == set()
+    assert keys.events([]) == set()
+    assert keys.events(
+        [("LeftShift", True), ("LeftShift", True), ("RightShift", True)]
+    ) == {"LeftShift", "RightShift"}
+    assert keys.events([("LeftShift", False)]) == set()
+    assert keys.down == {"RightShift"}
+
+
+def test_host_artwork_never_changes_guest_pixels_or_clips_last_row_and_column():
+    pixels = bytes(int(n % 7 == 0 or n == 336 * 240 - 1) for n in range(336 * 240))
+    frame = LcdFrame(336, 240, pixels)
+    host = [0x333B40] * (WIDTH * HEIGHT)
+    output = lcd_into(frame, host)
+    for i, pixel in enumerate(pixels):
+        y, x = divmod(i, 336)
+        assert output[(LCD[1] + y) * WIDTH + LCD[0] + x] == (INK if pixel else PAPER)
+    assert frame.pixels == pixels
+    assert output[(LCD[1] + 239) * WIDTH + LCD[0] + 335] == INK
+    assert host == [0x333B40] * (WIDTH * HEIGHT)
+    assert output[0] == host[0]
+    with pytest.raises(ValueError):
+        lcd_into(LcdFrame(320, 240, bytes(320 * 240)), host)
+
+
+def test_screen_contacts_use_all_controller_pixels_and_half_open_edges():
+    assert lcd_tablet(0, 0) == (227, 68)
+    assert lcd_tablet(335, 239) == (956, 944)
+    assert lcd_tablet(999, 999) == (956, 944)
+    assert contains(LCD, LCD[0], LCD[1])
+    assert not contains(LCD, LCD[0] + 336, LCD[1])
+    assert not contains(LCD, LCD[0], LCD[1] + 240)
+
+
+def test_combined_owners_short_click_and_focus_loss_release_all_contacts():
+    contacts = Contacts(minimum_hold=40_000)
+    assert contacts.sync({3}, (61, 141), 0) == [
+        ("matrix", 3, True),
+        ("tablet", 61, 141, True),
+    ]
+    assert contacts.sync({3}, None, 40_000) == [("tablet", 61, 141, False)]
+    assert set(contacts.keys) == {3}
+    assert contacts.sync(set(), None, 40_001) == [("matrix", 3, False)]
+    assert len(contacts.sync({3}, (227, 68), 50_000)) == 2
+    assert contacts.sync(set(), None, 50_001) == []
+    assert contacts.cancel() == [("matrix", 3, False), ("tablet", 227, 68, False)]
+    assert contacts.cancel() == []
+
+
+def test_pen_motion_retains_original_hold_deadline_and_zero_assistance_is_raw():
+    contacts = Contacts()
+    assert contacts.sync(set(), (227, 68), 0) == [("tablet", 227, 68, True)]
+    assert contacts.sync(set(), (956, 944), 1) == [("tablet", 956, 944, True)]
+    assert contacts.sync(set(), None, 2) == [("tablet", 956, 944, False)]
+
+
+def test_on_contact_has_independent_ownership_deadline_and_immediate_cancellation():
+    contacts = Contacts(minimum_hold=40_000)
+    assert contacts.sync(set(), None, 0, True) == [("on", True)]
+    assert contacts.sync(set(), None, 1, False) == []
+    assert contacts.on_deadline == 40_000 and contacts.keys == {}
+    assert contacts.sync(set(), None, 40_000, True) == []
+    assert contacts.sync(set(), None, 40_001, False) == [("on", False)]
+    assert contacts.on_deadline is None
+    assert contacts.sync(set(), None, 50_000, True) == [("on", True)]
+    assert contacts.cancel() == [("on", False)]
+    assert contacts.on_deadline is None and contacts.cancel() == []
+    raw = Contacts()
+    assert raw.sync(set(), None, 0, True) == [("on", True)]
+    assert raw.sync(set(), None, 1, False) == [("on", False)]

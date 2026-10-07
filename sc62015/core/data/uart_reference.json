@@ -1,0 +1,5747 @@
+{
+  "operations": [
+    [
+      "tx",
+      1
+    ],
+    [
+      "rx",
+      2,
+      false,
+      false,
+      false
+    ],
+    [
+      "control",
+      72
+    ],
+    [
+      "tx",
+      85
+    ],
+    [
+      "advance",
+      1707
+    ],
+    [
+      "advance",
+      1
+    ],
+    [
+      "tx",
+      170
+    ],
+    [
+      "advance",
+      8539
+    ],
+    [
+      "advance",
+      1
+    ],
+    [
+      "advance",
+      8540
+    ],
+    [
+      "take"
+    ],
+    [
+      "take"
+    ],
+    [
+      "rx",
+      255,
+      true,
+      false,
+      true
+    ],
+    [
+      "advance",
+      8540
+    ],
+    [
+      "read"
+    ],
+    [
+      "tx",
+      139
+    ],
+    [
+      "tx",
+      41
+    ],
+    [
+      "tx",
+      71
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      154
+    ],
+    [
+      "control",
+      189
+    ],
+    [
+      "control",
+      59
+    ],
+    [
+      "tx",
+      220
+    ],
+    [
+      "rx",
+      145,
+      true,
+      false,
+      false
+    ],
+    [
+      "control",
+      35
+    ],
+    [
+      "rx",
+      55,
+      false,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      74
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      188,
+      true,
+      false,
+      false
+    ],
+    [
+      "control",
+      247
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      249
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      31863
+    ],
+    [
+      "read"
+    ],
+    [
+      "control",
+      44
+    ],
+    [
+      "control",
+      12
+    ],
+    [
+      "take"
+    ],
+    [
+      "read"
+    ],
+    [
+      "control",
+      147
+    ],
+    [
+      "tx",
+      116
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      237
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      32793
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      42
+    ],
+    [
+      "control",
+      232
+    ],
+    [
+      "advance",
+      33458
+    ],
+    [
+      "rx",
+      3,
+      true,
+      false,
+      false
+    ],
+    [
+      "tx",
+      165
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      172,
+      true,
+      false,
+      false
+    ],
+    [
+      "advance",
+      37242
+    ],
+    [
+      "tx",
+      148
+    ],
+    [
+      "control",
+      74
+    ],
+    [
+      "advance",
+      43691
+    ],
+    [
+      "tx",
+      204
+    ],
+    [
+      "read"
+    ],
+    [
+      "read"
+    ],
+    [
+      "read"
+    ],
+    [
+      "read"
+    ],
+    [
+      "control",
+      80
+    ],
+    [
+      "tx",
+      189
+    ],
+    [
+      "tx",
+      197
+    ],
+    [
+      "advance",
+      29828
+    ],
+    [
+      "control",
+      190
+    ],
+    [
+      "rx",
+      90,
+      false,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      12939
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      127
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      120,
+      true,
+      false,
+      false
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      33166
+    ],
+    [
+      "read"
+    ],
+    [
+      "tx",
+      179
+    ],
+    [
+      "take"
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      73,
+      true,
+      false,
+      true
+    ],
+    [
+      "rx",
+      255,
+      true,
+      false,
+      true
+    ],
+    [
+      "control",
+      82
+    ],
+    [
+      "advance",
+      14979
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      211
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      219
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      1673
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      102
+    ],
+    [
+      "tx",
+      191
+    ],
+    [
+      "advance",
+      43948
+    ],
+    [
+      "rx",
+      191,
+      false,
+      false,
+      false
+    ],
+    [
+      "control",
+      111
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      138
+    ],
+    [
+      "control",
+      46
+    ],
+    [
+      "advance",
+      47895
+    ],
+    [
+      "control",
+      190
+    ],
+    [
+      "control",
+      158
+    ],
+    [
+      "take"
+    ],
+    [
+      "read"
+    ],
+    [
+      "control",
+      160
+    ],
+    [
+      "control",
+      103
+    ],
+    [
+      "take"
+    ],
+    [
+      "rx",
+      102,
+      true,
+      false,
+      true
+    ],
+    [
+      "advance",
+      43531
+    ],
+    [
+      "advance",
+      20834
+    ],
+    [
+      "advance",
+      6618
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      218
+    ],
+    [
+      "advance",
+      5703
+    ],
+    [
+      "rx",
+      222,
+      true,
+      false,
+      false
+    ],
+    [
+      "advance",
+      39191
+    ],
+    [
+      "take"
+    ],
+    [
+      "rx",
+      90,
+      true,
+      false,
+      true
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      247,
+      false,
+      false,
+      false
+    ],
+    [
+      "read"
+    ],
+    [
+      "control",
+      56
+    ],
+    [
+      "advance",
+      14106
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      2898
+    ],
+    [
+      "rx",
+      23,
+      true,
+      false,
+      true
+    ],
+    [
+      "control",
+      34
+    ],
+    [
+      "advance",
+      17570
+    ],
+    [
+      "advance",
+      34312
+    ],
+    [
+      "advance",
+      44361
+    ],
+    [
+      "read"
+    ],
+    [
+      "tx",
+      128
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      168
+    ],
+    [
+      "take"
+    ],
+    [
+      "control",
+      31
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      92,
+      true,
+      false,
+      false
+    ],
+    [
+      "tx",
+      17
+    ],
+    [
+      "rx",
+      92,
+      false,
+      false,
+      false
+    ],
+    [
+      "tx",
+      197
+    ],
+    [
+      "rx",
+      103,
+      false,
+      false,
+      false
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      167,
+      false,
+      false,
+      true
+    ],
+    [
+      "read"
+    ],
+    [
+      "tx",
+      253
+    ],
+    [
+      "rx",
+      246,
+      true,
+      false,
+      false
+    ],
+    [
+      "advance",
+      32018
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      48222
+    ],
+    [
+      "tx",
+      194
+    ],
+    [
+      "control",
+      126
+    ],
+    [
+      "tx",
+      142
+    ],
+    [
+      "read"
+    ],
+    [
+      "rx",
+      153,
+      true,
+      false,
+      false
+    ],
+    [
+      "rx",
+      168,
+      false,
+      false,
+      false
+    ],
+    [
+      "read"
+    ],
+    [
+      "advance",
+      4185
+    ],
+    [
+      "tx",
+      228
+    ],
+    [
+      "control",
+      71
+    ],
+    [
+      "tx",
+      112
+    ],
+    [
+      "advance",
+      33415
+    ],
+    [
+      "take"
+    ],
+    [
+      "tx",
+      38
+    ],
+    [
+      "control",
+      20
+    ],
+    [
+      "advance",
+      15015
+    ],
+    [
+      "advance",
+      37136
+    ],
+    [
+      "control",
+      123
+    ],
+    [
+      "take"
+    ],
+    [
+      "clone"
+    ],
+    [
+      "advance",
+      100000
+    ],
+    [
+      "restore"
+    ],
+    [
+      "advance",
+      100000
+    ],
+    [
+      "control",
+      0
+    ],
+    [
+      "advance",
+      100000
+    ],
+    [
+      "read"
+    ],
+    [
+      "take"
+    ]
+  ],
+  "replies": [
+    {
+      "result": false,
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 1,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 0,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 1,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 72,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 1,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 72,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 85,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 85,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 72,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 85,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 85,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          85
+        ]
+      ],
+      "state": {
+        "control": 72,
+        "status": 8,
+        "rx_data": 0,
+        "last_tx": 85,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": 85,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": 8540,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 72,
+        "status": 0,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 170,
+        "tx_shift": 85,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": 8540,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 72,
+        "status": 0,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 170,
+        "tx_shift": 85,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": 1,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [
+        [
+          "TxComplete",
+          85
+        ],
+        [
+          "TxReady",
+          170
+        ]
+      ],
+      "state": {
+        "control": 72,
+        "status": 8,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": 170,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": 8540,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [
+        [
+          "TxComplete",
+          170
+        ]
+      ],
+      "state": {
+        "control": 72,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 2,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 85,
+      "state": {
+        "control": 72,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 170,
+      "state": {
+        "control": 72,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 72,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 8540,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          255
+        ]
+      ],
+      "state": {
+        "control": 72,
+        "status": 61,
+        "rx_data": 255,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 255,
+      "state": {
+        "control": 72,
+        "status": 29,
+        "rx_data": 255,
+        "last_tx": 170,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 72,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 139,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 1,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 72,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 41,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 2,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 72,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 255,
+      "state": {
+        "control": 72,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 72,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 8540,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 154,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 61443,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 189,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 18777,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 59,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 71,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 3,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 59,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 59,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 35,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 37554,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 35,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 37554,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 35,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 37554,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 74,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 255,
+      "state": {
+        "control": 74,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 74,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 247,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 247,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 220,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 4,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 247,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 249,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": 255,
+      "state": {
+        "control": 247,
+        "status": 21,
+        "rx_data": 255,
+        "last_tx": 249,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": 139,
+        "tx_shift": null,
+        "rx_remaining": 17070,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 0
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          139
+        ],
+        [
+          "RxReady",
+          17
+        ],
+        [
+          "RxReady",
+          55
+        ],
+        [
+          "RxReady",
+          60
+        ]
+      ],
+      "state": {
+        "control": 247,
+        "status": 59,
+        "rx_data": 60,
+        "last_tx": 249,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": 60,
+      "state": {
+        "control": 247,
+        "status": 27,
+        "rx_data": 60,
+        "last_tx": 249,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1177,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 44,
+        "status": 27,
+        "rx_data": 60,
+        "last_tx": 249,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 12,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 249,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 10240000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 12,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 249,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 10240000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 12,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 249,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 10240000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 147,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 249,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 147,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": 116,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 147,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": 116,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 147,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": 116,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 237,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": 116,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 237,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": 116,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 1
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          116
+        ]
+      ],
+      "state": {
+        "control": 237,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 237,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 42,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 30726,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 232,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 232,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 232,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 116,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 2140,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 232,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 165,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": 165,
+        "tx_shift": null,
+        "rx_remaining": 2140,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 232,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 165,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": 165,
+        "tx_shift": null,
+        "rx_remaining": 2140,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 232,
+        "status": 16,
+        "rx_data": 0,
+        "last_tx": 165,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": 165,
+        "tx_shift": null,
+        "rx_remaining": 2140,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 2
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          165
+        ],
+        [
+          "RxReady",
+          3
+        ],
+        [
+          "RxReady",
+          172
+        ]
+      ],
+      "state": {
+        "control": 232,
+        "status": 59,
+        "rx_data": 172,
+        "last_tx": 165,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 232,
+        "status": 51,
+        "rx_data": 172,
+        "last_tx": 148,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": 148,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 74,
+        "status": 51,
+        "rx_data": 172,
+        "last_tx": 148,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 148,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          148
+        ],
+        [
+          "TxComplete",
+          148
+        ]
+      ],
+      "state": {
+        "control": 74,
+        "status": 59,
+        "rx_data": 172,
+        "last_tx": 148,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 74,
+        "status": 51,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 74,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 74,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 74,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 74,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 7686,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 80,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 204,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4697,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 5,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 80,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 189,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4697,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 6,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 80,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4697,
+        "tx_holding": 76,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          76
+        ],
+        [
+          "TxComplete",
+          76
+        ]
+      ],
+      "state": {
+        "control": 80,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4697,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 2,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 2,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 15363,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 2,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 148,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 15363,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 76,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 172,
+        "last_tx": 197,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 127,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 127,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 127,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": 172,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 172,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 127,
+        "tx_shift": null,
+        "rx_remaining": 2424,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 3
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          90
+        ],
+        [
+          "TxReady",
+          127
+        ],
+        [
+          "RxReady",
+          120
+        ]
+      ],
+      "state": {
+        "control": 190,
+        "status": 59,
+        "rx_data": 120,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 120,
+      "state": {
+        "control": 190,
+        "status": 27,
+        "rx_data": 120,
+        "last_tx": 127,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 120,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": 15363,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 190,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": 15363,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 82,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 51,
+        "tx_shift": null,
+        "rx_remaining": 15363,
+        "tx_load_remaining": 3414,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          51
+        ],
+        [
+          "TxComplete",
+          51
+        ]
+      ],
+      "state": {
+        "control": 82,
+        "status": 27,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 120,
+      "state": {
+        "control": 82,
+        "status": 27,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 51,
+      "state": {
+        "control": 82,
+        "status": 27,
+        "rx_data": 120,
+        "last_tx": 179,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 82,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 83,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": 854,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 82,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 83,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": 854,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 219,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 83,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": 854,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 120,
+      "state": {
+        "control": 219,
+        "status": 19,
+        "rx_data": 120,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 83,
+        "tx_shift": null,
+        "rx_remaining": 384,
+        "tx_load_remaining": 854,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          73
+        ],
+        [
+          "TxReady",
+          83
+        ]
+      ],
+      "state": {
+        "control": 219,
+        "status": 45,
+        "rx_data": 73,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": 83,
+        "rx_remaining": 2981,
+        "tx_load_remaining": null,
+        "tx_remaining": 3451,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": 73,
+      "state": {
+        "control": 219,
+        "status": 13,
+        "rx_data": 73,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": 83,
+        "rx_remaining": 2981,
+        "tx_load_remaining": null,
+        "tx_remaining": 3451,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 219,
+        "status": 13,
+        "rx_data": 73,
+        "last_tx": 211,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": 83,
+        "rx_remaining": 2981,
+        "tx_load_remaining": null,
+        "tx_remaining": 3451,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 219,
+        "status": 5,
+        "rx_data": 73,
+        "last_tx": 102,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 102,
+        "tx_shift": 83,
+        "rx_remaining": 2981,
+        "tx_load_remaining": null,
+        "tx_remaining": 3451,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 7,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 219,
+        "status": 5,
+        "rx_data": 73,
+        "last_tx": 191,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": 102,
+        "tx_shift": 83,
+        "rx_remaining": 2981,
+        "tx_load_remaining": null,
+        "tx_remaining": 3451,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 4
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          127
+        ],
+        [
+          "TxReady",
+          102
+        ]
+      ],
+      "state": {
+        "control": 219,
+        "status": 61,
+        "rx_data": 127,
+        "last_tx": 191,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 219,
+        "status": 61,
+        "rx_data": 127,
+        "last_tx": 191,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 4270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 4270,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 111,
+        "status": 61,
+        "rx_data": 127,
+        "last_tx": 191,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 4270,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 111,
+        "status": 61,
+        "rx_data": 127,
+        "last_tx": 191,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 4270,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 111,
+        "status": 53,
+        "rx_data": 127,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2140,
+        "tx_holding": 10,
+        "tx_shift": null,
+        "rx_remaining": 4270,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 46,
+        "status": 53,
+        "rx_data": 127,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 30726,
+        "tx_holding": 10,
+        "tx_shift": null,
+        "rx_remaining": 4270,
+        "tx_load_remaining": 428,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          10
+        ],
+        [
+          "RxReady",
+          63
+        ],
+        [
+          "TxComplete",
+          10
+        ]
+      ],
+      "state": {
+        "control": 46,
+        "status": 58,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 30726,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 190,
+        "status": 58,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 15363,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 158,
+        "status": 58,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 61443,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 10,
+      "state": {
+        "control": 158,
+        "status": 58,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 61443,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 63,
+      "state": {
+        "control": 158,
+        "status": 26,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 61443,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 160,
+        "status": 26,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 37554,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 103,
+        "status": 26,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 103,
+        "status": 26,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 103,
+        "status": 26,
+        "rx_data": 63,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 2354,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          102
+        ]
+      ],
+      "state": {
+        "control": 103,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 103,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 103,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 103,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 4800,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 214,
+        "frame_units": 2354,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 218,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 218,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 218,
+        "status": 61,
+        "rx_data": 102,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          94
+        ]
+      ],
+      "state": {
+        "control": 218,
+        "status": 59,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 218,
+        "status": 59,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 218,
+        "status": 59,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 94,
+      "state": {
+        "control": 218,
+        "status": 27,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 218,
+        "status": 27,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 94,
+      "state": {
+        "control": 218,
+        "status": 27,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 2400,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 427,
+        "frame_units": 3843,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 56,
+        "status": 27,
+        "rx_data": 94,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3843,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          90
+        ]
+      ],
+      "state": {
+        "control": 56,
+        "status": 61,
+        "rx_data": 90,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 6807,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 56,
+        "status": 61,
+        "rx_data": 90,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 6807,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 56,
+        "status": 61,
+        "rx_data": 90,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3909,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 56,
+        "status": 61,
+        "rx_data": 90,
+        "last_tx": 138,
+        "baud": 600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1707,
+        "frame_units": 17070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3909,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 34,
+        "status": 61,
+        "rx_data": 90,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 3909,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          119
+        ]
+      ],
+      "state": {
+        "control": 34,
+        "status": 58,
+        "rx_data": 119,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 20479,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          23
+        ]
+      ],
+      "state": {
+        "control": 34,
+        "status": 63,
+        "rx_data": 23,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 34,
+        "status": 63,
+        "rx_data": 23,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 23,
+      "state": {
+        "control": 34,
+        "status": 31,
+        "rx_data": 23,
+        "last_tx": 138,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 34,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 34,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 168,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 168,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 300,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 3414,
+        "frame_units": 34140,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 23,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 128,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 8,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 17,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 1,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 9,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 17,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 9,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 197,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 2,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 10,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 197,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 10,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 23,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 197,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 3,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 10,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 197,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 10,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 23,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 197,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 10,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 253,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 23,
+        "rx_data": 23,
+        "last_tx": 253,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 0,
+        "tx_shift": null,
+        "rx_remaining": 68270,
+        "tx_load_remaining": 6828,
+        "tx_remaining": null,
+        "pending_rx": 5,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          0
+        ]
+      ],
+      "state": {
+        "control": 31,
+        "status": 15,
+        "rx_data": 23,
+        "last_tx": 253,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": null,
+        "tx_shift": 0,
+        "rx_remaining": 36252,
+        "tx_load_remaining": null,
+        "tx_remaining": 43080,
+        "pending_rx": 5,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 23,
+      "state": {
+        "control": 31,
+        "status": 15,
+        "rx_data": 23,
+        "last_tx": 253,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": null,
+        "tx_shift": 0,
+        "rx_remaining": 36252,
+        "tx_load_remaining": null,
+        "tx_remaining": 43080,
+        "pending_rx": 5,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          92
+        ],
+        [
+          "TxComplete",
+          0
+        ]
+      ],
+      "state": {
+        "control": 31,
+        "status": 57,
+        "rx_data": 92,
+        "last_tx": 253,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 31,
+        "status": 49,
+        "rx_data": 92,
+        "last_tx": 194,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 68270,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 126,
+        "status": 49,
+        "rx_data": 92,
+        "last_tx": 194,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 11,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 126,
+        "status": 49,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 92,
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 4,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 5,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 92,
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 56300,
+        "tx_load_remaining": 13654,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 142,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 52115,
+        "tx_load_remaining": 9469,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 12,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 126,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 228,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 963,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 52115,
+        "tx_load_remaining": 9469,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 13,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 71,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 228,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 9394,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 52115,
+        "tx_load_remaining": 9469,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 13,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": false,
+      "state": {
+        "control": 71,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 112,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 9394,
+        "tx_holding": 66,
+        "tx_shift": null,
+        "rx_remaining": 52115,
+        "tx_load_remaining": 9469,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          66
+        ],
+        [
+          "TxComplete",
+          66
+        ]
+      ],
+      "state": {
+        "control": 71,
+        "status": 25,
+        "rx_data": 92,
+        "last_tx": 112,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 9394,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 18700,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 2,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 71,
+        "status": 25,
+        "rx_data": 92,
+        "last_tx": 112,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 9394,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": 18700,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": true,
+      "state": {
+        "control": 71,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 1200,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 854,
+        "frame_units": 9394,
+        "tx_holding": 38,
+        "tx_shift": null,
+        "rx_remaining": 18700,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 20,
+        "status": 17,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": 38,
+        "tx_shift": null,
+        "rx_remaining": 18700,
+        "tx_load_remaining": 1708,
+        "tx_remaining": null,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxReady",
+          38
+        ]
+      ],
+      "state": {
+        "control": 20,
+        "status": 9,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 3685,
+        "tx_load_remaining": null,
+        "tx_remaining": 61790,
+        "pending_rx": 6,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "RxReady",
+          92
+        ]
+      ],
+      "state": {
+        "control": 20,
+        "status": 40,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 150,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 6827,
+        "frame_units": 75097,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 41646,
+        "tx_load_remaining": null,
+        "tx_remaining": 24654,
+        "pending_rx": 5,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 123,
+        "status": 40,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 41646,
+        "tx_load_remaining": null,
+        "tx_remaining": 24654,
+        "pending_rx": 5,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 66,
+      "state": {
+        "control": 123,
+        "status": 40,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 41646,
+        "tx_load_remaining": null,
+        "tx_remaining": 24654,
+        "pending_rx": 5,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 123,
+        "status": 40,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 41646,
+        "tx_load_remaining": null,
+        "tx_remaining": 24654,
+        "pending_rx": 5,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxComplete",
+          38
+        ],
+        [
+          "RxReady",
+          103
+        ],
+        [
+          "RxReady",
+          39
+        ],
+        [
+          "RxReady",
+          118
+        ],
+        [
+          "RxReady",
+          25
+        ],
+        [
+          "RxReady",
+          40
+        ]
+      ],
+      "state": {
+        "control": 123,
+        "status": 58,
+        "rx_data": 40,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 123,
+        "status": 40,
+        "rx_data": 92,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": 38,
+        "rx_remaining": 41646,
+        "tx_load_remaining": null,
+        "tx_remaining": 24654,
+        "pending_rx": 5,
+        "rx_ready": true,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [
+        [
+          "TxComplete",
+          38
+        ],
+        [
+          "RxReady",
+          103
+        ],
+        [
+          "RxReady",
+          39
+        ],
+        [
+          "RxReady",
+          118
+        ],
+        [
+          "RxReady",
+          25
+        ],
+        [
+          "RxReady",
+          40
+        ]
+      ],
+      "state": {
+        "control": 123,
+        "status": 58,
+        "rx_data": 40,
+        "last_tx": 38,
+        "baud": 9600,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 107,
+        "frame_units": 1070,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": true,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": null,
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 38,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": [],
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 38,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 0,
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 38,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 1,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    },
+    {
+      "result": 38,
+      "state": {
+        "control": 0,
+        "status": 24,
+        "rx_data": 0,
+        "last_tx": 38,
+        "baud": 0,
+        "timebase_hz": 1024000,
+        "baud_divisor": 2,
+        "bit_units": 1024000,
+        "frame_units": 11264000,
+        "tx_holding": null,
+        "tx_shift": null,
+        "rx_remaining": null,
+        "tx_load_remaining": null,
+        "tx_remaining": null,
+        "pending_rx": 0,
+        "rx_ready": false,
+        "completed_tx": 0,
+        "rejected_rx": 1,
+        "rejected_tx": 14,
+        "dropped_tx": 0,
+        "suppressed_break_frames": 6
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@
 
 ## Reference Docs
 - `docs/sc62015_python_emulator_surface.md`: Python emulator surface/tests; keep in sync with the primary Rust LLAMA core.
+- `docs/sc61860_esrh_references_and_plan.md`: existing ESR-H disassembler/CPU references, source discrepancies and pending implementation/host qualification work.
 - `.github/workflows/llama-perfetto-smoke.yml`: nightly/dispatch Perfetto trace smoke (NOP/CALL/EMEM MV/DSBL/EMEM reg-indirect/PUSHU).
 
 ## Setup, Build, and Dev Commands

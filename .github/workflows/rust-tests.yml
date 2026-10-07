@@ -40,6 +40,10 @@ jobs:
           FORCE_BINJA_MOCK: 1
         run: cargo test --all-targets --all-features
 
+      - name: Check minimal core without optional device features
+        working-directory: sc62015/core
+        run: cargo check --locked --no-default-features --lib
+
       - name: Cargo test (rustcore)
         working-directory: sc62015/rustcore
         env:
