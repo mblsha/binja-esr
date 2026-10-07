@@ -13,6 +13,7 @@ from pce500.oz9600.ui import (
     Contacts,
     CloseGate,
     HostKeys,
+    PointerGate,
     contains,
     window_point,
     lcd_into,
@@ -127,3 +128,34 @@ def test_close_gate_seals_event_acceptance_and_is_idempotent():
     assert gate.closing
     assert not gate.begin_close()
     assert gate.closing
+
+def test_keyboard_focus_does_not_discard_the_first_fresh_pointer_press():
+    gate = PointerGate(active=True)
+    gate.focus(False)
+    gate.focus(True)
+    assert gate.button(True)
+    assert gate.accepts_target(host_control=False, fault=False)
+    assert not gate.button(False)
+    assert not gate.down and not gate.blocked
+
+
+@pytest.mark.parametrize("held", [False, True])
+def test_held_or_background_pointer_cannot_resume_without_release(held):
+    gate = PointerGate(active=True)
+    if held:
+        assert gate.button(True)
+    gate.focus(False)
+    assert not gate.button(True)
+    gate.focus(True)
+    assert not gate.button(True)
+    assert not gate.button(False)
+    assert gate.button(True)
+
+
+def test_fault_allows_host_controls_and_rejects_guest_targets():
+    gate = PointerGate(active=True)
+    assert gate.button(True)
+    assert gate.accepts_target(host_control=True, fault=True)
+    assert not gate.accepts_target(host_control=False, fault=True)
+    gate.focus(False)
+    assert not gate.accepts_target(host_control=True, fault=True)
