@@ -1055,6 +1055,30 @@ mod tests {
         app.position = Some((zone.rect.x + 1, zone.rect.y + 1));
     }
     #[test]
+    fn focus_changes_keep_audio_and_pointer_eligibility_consistent() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut rt = component_runtime();
+        let mut contacts = Contacts::new(0);
+        let mut app = component_app(&args, &mut rt, &mut contacts);
+        app.sound = true;
+        app.refresh_audio().unwrap();
+        assert!(app.audio_capture);
+        app.focus_changed(false).unwrap();
+        assert!(!app.audio_capture);
+        app.focus_changed(true).unwrap();
+        assert!(app.audio_capture);
+        let key = matrix_key(DeviceModel::Oz9600, "1").unwrap();
+        point_to(&mut app, Target::Matrix(key));
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        assert_eq!(app.contacts.pressed_keys(), BTreeSet::from([key]));
+        app.focus_changed(false).unwrap();
+        assert!(!app.audio_capture && app.contacts.pressed_keys().is_empty());
+        app.fault = Some("guest fault".into());
+        app.focus_changed(true).unwrap();
+        assert!(!app.audio_capture);
+        assert_eq!(app.rt.instruction_count(), 0);
+    }
+    #[test]
     fn focus_without_a_held_pointer_accepts_the_first_fresh_press() {
         let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
         let mut rt = component_runtime();
