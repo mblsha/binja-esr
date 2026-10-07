@@ -62,7 +62,10 @@ Resume and open an application after either operation.
 Native and browser `.ozbat` files interoperate and validate ROM identities and
 payload checksums. A saved Schedule opened through Calendar can show blank
 text; ENTER to Index and ENTER back to View redraws the record. Clock's popup
-can disappear after additional nominal idle execution.
+is a momentary view: hold the static Clock target with the pointer, or hold
+Enter/Space while that target is focused. Release closes it after the ROM
+processes the contact. Normal hold/release input keeps the popup visible and
+restores the previous screen; exact physical release timing remains inferred.
 
 ### Automatic browser recovery
 
