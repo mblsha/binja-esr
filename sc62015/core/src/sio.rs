@@ -8,6 +8,7 @@ use crate::memory::{
     MemoryImage, IMEM_EIL_OFFSET, IMEM_RXD_OFFSET, IMEM_TXD_OFFSET, IMEM_UCR_OFFSET,
     IMEM_USR_OFFSET,
 };
+use crate::uart::{Uart, UartEvent};
 
 const IMEM_BH_OFFSET: u32 = 0xD5;
 const USR_RX_READY: u8 = 0x20;
@@ -61,6 +62,7 @@ impl SioQueuedByte {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SioSnapshot {
+    pub register_uart: Option<Uart>,
     pub ucr: u8,
     pub usr: u8,
     pub eil: u8,
@@ -120,6 +122,7 @@ pub struct SioTimingSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SioTimedEvent {
     RxReady(u8),
+    TxReady(u8),
     TxComplete(u8),
     HandshakeSettled(SioInputLines),
     DirectInputTimeout,
@@ -129,6 +132,7 @@ pub enum SioTimedEvent {
 
 #[derive(Debug)]
 pub struct SioStub {
+    register_uart: Option<Uart>,
     rx_queue: VecDeque<SioQueuedByte>,
     pending_rx_queue: VecDeque<SioQueuedByte>,
     tx_queue: VecDeque<u8>,
@@ -149,6 +153,7 @@ pub struct SioStub {
 impl SioStub {
     pub fn new() -> Self {
         Self {
+            register_uart: None,
             rx_queue: VecDeque::new(),
             pending_rx_queue: VecDeque::new(),
             tx_queue: VecDeque::new(),
@@ -167,11 +172,56 @@ impl SioStub {
         }
     }
 
+    /// Device-owned registers and byte transport, without the legacy PC
+    /// workspace, BH mirroring, automatic replies or IOCS replacements.
+    pub fn register_only(timebase_hz: u64, baud_divisor: u64) -> Self {
+        Self {
+            register_uart: Some(Uart::new(timebase_hz, baud_divisor)),
+            ..Self::new()
+        }
+    }
+
+    pub fn uart(&self) -> Option<&Uart> {
+        self.register_uart.as_ref()
+    }
+    pub fn is_register_uart(&self) -> bool {
+        self.register_uart.is_some()
+    }
+
+    pub fn reset_register_uart(&mut self, memory: &mut MemoryImage) {
+        if let Some(uart) = self.register_uart.as_mut() {
+            *uart = Uart::new(uart.timebase_hz, uart.baud_divisor);
+            self.sync_uart_memory(memory);
+        }
+    }
+
+    fn sync_uart_memory(&self, memory: &mut MemoryImage) {
+        if let Some(uart) = &self.register_uart {
+            for (offset, value) in [
+                (IMEM_UCR_OFFSET, uart.control),
+                (IMEM_USR_OFFSET, uart.status()),
+                (IMEM_RXD_OFFSET, uart.rx_data),
+                (IMEM_TXD_OFFSET, uart.last_tx),
+            ] {
+                if memory.read_internal_byte_silent(offset) != Some(value) {
+                    memory.write_internal_byte(offset, value);
+                }
+            }
+        }
+    }
+
     pub fn init(&mut self, memory: &mut MemoryImage) {
+        if self.is_register_uart() {
+            self.sync_uart_memory(memory);
+            return;
+        }
         self.apply_status(memory);
     }
 
     pub fn set_auto_response(&mut self, value: u8) {
+        if self.is_register_uart() {
+            return;
+        }
         self.auto_response = Some(value);
     }
 
@@ -180,6 +230,9 @@ impl SioStub {
     }
 
     pub fn set_direct_input_timeout(&mut self, enabled: bool) {
+        if self.is_register_uart() {
+            return;
+        }
         self.direct_input_timeout = enabled;
         self.direct_input_timeout_countdown = enabled.then_some(
             self.timing_config
@@ -189,6 +242,9 @@ impl SioStub {
     }
 
     pub fn set_timing_config(&mut self, config: SioTimingConfig) {
+        if self.is_register_uart() {
+            return;
+        }
         self.timing_config = config;
     }
 
@@ -196,6 +252,9 @@ impl SioStub {
     /// diagnostic shortcuts, not SIO hardware, and are disabled by default so
     /// normal machine runs execute the ROM.
     pub fn enable_rom_shortcuts_for_diagnostics(&mut self) {
+        if self.is_register_uart() {
+            return;
+        }
         self.rom_shortcuts_enabled = true;
     }
 
@@ -213,6 +272,19 @@ impl SioStub {
 
     #[inline]
     pub fn tick_cycles(&mut self, cycles: u64, memory: &mut MemoryImage) -> Vec<SioTimedEvent> {
+        if let Some(uart) = self.register_uart.as_mut() {
+            let events = uart
+                .advance(cycles)
+                .into_iter()
+                .map(|event| match event {
+                    UartEvent::RxReady(value) => SioTimedEvent::RxReady(value),
+                    UartEvent::TxReady(value) => SioTimedEvent::TxReady(value),
+                    UartEvent::TxComplete(value) => SioTimedEvent::TxComplete(value),
+                })
+                .collect();
+            self.sync_uart_memory(memory);
+            return events;
+        }
         if cycles > 0
             && self.rx_ready_countdown.is_none()
             && self.tx_complete_countdown.is_none()
@@ -300,11 +372,16 @@ impl SioStub {
 
     pub fn snapshot(&self, memory: &MemoryImage) -> SioSnapshot {
         SioSnapshot {
+            register_uart: self.register_uart.clone(),
             ucr: memory.read_internal_byte(IMEM_UCR_OFFSET).unwrap_or(0),
             usr: memory.read_internal_byte(IMEM_USR_OFFSET).unwrap_or(0),
             eil: memory.read_internal_byte(IMEM_EIL_OFFSET).unwrap_or(0),
             handshake: self.get_handshake(memory),
-            workspace: serial_workspace(memory),
+            workspace: if self.is_register_uart() {
+                Vec::new()
+            } else {
+                serial_workspace(memory)
+            },
             rx_queue: self.rx_queue.iter().copied().collect(),
             pending_rx_queue: self.pending_rx_queue.iter().copied().collect(),
             tx_queue: self.tx_queue.iter().copied().collect(),
@@ -318,6 +395,11 @@ impl SioStub {
     }
 
     pub fn restore(&mut self, snapshot: SioSnapshot, memory: &mut MemoryImage) {
+        self.register_uart = snapshot.register_uart.clone();
+        if self.is_register_uart() {
+            self.sync_uart_memory(memory);
+            return;
+        }
         memory.write_internal_byte(IMEM_UCR_OFFSET, snapshot.ucr);
         memory.write_internal_byte(IMEM_USR_OFFSET, snapshot.usr);
         memory.write_internal_byte(IMEM_EIL_OFFSET, snapshot.eil);
@@ -358,6 +440,11 @@ impl SioStub {
             overrun_error,
             framing_error,
         };
+        if let Some(uart) = self.register_uart.as_mut() {
+            uart.queue_rx(entry);
+            self.sync_uart_memory(memory);
+            return;
+        }
         if self.timing_config.rx_ready_delay_cycles == 0 {
             self.rx_queue.push_back(entry);
             self.latch_next_received(memory);
@@ -375,6 +462,11 @@ impl SioStub {
     }
 
     pub fn consume_received(&mut self, memory: &mut MemoryImage) -> Option<SioQueuedByte> {
+        if let Some(uart) = self.register_uart.as_mut() {
+            let result = uart.consume_rx();
+            self.sync_uart_memory(memory);
+            return result;
+        }
         if self.rx_queue.is_empty() {
             return None;
         }
@@ -385,22 +477,39 @@ impl SioStub {
     }
 
     pub fn pending_receive(&self) -> Vec<SioQueuedByte> {
+        if let Some(uart) = &self.register_uart {
+            return uart.rx_latch.into_iter().collect();
+        }
         self.rx_queue.iter().copied().collect()
     }
 
     pub fn pending_delayed_receive(&self) -> Vec<SioQueuedByte> {
+        if let Some(uart) = &self.register_uart {
+            return uart.pending_rx.iter().copied().collect();
+        }
         self.pending_rx_queue.iter().copied().collect()
     }
 
     pub fn pending_transmit(&self) -> Vec<u8> {
+        if let Some(uart) = &self.register_uart {
+            return uart.pending_tx();
+        }
         self.tx_queue.iter().copied().collect()
     }
 
     pub fn completed_transmit_len(&self) -> usize {
+        if let Some(uart) = &self.register_uart {
+            return uart.completed_tx.len();
+        }
         self.completed_tx_queue.len()
     }
 
     pub fn queue_transmit(&mut self, value: u8, memory: &mut MemoryImage) {
+        if let Some(uart) = self.register_uart.as_mut() {
+            uart.write_tx(value);
+            self.sync_uart_memory(memory);
+            return;
+        }
         self.tx_queue.push_back(value);
         if self.tx_complete_countdown.is_none() {
             self.tx_complete_countdown = Some(self.timing_config.tx_complete_cycles.max(1));
@@ -409,16 +518,25 @@ impl SioStub {
     }
 
     pub fn complete_transmit(&mut self, memory: &mut MemoryImage) -> Option<u8> {
+        if let Some(uart) = self.register_uart.as_mut() {
+            return uart.take_tx();
+        }
         let value = self.completed_tx_queue.pop_front();
         self.apply_status(memory);
         value
     }
 
     pub fn set_handshake(&self, memory: &mut MemoryImage, value: u8) {
+        if self.is_register_uart() {
+            return;
+        }
         let _ = memory.store(SERIAL_HANDSHAKE_ADDR, 8, u32::from(value));
     }
 
     pub fn get_handshake(&self, memory: &MemoryImage) -> u8 {
+        if self.is_register_uart() {
+            return 0;
+        }
         memory
             .load(SERIAL_HANDSHAKE_ADDR, 8)
             .map(|value| value as u8)
@@ -426,6 +544,9 @@ impl SioStub {
     }
 
     pub fn set_input_lines(&self, memory: &mut MemoryImage, cs: Option<bool>, cd: Option<bool>) {
+        if self.is_register_uart() {
+            return;
+        }
         let mut value = memory.read_internal_byte(IMEM_EIL_OFFSET).unwrap_or(0);
         if let Some(enabled) = cs {
             value = set_mask(value, SERIAL_EIL_CS_MASK, enabled);
@@ -437,6 +558,9 @@ impl SioStub {
     }
 
     pub fn set_input_lines_delayed(&mut self, cs: bool, cd: bool) {
+        if self.is_register_uart() {
+            return;
+        }
         self.pending_lines = Some(SioInputLines { cs, cd });
         self.handshake_countdown = Some(self.timing_config.handshake_delay_cycles.max(1));
     }
@@ -455,7 +579,7 @@ impl SioStub {
         state: &mut crate::llama::state::LlamaState,
         memory: &mut MemoryImage,
     ) -> bool {
-        if !self.rom_shortcuts_enabled {
+        if self.is_register_uart() || !self.rom_shortcuts_enabled {
             return false;
         }
         let pc = pc & 0x000f_ffff;
@@ -480,6 +604,19 @@ impl SioStub {
     }
 
     pub fn handle_read(&mut self, offset: u32, memory: &mut MemoryImage) -> Option<u8> {
+        if let Some(uart) = self.register_uart.as_mut() {
+            let value = match offset {
+                IMEM_UCR_OFFSET => uart.control,
+                IMEM_USR_OFFSET => uart.status(),
+                IMEM_RXD_OFFSET => uart.read_rx(),
+                // Write-only port. The debug backing retains last_tx; reads
+                // return zero as an explicit unqualified open-bus policy.
+                IMEM_TXD_OFFSET => 0,
+                _ => return None,
+            };
+            self.sync_uart_memory(memory);
+            return Some(value);
+        }
         match offset {
             IMEM_USR_OFFSET => {
                 self.apply_status(memory);
@@ -495,6 +632,18 @@ impl SioStub {
     }
 
     pub fn handle_write(&mut self, offset: u32, value: u8, memory: &mut MemoryImage) -> bool {
+        if let Some(uart) = self.register_uart.as_mut() {
+            match offset {
+                IMEM_UCR_OFFSET => uart.write_control(value),
+                IMEM_TXD_OFFSET => {
+                    uart.write_tx(value);
+                }
+                IMEM_USR_OFFSET | IMEM_RXD_OFFSET => {} // device-owned/read-only
+                _ => return false,
+            }
+            self.sync_uart_memory(memory);
+            return true;
+        }
         match offset {
             IMEM_UCR_OFFSET => {
                 memory.write_internal_byte(offset, value);

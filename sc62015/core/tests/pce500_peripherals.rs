@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/tests/test_peripherals.py
+// Python peripheral contract tests.
+
 use sc62015_core::{
     CassetteBlock, CassetteBlockKind, CassetteError, CassettePulse, CassettePulseError,
     CassettePulseStream, CassettePulseTiming, CassetteRetryPolicy, CassetteTapeImage,

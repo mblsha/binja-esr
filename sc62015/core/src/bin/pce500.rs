@@ -1,5 +1,6 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/cli.py
+// PY_SOURCE: pce500/oz9600/input.py
 
 use chrono::{Datelike, Timelike, Utc};
 use clap::Parser;
@@ -42,7 +43,7 @@ use sc62015_core::{
     PERFETTO_TRACER,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -54,6 +55,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 use sc62015_core::iq7000_annunciators::{
@@ -208,6 +210,42 @@ struct Args {
     /// ROM image to load (defaults to the repo-symlinked ROM for --model).
     #[arg(long, value_name = "PATH")]
     rom: Option<PathBuf>,
+
+    /// Explicit provisional OZ execution settings; model selection defaults to strict.
+    #[arg(long, value_enum, default_value_t = sc62015_core::oz9600::ExecutionProfile::Strict)]
+    oz9600_profile: sc62015_core::oz9600::ExecutionProfile,
+
+    /// Logical retained RAM/RTC image loaded before a fresh OZ CPU reset run.
+    #[arg(long, value_name = "PATH")]
+    oz9600_retained: Option<PathBuf>,
+
+    /// Save logical RAM/RTC after successful execution (not a running snapshot).
+    #[arg(long, value_name = "PATH")]
+    oz9600_retained_out: Option<PathBuf>,
+
+    /// Verified OZ-707 ROM; opts into the provisional logical card view.
+    #[arg(long, value_name = "PATH", requires = "oz9600_card_sram")]
+    oz9600_card_rom: Option<PathBuf>,
+
+    /// Separate 32 KiB OZ-707 SRAM media image, loaded before execution.
+    #[arg(long, value_name = "PATH", requires = "oz9600_card_rom")]
+    oz9600_card_sram: Option<PathBuf>,
+
+    /// Export guest-written card SRAM separately from main retained RAM/RTC.
+    #[arg(long, value_name = "PATH", requires = "oz9600_card_rom")]
+    oz9600_card_sram_out: Option<PathBuf>,
+
+    /// JSON physical matrix/tablet steps with boundary budgets; no translated events.
+    #[arg(long, value_name = "PATH")]
+    oz9600_replay: Option<PathBuf>,
+
+    /// Read-only state/frame hashes after every completed OZ physical replay step.
+    #[arg(long, value_name = "PATH")]
+    oz9600_replay_report: Option<PathBuf>,
+
+    /// Export the full native backing frame in PBM format.
+    #[arg(long, value_name = "PATH")]
+    oz9600_pbm: Option<PathBuf>,
 
     /// Enable/disable memory card emulation (0x040000..0x04FFFF).
     #[arg(long, value_enum, default_value_t = CardMode::Auto)]
@@ -636,6 +674,8 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
             .join("../../../rom-analysis/pc-e500/en/bnida.json"),
         DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/pc-e500/jp/bnida.json"),
+        DeviceModel::Oz9600 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rom-analysis/oz-9600/bnida.json"),
     }
 }
 
@@ -3097,6 +3137,21 @@ fn resolve_key_seq_key(model: DeviceModel, raw: &str) -> Result<AutoKeyKind, Str
             return Ok(key);
         }
     }
+    if model == DeviceModel::Oz9600 {
+        let name = match lowered.as_str() {
+            "return" | "ret" => "ENTER".into(),
+            _ => trimmed.to_ascii_uppercase(),
+        };
+        if let Some(code) = sc62015_core::physical_keys::matrix_key(model, &name) {
+            return Ok(AutoKeyKind::Matrix(code));
+        }
+        let code = parse_u8_value(trimmed)?;
+        return if code < 11 * 8 {
+            Ok(AutoKeyKind::Matrix(code))
+        } else {
+            Err("OZ physical contact must fit 11 columns by 8 rows".into())
+        };
+    }
     if let Some(value) = lowered.strip_prefix("event").and_then(|rest| {
         rest.strip_prefix(':')
             .or_else(|| rest.strip_prefix('='))
@@ -4889,6 +4944,19 @@ fn validate_lcd_expectations(args: &Args, lcd_lines: &[String]) -> Result<(), Bo
     }
 }
 
+fn apply_core_card_profile(
+    model: DeviceModel,
+    profile: sc62015_core::device::DeviceMemoryCardProfile,
+    memory: &mut MemoryImage,
+) -> sc62015_core::Result<()> {
+    // The OZ factory owns the 4-B bus. A generic absent CE1 overlay would
+    // shadow its card descriptor with zero bytes at 40000-4FFFF.
+    if model != DeviceModel::Oz9600 {
+        profile.apply(memory)?;
+    }
+    Ok(())
+}
+
 fn run_core_runtime_path(
     args: &Args,
     rom_bytes: &[u8],
@@ -4897,6 +4965,13 @@ fn run_core_runtime_path(
 ) -> Result<(), Box<dyn Error>> {
     let unsupported = core_runtime_unsupported_options(args);
     if !unsupported.is_empty() {
+        if args.model == DeviceModel::Oz9600 {
+            return Err(format!(
+                "OZ-9600 does not support diagnostic option(s) {}; legacy mode is unavailable",
+                unsupported.join(", ")
+            )
+            .into());
+        }
         return Err(format!(
             "the shared core runtime does not yet expose specialized diagnostic option(s) {}; rerun explicitly with --runtime legacy",
             unsupported.join(", ")
@@ -4920,7 +4995,9 @@ fn run_core_runtime_path(
     eprintln!(
         "[card] model={} mode={}",
         args.model.label(),
-        if card_profile.is_present() {
+        if args.model == DeviceModel::Oz9600 && args.oz9600_card_rom.is_some() {
+            "oz707-logical"
+        } else if card_profile.is_present() {
             "blank-writable-64k"
         } else {
             "absent"
@@ -4928,12 +5005,34 @@ fn run_core_runtime_path(
     );
 
     let mut runtime = CoreRuntime::for_model(args.model, rom_bytes)?;
-    card_profile.apply(&mut runtime.memory)?;
-    runtime.timer.enabled = !args.disable_timers;
+    apply_core_card_profile(args.model, card_profile, &mut runtime.memory)?;
+    if args.model != DeviceModel::Oz9600 {
+        runtime.timer.enabled = !args.disable_timers;
+    }
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
     runtime.power_on_reset()?;
+    if args.model == DeviceModel::Oz9600 {
+        if let Some(path) = &args.oz9600_retained {
+            runtime.restore_oz9600_retained_state(&fs::read(path)?)?;
+        }
+        runtime.configure_oz9600_profile(args.oz9600_profile)?;
+        if let Some(path) = &args.oz9600_card_rom {
+            runtime.install_oz9600_oz707_card(
+                &fs::read(path)?,
+                &fs::read(
+                    args.oz9600_card_sram
+                        .as_ref()
+                        .expect("paired card arguments"),
+                )?,
+            )?;
+        }
+        if args.disable_timers {
+            runtime.timer.enabled = false;
+        }
+        eprintln!("[oz9600] profile={:?}; CPU, clock, SRAM aliases and physical LCD crop remain provisional", args.oz9600_profile);
+    }
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
@@ -4957,8 +5056,36 @@ fn run_core_runtime_path(
     }
 
     let started = Instant::now();
+    let mut oz_replay_reports = Vec::new();
     let execution_result = (|| -> Result<(), Box<dyn Error>> {
-        let consumed = if let Some(raw_key_seq) = args
+        let consumed = if let Some(path) = &args.oz9600_replay {
+            let replay = sc62015_core::oz9600::input::PhysicalReplay::parse(&fs::read(path)?)?;
+            if replay.total_boundaries() > args.steps {
+                return Err("OZ replay exceeds --steps budget".into());
+            }
+            replay.run_with_observer(&mut runtime, |index,rt| {
+                let pbm_sha256=format!("{:x}",Sha256::digest(rt.lcd.as_deref().expect("factory OZ LCD").matrix_frame().pbm()));
+                let hw=rt.oz9600_hardware().expect("factory OZ hardware").borrow();
+                let mut report = json!({
+                    "step":index,"pc":rt.state.pc(),"instructions":rt.instruction_count(),
+                    "cycles":rt.cycle_count(),"cpu_halted":rt.state.is_halted(),
+                    "irq_total":rt.timer.irq_total,"selector":hw.selector,
+                    "registers":(["BA","I","X","Y","U","S","F"].iter().map(|name|(*name,rt.get_reg(name))).collect::<BTreeMap<_,_>>()),
+                    "gate_registers":hw.gate.to_vec(),"rtc_registers":hw.rtc.registers(),
+                    "lcd_registers":hw.lcd.registers.to_vec(),
+                    "lcd_counters":[hw.lcd.data_writes,hw.lcd.data_reads,hw.lcd.block_operations],
+                    "lcd_windows":(0..16).map(|n|hw.lcd.window_descriptor(n)).collect::<Vec<_>>(),
+                    "tablet":[u64::from(hw.tablet.x),u64::from(hw.tablet.y),u64::from(hw.tablet.pressed),u64::from(hw.tablet.conversion_control),u64::from(hw.tablet.drive_control),hw.tablet.data_reads],
+                    "pbm_sha256":pbm_sha256,
+                });
+                if let Some(progress) = hw.execution.rtc_progression_report() {
+                    report["rtc_progression"] = progress;
+                }
+                oz_replay_reports.push(report);
+                Ok(())
+            })?;
+            replay.total_boundaries()
+        } else if let Some(raw_key_seq) = args
             .key_seq
             .as_ref()
             .map(|raw| raw.trim())
@@ -4996,6 +5123,29 @@ fn run_core_runtime_path(
     print_runtime_lcd_bus_writes(&mut runtime, args.lcd_log);
     execution_result?;
     trace_result?;
+    if let Some(path) = &args.oz9600_replay_report {
+        fs::write(path, serde_json::to_vec_pretty(&oz_replay_reports)?)?;
+    }
+    if let Some(path) = &args.oz9600_retained_out {
+        fs::write(path, runtime.oz9600_retained_state()?)?;
+    }
+    if let Some(path) = &args.oz9600_card_sram_out {
+        fs::write(
+            path,
+            runtime.oz9600_card_sram()?.ok_or("OZ card unavailable")?,
+        )?;
+    }
+    if let Some(path) = &args.oz9600_pbm {
+        fs::write(
+            path,
+            runtime
+                .lcd
+                .as_deref()
+                .ok_or("missing OZ LCD")?
+                .matrix_frame()
+                .pbm(),
+        )?;
+    }
 
     let lcd_lines = write_runtime_lcd_capture(
         args.model,
@@ -5029,6 +5179,42 @@ fn run_core_runtime_path(
 
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
+    let oz_options = args.oz9600_replay_report.is_some()
+        || args.oz9600_card_rom.is_some()
+        || args.oz9600_card_sram.is_some()
+        || args.oz9600_card_sram_out.is_some()
+        || args.oz9600_retained.is_some()
+        || args.oz9600_retained_out.is_some()
+        || args.oz9600_replay.is_some()
+        || args.oz9600_pbm.is_some()
+        || args.oz9600_profile != sc62015_core::oz9600::ExecutionProfile::Strict;
+    if oz_options && args.model != DeviceModel::Oz9600 {
+        return Err("--oz9600-* options require --model oz-9600".into());
+    }
+    if args.model == DeviceModel::Oz9600 {
+        if !matches!(args.runtime, RuntimeEngine::Core) {
+            return Err("OZ-9600 requires --runtime core".into());
+        }
+        if matches!(args.card, CardMode::Present) {
+            return Err("OZ-9600 requires --oz9600-card-rom and --oz9600-card-sram for a card; use --card auto".into());
+        }
+        if args.oz9600_card_rom.is_some() && args.card != CardMode::Auto {
+            return Err("OZ card images require --card auto".into());
+        }
+        if args.oz9600_replay_report.is_some() && args.oz9600_replay.is_none() {
+            return Err("--oz9600-replay-report requires --oz9600-replay".into());
+        }
+        if args.oz9600_replay.is_some() && args.key_seq.is_some() {
+            return Err("choose --oz9600-replay or --key-seq".into());
+        }
+        if args.disable_timers
+            && args.oz9600_profile != sc62015_core::oz9600::ExecutionProfile::Strict
+        {
+            return Err(
+                "--disable-timers conflicts with the OZ experimental timing profile".into(),
+            );
+        }
+    }
 
     if args.iq7p_enter_pclink && args.model != DeviceModel::Iq7000 {
         return Err("--iq7p-enter-pclink is only supported for --model iq-7000".into());
@@ -8182,6 +8368,29 @@ mod tests {
         assert_eq!(args.runtime, RuntimeEngine::Core);
         assert_eq!(args.card, CardMode::Auto);
         assert!(core_runtime_unsupported_options(&args).is_empty());
+    }
+
+    #[test]
+    fn generic_absent_ce1_does_not_shadow_the_oz_card_rom() {
+        use sc62015_core::device::DeviceMemoryCardProfile;
+        let mut memory = MemoryImage::new();
+        memory.add_rom_overlay(0x40000, &vec![0x12; 0x40000], "oz9600_card_rom");
+        apply_core_card_profile(
+            DeviceModel::Oz9600,
+            DeviceMemoryCardProfile::Absent,
+            &mut memory,
+        )
+        .unwrap();
+        assert_eq!(memory.load_for_preflight(0x40000, 16, None), Some(0x1212));
+        assert_eq!(memory.load(0x40000, 16), Some(0x1212));
+        apply_core_card_profile(
+            DeviceModel::Iq7000,
+            DeviceMemoryCardProfile::Absent,
+            &mut memory,
+        )
+        .unwrap();
+        assert_eq!(memory.load_for_preflight(0x40000, 16, None), Some(0));
+        assert_eq!(memory.load(0x40000, 16), Some(0));
     }
 
     #[test]

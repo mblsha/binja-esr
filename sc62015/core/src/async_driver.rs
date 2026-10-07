@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/scheduler.py
+// Scheduling reference only: this legacy future driver has no Python mirror.
+
 //! Minimal virtual-time future driver used by legacy diagnostics.
 //!
 //! Its `cycle` is an isolated generic virtual-time coordinate. It is not

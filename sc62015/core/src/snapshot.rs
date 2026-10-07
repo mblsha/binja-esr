@@ -429,9 +429,15 @@ fn decode_snapshot_metadata(
     .into_iter()
     .collect();
     if required_keys.iter().any(|key| !object.contains_key(*key))
-        || object
-            .keys()
-            .any(|key| key != "device_model" && !required_keys.contains(key.as_str()))
+        || object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "device_model"
+                    | "block_transfer_policy"
+                    | "byte_arithmetic_source_policy"
+                    | "isr_software_write_policy"
+            ) && !required_keys.contains(key.as_str())
+        })
     {
         return Err(CoreError::InvalidSnapshot(
             "snapshot metadata has missing or unexpected top-level fields".to_string(),

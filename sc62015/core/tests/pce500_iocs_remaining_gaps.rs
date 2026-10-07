@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/tests/test_peripherals.py
+// Peripheral contract reference; these additional IOCS ROM cases are Rust-only.
+
 mod common;
 
 use common::{boot_pce500, call_iocs, call_with_sentinel, load_pce500_font, write_u24};

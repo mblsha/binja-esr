@@ -1,3 +1,7 @@
+// PY_SOURCE: pce500/peripherals/cassette.py
+// PY_SOURCE: pce500/peripherals/storage.py
+// Cassette/storage peripheral contracts mirrored by this device layer.
+
 use thiserror::Error;
 
 use crate::llama::opcodes::RegName;

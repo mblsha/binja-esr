@@ -1,5 +1,7 @@
 // PY_SOURCE: sc62015/pysc62015/emulator.py:RegisterName
 // PY_SOURCE: sc62015/pysc62015/emulator.py:Registers
+// PY_SOURCE: pce500/oz9600/profile.py
+// PY_SOURCE: pce500/oz9600/audio.py
 
 pub mod async_driver;
 pub mod bus_trace;
@@ -11,6 +13,7 @@ pub mod iq7000_annunciators;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_capture;
+pub mod lcd_frame;
 pub mod lcd_render;
 pub mod lcd_snapshot;
 pub mod lcd_text;
@@ -26,11 +29,16 @@ pub mod perfetto;
 pub mod physical_keys;
 mod preflight_cache;
 pub mod run_control;
+pub mod runtime_device;
 pub mod sio;
 pub mod snapshot;
 pub mod timer;
+pub mod uart;
 
-use crate::llama::state::{validate_f_image, PowerState};
+use crate::llama::state::{
+    validate_f_image, BlockTransferPolicy, ByteArithmeticSourcePolicy, IsrSoftwareWritePolicy,
+    PowerState,
+};
 use crate::llama::{opcodes::RegName, state::LlamaState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,6 +54,8 @@ pub use device::{
     DeviceTimerProfile, TimerProfileProvenance,
 };
 pub use keyboard::KeyboardMatrix;
+#[cfg(feature = "oz9600")]
+pub mod oz9600;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
@@ -353,6 +363,12 @@ pub struct SnapshotMetadata {
     pub pc: u32,
     #[serde(default)]
     pub power_state: PowerState,
+    #[serde(default, skip_serializing_if = "BlockTransferPolicy::is_independent")]
+    pub block_transfer_policy: BlockTransferPolicy,
+    #[serde(default, skip_serializing_if = "ByteArithmeticSourcePolicy::is_strict")]
+    pub byte_arithmetic_source_policy: ByteArithmeticSourcePolicy,
+    #[serde(default, skip_serializing_if = "IsrSoftwareWritePolicy::is_replace")]
+    pub isr_software_write_policy: IsrSoftwareWritePolicy,
     #[serde(default)]
     pub external_interrupt_level: bool,
     #[serde(default)]
@@ -403,6 +419,9 @@ impl Default for SnapshotMetadata {
             memory_writes: 0,
             pc: 0,
             power_state: PowerState::Running,
+            block_transfer_policy: BlockTransferPolicy::Independent,
+            byte_arithmetic_source_policy: ByteArithmeticSourcePolicy::Strict,
+            isr_software_write_policy: IsrSoftwareWritePolicy::Replace,
             external_interrupt_level: false,
             onk_level: false,
             call_depth: 0,
@@ -650,6 +669,9 @@ pub struct CoreRuntime {
     lcd_bus_capture: Option<LcdBusCapture>,
     poisoned: Option<String>,
     preflight_cache: preflight_cache::PreflightCache,
+    boundary_device: Option<Box<dyn runtime_device::BoundaryDevice>>,
+    #[cfg(feature = "oz9600")]
+    pub(crate) oz9600_hardware: Option<oz9600::SharedHardware>,
 }
 
 impl Default for CoreRuntime {
@@ -690,6 +712,9 @@ impl CoreRuntime {
             lcd_bus_capture: None,
             poisoned: None,
             preflight_cache: Default::default(),
+            boundary_device: None,
+            #[cfg(feature = "oz9600")]
+            oz9600_hardware: None,
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -697,7 +722,8 @@ impl CoreRuntime {
         rt
     }
 
-    /// Construct a complete machine runtime from one authoritative model profile.
+    /// Construct a machine from its model profile. OZ-9600 hardware remains
+    /// provisional, with strict CPU/clock defaults and explicit experimental opt-in.
     pub fn for_model(model: DeviceModel, rom: &[u8]) -> Result<Self> {
         let mut runtime = Self::new();
         model.configure_fresh_runtime(&mut runtime, rom)?;
@@ -706,6 +732,11 @@ impl CoreRuntime {
 
     pub fn device_model(&self) -> DeviceModel {
         self.metadata.device_model.unwrap_or(DeviceModel::PcE500)
+    }
+
+    #[cfg(feature = "oz9600")]
+    pub fn oz9600_hardware(&self) -> Option<&oz9600::SharedHardware> {
+        self.oz9600_hardware.as_ref()
     }
 
     pub fn set_device_model(&mut self, model: DeviceModel) -> Result<()> {
@@ -850,12 +881,19 @@ impl CoreRuntime {
             .map_err(|error| CoreError::Other(format!("power-on reset: {error}")));
         if result.is_ok() {
             self.poisoned = None;
+            if let Some(sio) = self.sio.as_mut() {
+                sio.reset_register_uart(&mut self.memory);
+            }
             let scr = self
                 .memory
                 .read_internal_byte_silent(IMEM_SCR_OFFSET)
                 .unwrap_or(0);
             self.timer
                 .sync_scr_selection(scr, self.metadata.cycle_count);
+            #[cfg(feature = "oz9600")]
+            if let Some(hardware) = &self.oz9600_hardware {
+                hardware.borrow_mut().audio.reset();
+            }
         }
         result
     }
@@ -942,6 +980,40 @@ impl CoreRuntime {
 
     fn effective_onk_level(&self) -> bool {
         self.onk_level || self.iq7000_alarm_wake_level()
+    }
+
+    fn oz9600_on_irq_edge_only(&self) -> bool {
+        #[cfg(feature = "oz9600")]
+        {
+            self.oz9600_hardware
+                .as_ref()
+                .is_some_and(|hardware| hardware.borrow().execution.diagnostic_on_irq_edge_only)
+        }
+        #[cfg(not(feature = "oz9600"))]
+        {
+            false
+        }
+    }
+
+    // PY_SOURCE: pce500/oz9600/profile.py:handler_blocks_irq
+    fn irq_handler_suppresses_delivery(&self) -> bool {
+        #[cfg(feature = "oz9600")]
+        {
+            self.timer.in_interrupt
+                && !self
+                    .oz9600_hardware
+                    .as_ref()
+                    .is_some_and(|hardware| hardware.borrow().execution.diagnostic_irq_imr_only)
+        }
+        #[cfg(not(feature = "oz9600"))]
+        {
+            self.timer.in_interrupt
+        }
+    }
+
+    // PY_SOURCE: pce500/oz9600/profile.py:on_irq_should_reassert
+    fn on_key_will_reassert(&self) -> bool {
+        self.effective_onk_level() && !self.oz9600_on_irq_edge_only()
     }
 
     fn advance_iq7000_rtc_timing_units(&mut self, timing_units: u64) -> bool {
@@ -1053,11 +1125,21 @@ impl CoreRuntime {
         let Some(events) = events else {
             return;
         };
-        let tx_completed = events
-            .iter()
-            .any(|event| matches!(event, SioTimedEvent::TxComplete(_)));
+        let register_uart = self.sio.as_ref().is_some_and(SioStub::is_register_uart);
+        let tx_ready = events.iter().any(|event| match event {
+            SioTimedEvent::TxReady(_) => register_uart,
+            SioTimedEvent::TxComplete(_) => !register_uart,
+            _ => false,
+        });
+        if register_uart
+            && events
+                .iter()
+                .any(|event| matches!(event, SioTimedEvent::RxReady(_)))
+        {
+            self.assert_irq_source(ISR_RXI, "RX");
+        }
         self.refresh_sio_interrupts();
-        if tx_completed {
+        if tx_ready {
             self.assert_sio_transmit_ready();
         }
     }
@@ -1065,7 +1147,7 @@ impl CoreRuntime {
     #[inline]
     fn refresh_sio_interrupts(&mut self) {
         // Only a ready receiver can add an ISR bit; otherwise this is a no-op.
-        if self.sio.is_some()
+        if self.sio.as_ref().is_some_and(|sio| !sio.is_register_uart())
             && self
                 .memory
                 .read_internal_byte_silent(IMEM_USR_OFFSET)
@@ -1312,6 +1394,11 @@ impl CoreRuntime {
     /// acknowledgement path; exact assertion/re-latch latency is not yet a
     /// real-device-derived scheduler fact.
     pub fn press_on_key(&mut self) {
+        // The opt-in OZ contact-edge experiment keeps SSR high while held,
+        // but duplicate host press notifications are not new electrical edges.
+        if self.onk_level && self.oz9600_on_irq_edge_only() {
+            return;
+        }
         self.onk_level = true;
         let isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
         if (isr & ISR_ONKI) == 0 {
@@ -1389,7 +1476,7 @@ impl CoreRuntime {
 
     #[inline]
     fn refresh_on_key_interrupt_level(&mut self) {
-        if self.effective_onk_level() {
+        if self.on_key_will_reassert() {
             self.refresh_on_key_interrupt_level_asserted();
         }
     }
@@ -1635,7 +1722,7 @@ impl CoreRuntime {
     /// timer or device remain pending for the next boundary.
     #[inline(always)]
     fn irq_transfer_selected_at_step_entry(&self) -> bool {
-        if self.state.is_off() || self.state.is_halted() || self.timer.in_interrupt {
+        if self.state.is_off() || self.state.is_halted() || self.irq_handler_suppresses_delivery() {
             return false;
         }
 
@@ -1652,7 +1739,7 @@ impl CoreRuntime {
             .read_internal_byte_silent(IMEM_ISR_OFFSET)
             .unwrap_or(0);
         let key_will_reassert = self.raw_selected_kil() != 0;
-        let sio_rx_will_assert = self.sio.is_some()
+        let sio_rx_will_assert = self.sio.as_ref().is_some_and(|sio| !sio.is_register_uart())
             && (imr & IMR_RX) != 0
             && (self
                 .memory
@@ -1660,7 +1747,7 @@ impl CoreRuntime {
                 .unwrap_or(0)
                 & USR_RX_READY)
                 != 0;
-        let onk_will_assert = self.effective_onk_level();
+        let onk_will_assert = self.on_key_will_reassert();
 
         let mut predicted_isr = asserted_isr;
         if key_will_reassert {
@@ -1707,11 +1794,84 @@ impl CoreRuntime {
                  power-on reset required: {reason}"
             )));
         }
+        let Some(mut device) = self.boundary_device.take() else {
+            return self.step_cpu_boundaries(boundaries);
+        };
+        // Keep the device outside the runtime during each CPU boundary. The
+        // IRQ handler's internal continuation then uses the CPU-only path,
+        // matching the caller's single boundary rather than ticking twice.
+        let result = (|| {
+            for _ in 0..boundaries {
+                let elapsed_timing_units = self.elapsed_timing_units();
+                let level = device.before_boundary(&mut runtime_device::BoundaryContext {
+                    memory: &mut self.memory,
+                    state: &self.state,
+                    timer: &mut self.timer,
+                    cycles: self.metadata.cycle_count,
+                    instructions: self.metadata.instruction_count,
+                    elapsed_timing_units,
+                })?;
+                if let Some(level) = level {
+                    if self.external_interrupt_level != level {
+                        self.set_external_interrupt_level(level);
+                    }
+                }
+                let before = self.metadata.cycle_count;
+                self.step_cpu_boundaries(1)?;
+                let elapsed = self.metadata.cycle_count.wrapping_sub(before);
+                let elapsed_timing_units = self.elapsed_timing_units();
+                if let Err(error) = device.after_boundary(
+                    &mut runtime_device::BoundaryContext {
+                        memory: &mut self.memory,
+                        state: &self.state,
+                        timer: &mut self.timer,
+                        cycles: self.metadata.cycle_count,
+                        instructions: self.metadata.instruction_count,
+                        elapsed_timing_units,
+                    },
+                    elapsed,
+                ) {
+                    self.poisoned = Some(format!("boundary device after CPU progress: {error}"));
+                    return Err(error);
+                }
+            }
+            Ok(())
+        })();
+        // Restore on success and every Result error, including CPU preflight
+        // failure. Device state must not silently disappear after a fault.
+        self.boundary_device = Some(device);
+        result
+    }
+
+    /// Install one machine-owned boundary device. Snapshot v4 cannot represent
+    /// its external state; retained-memory formats remain a device concern.
+    pub fn install_boundary_device(
+        &mut self,
+        device: Box<dyn runtime_device::BoundaryDevice>,
+    ) -> Result<()> {
+        if self.boundary_device.is_some() {
+            return Err(CoreError::Other(
+                "a boundary device is already installed".into(),
+            ));
+        }
+        self.boundary_device = Some(device);
+        Ok(())
+    }
+
+    fn step_cpu_boundaries(&mut self, boundaries: usize) -> Result<()> {
+        if let Some(reason) = self.poisoned.as_deref() {
+            return Err(CoreError::Other(format!(
+                "SC62015 CoreRuntime is poisoned after a failed side-effecting operation; \
+                 power-on reset required: {reason}"
+            )));
+        }
         let on_key_ssr_mask = self.device_model().on_key_ssr_mask();
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
         /// Device and host hooks fixed for one `step_scheduler_boundaries`
         /// call; each boundary's `RuntimeBus` borrows them by pointer.
         struct BusDevices {
+            #[cfg(feature = "oz9600")]
+            oz_readonly_eport_inputs: bool,
             keyboard_ptr: *mut KeyboardMatrix,
             lcd_ptr: Option<*mut dyn LcdHal>,
             sio_ptr: *mut SioStub,
@@ -2121,6 +2281,28 @@ impl CoreRuntime {
             }
             #[inline(always)]
             fn store(&mut self, addr: u32, bits: u8, value: u32) {
+                #[cfg(feature = "oz9600")]
+                if self.dev().oz_readonly_eport_inputs && MemoryImage::is_internal(addr) {
+                    let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
+                    let bytes = u32::from(bits.div_ceil(8).max(1));
+                    if (0..bytes).any(|n| {
+                        !oz9600::guest_internal_write_is_allowed(
+                            INTERNAL_MEMORY_START + ((offset + n) & INTERNAL_ADDR_MASK),
+                        )
+                    }) {
+                        // The executor normally emits ordered byte writes.
+                        // Preserve neighboring bytes if a wide bus store is
+                        // supplied; host/reset writes do not use this bus.
+                        for n in 0..bytes {
+                            let address =
+                                INTERNAL_MEMORY_START + ((offset + n) & INTERNAL_ADDR_MASK);
+                            if oz9600::guest_internal_write_is_allowed(address) {
+                                self.store(address, 8, (value >> (8 * n)) & 0xff);
+                            }
+                        }
+                        return;
+                    }
+                }
                 // SAFETY: see `store_fast`/`store_routed`.
                 unsafe {
                     if !self.store_fast(addr, bits, value) {
@@ -2251,6 +2433,8 @@ impl CoreRuntime {
         );
         // Device and host hooks cannot be replaced during this call.
         let devices = BusDevices {
+            #[cfg(feature = "oz9600")]
+            oz_readonly_eport_inputs: self.oz9600_hardware.is_some(),
             keyboard_ptr: self
                 .keyboard
                 .as_mut()
@@ -3069,6 +3253,9 @@ impl CoreRuntime {
 
         self.memory.validate_snapshot_overlay_contract()?;
         let mut active = Vec::new();
+        if self.boundary_device.is_some() {
+            active.push("machine boundary device state");
+        }
         if self.poisoned.is_some() {
             active.push("poisoned fail-stop runtime state");
         }
@@ -3118,6 +3305,9 @@ impl CoreRuntime {
         metadata.call_page_stack = call_metrics.call_page_stack;
         metadata.call_return_widths = call_metrics.call_return_widths;
         metadata.power_state = self.state.power_state();
+        metadata.block_transfer_policy = self.state.block_transfer_policy();
+        metadata.byte_arithmetic_source_policy = self.state.byte_arithmetic_source_policy();
+        metadata.isr_software_write_policy = self.state.isr_software_write_policy();
         metadata.external_interrupt_level = self.external_interrupt_level;
         metadata.onk_level = self.onk_level;
         metadata.temps = (0..NUM_TEMP_REGISTERS)
@@ -3227,6 +3417,9 @@ impl CoreRuntime {
             call_return_widths: metadata.call_return_widths.clone(),
         });
         state_candidate.set_power_state(metadata.power_state);
+        state_candidate.set_block_transfer_policy(metadata.block_transfer_policy);
+        state_candidate.set_byte_arithmetic_source_policy(metadata.byte_arithmetic_source_policy);
+        state_candidate.set_isr_software_write_policy(metadata.isr_software_write_policy);
 
         let mut timer_candidate = (*self.timer).clone();
         timer_candidate
@@ -3356,7 +3549,7 @@ impl CoreRuntime {
         // Nested hardware IRQ delivery is not established by ROM or hardware
         // traces. Match the device runtimes and retain the pending source for
         // delivery after RETI instead of manufacturing a nested frame.
-        if self.timer.in_interrupt {
+        if self.irq_handler_suppresses_delivery() {
             return Ok(());
         }
         let pc = self.state.pc() & ADDRESS_MASK;
@@ -4314,6 +4507,83 @@ mod tests {
         rt4.load_snapshot(&tmp_halt).expect("load halt snapshot");
         assert!(rt4.state.is_halted(), "HALT state should round-trip");
         assert!(!rt4.state.is_off(), "HALT should not restore as OFF");
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_isr_software_write_policy() {
+        let tmp = std::env::temp_dir().join("core_snapshot_isr_software_write_policy.pcsnap");
+        let legacy_json = serde_json::to_value(SnapshotMetadata::default()).unwrap();
+        assert!(legacy_json.get("isr_software_write_policy").is_none());
+        assert_eq!(
+            serde_json::from_value::<SnapshotMetadata>(legacy_json)
+                .unwrap()
+                .isr_software_write_policy,
+            IsrSoftwareWritePolicy::Replace,
+        );
+        for policy in [
+            IsrSoftwareWritePolicy::ClearOnly,
+            IsrSoftwareWritePolicy::ClearOnlyExceptMti,
+        ] {
+            let mut source = CoreRuntime::new();
+            source.state.set_isr_software_write_policy(policy);
+            source.save_snapshot(&tmp).unwrap();
+            let mut target = CoreRuntime::new();
+            target.load_snapshot(&tmp).unwrap();
+            assert_eq!(target.state.isr_software_write_policy(), policy);
+            assert_eq!(target.metadata.isr_software_write_policy, policy);
+        }
+        std::fs::remove_file(tmp).unwrap();
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_byte_arithmetic_source_policy() {
+        let tmp = std::env::temp_dir().join("core_snapshot_byte_arithmetic_source_policy.pcsnap");
+        let strict = SnapshotMetadata::default();
+        let legacy_json = serde_json::to_value(&strict).unwrap();
+        assert!(legacy_json.get("byte_arithmetic_source_policy").is_none());
+        assert_eq!(
+            serde_json::from_value::<SnapshotMetadata>(legacy_json)
+                .unwrap()
+                .byte_arithmetic_source_policy,
+            ByteArithmeticSourcePolicy::Strict
+        );
+        let mut source = CoreRuntime::new();
+        source
+            .state
+            .set_byte_arithmetic_source_policy(ByteArithmeticSourcePolicy::LowByte);
+        source.save_snapshot(&tmp).unwrap();
+        let mut restored = CoreRuntime::new();
+        restored.load_snapshot(&tmp).unwrap();
+        assert_eq!(
+            restored.state.byte_arithmetic_source_policy(),
+            ByteArithmeticSourcePolicy::LowByte
+        );
+        assert_eq!(
+            restored.metadata.byte_arithmetic_source_policy,
+            ByteArithmeticSourcePolicy::LowByte
+        );
+        std::fs::remove_file(tmp).unwrap();
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_block_transfer_policy() {
+        let tmp = std::env::temp_dir().join("core_snapshot_block_transfer_policy.pcsnap");
+        let mut source = CoreRuntime::new();
+        source
+            .state
+            .set_block_transfer_policy(BlockTransferPolicy::CoupledPredecrement);
+        source.save_snapshot(&tmp).unwrap();
+        let mut restored = CoreRuntime::new();
+        restored.load_snapshot(&tmp).unwrap();
+        assert_eq!(
+            restored.state.block_transfer_policy(),
+            BlockTransferPolicy::CoupledPredecrement
+        );
+        assert_eq!(
+            restored.metadata.block_transfer_policy,
+            BlockTransferPolicy::CoupledPredecrement
+        );
+        std::fs::remove_file(tmp).unwrap();
     }
 
     #[test]
@@ -7416,6 +7686,34 @@ mod tests {
             rt.state.peek_call_page().is_none(),
             "call page stack cleared"
         );
+    }
+
+    #[test]
+    fn changing_byte_source_policy_cannot_reuse_upper_rom_preflight() {
+        let mut rt = CoreRuntime::new();
+        rt.memory.write_external_byte(0xE0000, 0x4E);
+        rt.memory.write_external_byte(0xE0001, 0x03);
+        rt.state.set_pc(0xE0000);
+        rt.state.set_reg(RegName::A, 8);
+        rt.state.set_reg(RegName::I, 2);
+        rt.state
+            .set_byte_arithmetic_source_policy(ByteArithmeticSourcePolicy::LowByte);
+        rt.step(1).unwrap();
+        assert_eq!(rt.state.get_reg(RegName::A), 6);
+        rt.state.set_pc(0xE0000);
+        rt.state
+            .set_byte_arithmetic_source_policy(ByteArithmeticSourcePolicy::Strict);
+        let cycles = rt.metadata.cycle_count;
+        let instructions = rt.metadata.instruction_count;
+        assert!(rt
+            .step(1)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid register-pair"));
+        assert_eq!(rt.state.pc(), 0xE0000);
+        assert_eq!(rt.state.get_reg(RegName::A), 6);
+        assert_eq!(rt.metadata.cycle_count, cycles);
+        assert_eq!(rt.metadata.instruction_count, instructions);
     }
 
     #[test]

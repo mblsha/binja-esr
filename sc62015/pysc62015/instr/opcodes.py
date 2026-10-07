@@ -787,7 +787,11 @@ def create_instruction(
 
 
 def iter_decode(
-    decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]
+    decoder: Decoder,
+    addr: int,
+    opcodes: Dict[int, OpcodesType],
+    *,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> Iterator[Tuple["Instruction", int]]:
     while True:
         try:
@@ -798,6 +802,7 @@ def iter_decode(
                 )
             start_pos = decoder.get_pos()
             opcode = decoder.peek(0)
+            instr.byte_arithmetic_source_policy = byte_arithmetic_source_policy
             instr.decode(decoder, addr)
             instr.set_length(decoder.get_pos() - start_pos)
             yield instr, addr
@@ -847,15 +852,28 @@ def fusion(
 
 
 def _create_decoder(
-    decoder: Decoder, addr: int, opcodes: Dict[int, OpcodesType]
+    decoder: Decoder,
+    addr: int,
+    opcodes: Dict[int, OpcodesType],
+    *,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> Iterator[Tuple["Instruction", int]]:
-    return fusion(iter_decode(decoder, addr, opcodes))
+    return fusion(
+        iter_decode(
+            decoder,
+            addr,
+            opcodes,
+            byte_arithmetic_source_policy=byte_arithmetic_source_policy,
+        )
+    )
 
 
 def decode(
     decoder: Decoder | bytes | bytearray,
     addr: int,
     opcodes: Dict[int, OpcodesType],
+    *,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> Optional["Instruction"]:
     """Decode one instruction from ``decoder``.
 
@@ -865,11 +883,22 @@ def decode(
     ``AttributeError`` when running under the real application.
     """
 
+    if byte_arithmetic_source_policy not in {"strict", "low_byte"}:
+        raise ValueError(
+            f"Unknown byte arithmetic source policy: {byte_arithmetic_source_policy}"
+        )
     if not isinstance(decoder, Decoder):
         decoder = Decoder(bytearray(decoder))
 
     try:
-        instr, _ = next(_create_decoder(decoder, addr, opcodes))
+        instr, _ = next(
+            _create_decoder(
+                decoder,
+                addr,
+                opcodes,
+                byte_arithmetic_source_policy=byte_arithmetic_source_policy,
+            )
+        )
 
         return instr
     except StopIteration:
@@ -882,6 +911,8 @@ class Instruction:
     opcode: Optional[int]
     _length: Optional[int]
     _pre: Optional[int] = None
+    # Opt-in ESR-P firmware hypothesis; ordinary decoding/assembly stays strict.
+    byte_arithmetic_source_policy: str = "strict"
 
     def __init__(
         self,
@@ -2168,7 +2199,17 @@ class RegF(Reg):
         """
 
         il.append(il.set_flag(CFlag, il.and_expr(1, value, il.const(1, 1))))
-        il.append(il.set_flag(ZFlag, il.and_expr(1, value, il.const(1, 2))))
+        # Binary Ninja retains the numeric SET_FLAG input; it does not apply
+        # the mock evaluator's nonzero-to-true conversion. Publish 0/1 so a
+        # restored Z bit satisfies the conditional-jump comparison with 1.
+        il.append(
+            il.set_flag(
+                ZFlag,
+                il.compare_not_equal(
+                    1, il.and_expr(1, value, il.const(1, 2)), il.const(1, 0)
+                ),
+            )
+        )
 
 
 class Reg3(RegLiftMixin, Operand, HasWidth):
@@ -3147,7 +3188,9 @@ class RegPair(HasOperands, Reg3):
         return 8
 
     @staticmethod
-    def _validate_selector(raw: int, parent_opcode: Optional[int], addr: int) -> None:
+    def _validate_selector(
+        raw: int, parent_opcode: Optional[int], addr: int, source_policy: str = "strict"
+    ) -> None:
         """Validate one physical register-pair selector.
 
         This is deliberately shared by decode and encode so the assembler
@@ -3176,6 +3219,10 @@ class RegPair(HasOperands, Reg3):
             0x4D: (range(4, 8), range(0, 8)),  # SUB r3,r
             0x4E: (range(0, 2), range(0, 2)),  # SUB r1,r1
         }
+        if source_policy == "low_byte" and parent_opcode in {0x46, 0x4E}:
+            # Keep byte destinations and reserved-selector checks unchanged.
+            # The arithmetic lifter explicitly narrows this source before flags.
+            arithmetic_classes[parent_opcode] = (range(0, 2), range(0, 8))
         allowed = arithmetic_classes.get(parent_opcode)
         if allowed is None:
             return
@@ -3214,7 +3261,12 @@ class RegPair(HasOperands, Reg3):
         self.reg_raw = reg_raw
         parent = getattr(self, "_parent_instruction", None)
         parent_opcode = getattr(parent, "opcode", None)
-        self._validate_selector(reg_raw, parent_opcode, addr)
+        self._validate_selector(
+            reg_raw,
+            parent_opcode,
+            addr,
+            getattr(parent, "byte_arithmetic_source_policy", "strict"),
+        )
         use_r2 = self._uses_r2_mapping(parent)
         reg1_code = (reg_raw >> 4) & 7
         reg2_code = reg_raw & 7
@@ -3231,7 +3283,12 @@ class RegPair(HasOperands, Reg3):
         assert self.reg_raw is not None, "Register raw value not set"
         parent = getattr(self, "_parent_instruction", None)
         parent_opcode = getattr(parent, "opcode", None)
-        self._validate_selector(self.reg_raw, parent_opcode, addr)
+        self._validate_selector(
+            self.reg_raw,
+            parent_opcode,
+            addr,
+            getattr(parent, "byte_arithmetic_source_policy", "strict"),
+        )
         self._validate_encode_semantics(parent_opcode, addr)
         if self.reg1 is None or self.reg2 is None:
             raise InvalidInstruction(f"Register pair is incomplete at {addr:04X}")

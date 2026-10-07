@@ -135,6 +135,9 @@ def eval_intrinsic_preflight_vector_transfer(
         regs,  # type: ignore[arg-type]
         values[0],
         source_pc=values[1],
+        byte_arithmetic_source_policy=getattr(
+            state, "byte_arithmetic_source_policy", "strict"
+        ),
     )
     setattr(state, "_sc62015_llil_vector_transfer", prepared)
     return None, None
@@ -338,6 +341,9 @@ def eval_intrinsic_reset(
             regs,  # type: ignore[arg-type]
             0xFFFFD,
             source_pc=reset_source,
+            byte_arithmetic_source_policy=getattr(
+                state, "byte_arithmetic_source_policy", "strict"
+            ),
         )
     if not isinstance(prepared_transfer, _ValidatedVectorTransfer):
         raise RuntimeError("RESET requires an opaque validated vector transfer")

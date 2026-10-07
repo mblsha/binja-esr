@@ -110,6 +110,8 @@ class ParityResult:
     python_error: str | None = None
     llama_error: str | None = None
     expected_error: bool = False
+    python_mutated_on_error: bool = False
+    llama_mutated_on_error: bool = False
 
 
 def _make_memory(instr_bytes: bytes, pc: int) -> LoggingMemory:
@@ -194,35 +196,52 @@ def run_case(instr_bytes: bytes, pc: int) -> ParityResult | None:
     mem_py = _make_memory(instr_bytes, pc)
     cpu_py = CPU(mem_py, reset_on_init=False, backend="python")
     cpu_py.apply_snapshot(reg_init)
+    regs_py_before = _snapshot_registers(cpu_py)
     py_err = None
     try:
         _execute_case_instruction(cpu_py, opcode, pc)
-        regs_py = _snapshot_registers(cpu_py)
     except Exception as exc:  # pragma: no cover - defensive
         py_err = f"{type(exc).__name__}: {exc}"
-        regs_py = {}
+    regs_py = _snapshot_registers(cpu_py)
 
     # LLAMA backend
     mem_ll = _make_memory(instr_bytes, pc)
     cpu_ll = CPU(mem_ll, reset_on_init=False, backend="llama")
     cpu_ll.apply_snapshot(reg_init)
+    regs_ll_before = _snapshot_registers(cpu_ll)
     ll_err = None
     try:
         _execute_case_instruction(cpu_ll, opcode, pc)
-        regs_ll = _snapshot_registers(cpu_ll)
     except Exception as exc:  # pragma: no cover - defensive
         ll_err = f"{type(exc).__name__}: {exc}"
-        regs_ll = {}
+    regs_ll = _snapshot_registers(cpu_ll)
 
     if py_err or ll_err:
+        py_mutated = py_err is not None and bool(
+            regs_py != regs_py_before or mem_py.writes or mem_py.waits
+        )
+        ll_mutated = ll_err is not None and bool(
+            regs_ll != regs_ll_before or mem_ll.writes or mem_ll.waits
+        )
         return ParityResult(
             opcode=opcode,
             bytes_hex=instr_bytes.hex(),
-            reg_diff={},
-            writes_diff=(tuple(), tuple()),
+            reg_diff={
+                key: (regs_py.get(key, 0), regs_ll.get(key, 0))
+                for key in sorted(set(regs_py) | set(regs_ll))
+                if regs_py.get(key, 0) != regs_ll.get(key, 0)
+            },
+            writes_diff=(tuple(mem_py.writes), tuple(mem_ll.writes)),
+            waits_diff=(tuple(mem_py.waits), tuple(mem_ll.waits)),
             python_error=py_err,
             llama_error=ll_err,
-            expected_error=_matching_expected_rejection(opcode, py_err, ll_err),
+            expected_error=(
+                _matching_expected_rejection(opcode, py_err, ll_err)
+                and not py_mutated
+                and not ll_mutated
+            ),
+            python_mutated_on_error=py_mutated,
+            llama_mutated_on_error=ll_mutated,
         )
 
     if (
@@ -482,6 +501,8 @@ def main() -> None:
                         "python_error": f.python_error,
                         "llama_error": f.llama_error,
                         "expected_error": f.expected_error,
+                        "python_mutated_on_error": f.python_mutated_on_error,
+                        "llama_mutated_on_error": f.llama_mutated_on_error,
                     }
                     for f in findings
                 ],
@@ -498,7 +519,9 @@ def main() -> None:
                     f"- opcode 0x{f.opcode:02X} bytes={f.bytes_hex} "
                     f"py_err={f.python_error} llama_err={f.llama_error} "
                     f"reg_diff={f.reg_diff} writes_diff={f.writes_diff} "
-                    f"waits_diff={f.waits_diff}"
+                    f"waits_diff={f.waits_diff} "
+                    f"mutated_on_error=({f.python_mutated_on_error}, "
+                    f"{f.llama_mutated_on_error})"
                 )
         if expected_errors:
             rendered = ", ".join(

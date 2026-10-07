@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/emulator.py
+// Run-control reference only: the Rust loop observer has no Python mirror.
+
 use crate::llama::dispatch;
 use crate::llama::opcodes::InstrKind;
 use crate::memory::ADDRESS_MASK;

@@ -92,6 +92,32 @@ pub trait LcdHal: Send {
     fn take_display_write_capture(&mut self) -> Vec<LcdDisplayWrite>;
 
     fn display_buffer(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_DISPLAY_ROWS];
+    /// Complete logical pixels with controller-supplied geometry. Larger
+    /// controllers override this method rather than using the legacy arrays.
+    /// This is an owned observation and must not perform architectural reads.
+    fn matrix_frame(&self) -> crate::lcd_frame::LcdFrame {
+        if self.kind() == LcdKind::Iq7000Vram {
+            let bytes = self.display_vram_bytes();
+            let mut pixels = vec![0; 96 * 64];
+            for (page, row) in bytes.iter().enumerate() {
+                for (col, &byte) in row.iter().take(96).enumerate() {
+                    for dy in 0..8 {
+                        pixels[(page * 8 + dy) * 96 + col] = (byte >> (7 - dy)) & 1;
+                    }
+                }
+            }
+            crate::lcd_frame::LcdFrame::new(96, 64, pixels).expect("IQ-7000 logical geometry")
+        } else {
+            let pixels = self
+                .display_buffer()
+                .into_iter()
+                .flatten()
+                .map(|pixel| u8::from(pixel != 0))
+                .collect();
+            crate::lcd_frame::LcdFrame::new(LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS, pixels)
+                .expect("legacy logical geometry")
+        }
+    }
     fn chip_display_buffer(&self, chip_index: usize) -> [[u8; LCD_CHIP_COLS]; LCD_CHIP_ROWS];
     fn display_vram_bytes(&self) -> [[u8; LCD_DISPLAY_COLS]; LCD_PAGES];
     fn display_trace_buffer(&self) -> [[LcdWriteTrace; LCD_DISPLAY_COLS]; LCD_PAGES];

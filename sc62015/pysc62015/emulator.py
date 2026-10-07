@@ -75,7 +75,10 @@ I_COUNTED_INSTRUCTIONS = (ADCL, SBCL, DADL, DSBL, MVL, MVLD, EXL, DSLL, DSRL, WA
 
 
 def _decode_instruction_for_preflight(
-    address: int, read_byte: Callable[[int], int]
+    address: int,
+    read_byte: Callable[[int], int],
+    *,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> Instruction:
     """Decode through an explicitly side-effect-free program-memory reader."""
 
@@ -92,7 +95,12 @@ def _decode_instruction_for_preflight(
         decoder = CachedFetchDecoder(fetch, ADDRESS_SPACE_SIZE)
     else:
         decoder = FetchDecoder(fetch, ADDRESS_SPACE_SIZE)
-    instr = decode(decoder, address & PC_MASK, OPCODES)  # type: ignore
+    instr = decode(
+        decoder,
+        address & PC_MASK,
+        OPCODES,
+        byte_arithmetic_source_policy=byte_arithmetic_source_policy,
+    )
     if instr is None or isinstance(instr, UnknownInstruction):
         opcode = 0 if fetched_opcode is None else fetched_opcode
         raise InvalidInstruction(
@@ -303,6 +311,7 @@ def validate_vector_transfer_stability(
     *,
     require_immutable: bool = False,
     require_metadata: bool = True,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> None:
     stability_name = (
         "instruction_byte_is_immutable"
@@ -323,7 +332,9 @@ def validate_vector_transfer_stability(
         peek_method = getattr(memory, "peek_byte_for_preflight")
         return int(peek_method(address & PC_MASK, target)) & 0xFF
 
-    target_instruction = _decode_instruction_for_preflight(target, target_peek)
+    target_instruction = _decode_instruction_for_preflight(
+        target, target_peek, byte_arithmetic_source_policy=byte_arithmetic_source_policy
+    )
     target_info = InstructionInfo()
     target_instruction.analyze(target_info, target)
     target_length = int(target_info.length or target_instruction.length())
@@ -353,6 +364,7 @@ def fetch_validated_vector_transfer(
     require_immutable: bool = False,
     scope: str = "instruction",
     require_stability_metadata: bool = False,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> _ValidatedVectorTransfer:
     """Validate, architecturally fetch once, and return an opaque proof."""
 
@@ -368,6 +380,7 @@ def fetch_validated_vector_transfer(
         regs,
         vector_address,
         source_pc=vector_pc,
+        byte_arithmetic_source_policy=byte_arithmetic_source_policy,
     )
     validate_vector_transfer_stability(
         memory,
@@ -375,6 +388,7 @@ def fetch_validated_vector_transfer(
         target,
         require_immutable=require_immutable,
         require_metadata=require_stability_metadata,
+        byte_arithmetic_source_policy=byte_arithmetic_source_policy,
     )
     raw_vector = 0
     for byte_index in range(3):
@@ -415,6 +429,7 @@ def prepare_validated_vector_transfer(
     require_immutable: bool = False,
     scope: str = "instruction",
     require_stability_metadata: bool = False,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> _ValidatedVectorTransfer:
     """Create a silent proof without performing the architectural read.
 
@@ -435,6 +450,7 @@ def prepare_validated_vector_transfer(
         regs,
         vector_address,
         source_pc=vector_pc,
+        byte_arithmetic_source_policy=byte_arithmetic_source_policy,
     )
     validate_vector_transfer_stability(
         memory,
@@ -442,6 +458,7 @@ def prepare_validated_vector_transfer(
         target,
         require_immutable=require_immutable,
         require_metadata=require_stability_metadata,
+        byte_arithmetic_source_policy=byte_arithmetic_source_policy,
     )
     if _vector_transfer_provenance(memory) != provenance:
         raise RuntimeError("SC62015 vector mapping changed during silent preflight")
@@ -463,6 +480,7 @@ def validate_vector_transfer(
     *,
     source_pc: int | None = None,
     actual_raw_vector: int | None = None,
+    byte_arithmetic_source_policy: str = "strict",
 ) -> int:
     """Validate an indirect control transfer without observable bus reads.
 
@@ -516,7 +534,9 @@ def validate_vector_transfer(
     def target_peek(address: int) -> int:
         return int(peek_method(address & PC_MASK, target)) & 0xFF
 
-    instr = _decode_instruction_for_preflight(target, target_peek)
+    instr = _decode_instruction_for_preflight(
+        target, target_peek, byte_arithmetic_source_policy=byte_arithmetic_source_policy
+    )
     if isinstance(instr, PRE):
         raise InvalidInstruction(
             f"Unfused or malformed PRE instruction at 0x{target:05X}"
@@ -804,14 +824,95 @@ class Registers:
         self.set(reg, value)
 
 
+class _ClearOnlyIsrMemory(Memory):
+    """Guest evaluator view only; the host retains its original writable bus."""
+
+    def __init__(
+        self, memory: Memory, current_pc: Callable[[], int], writable_mask: int
+    ) -> None:
+        self._memory = memory
+        self._current_pc = current_pc
+        self._writable_mask = writable_mask
+
+    def __getattr__(self, name):
+        return getattr(self._memory, name)
+
+    def vector_transfer_provenance(self):
+        return _vector_transfer_provenance(self._memory)
+
+    def read_byte(self, address: int, source_pc: int | None = None) -> int:
+        return _read_byte_with_pc(
+            self._memory,
+            address,
+            self._current_pc() if source_pc is None else source_pc,
+        )
+
+    def read_bytes(self, address: int, size: int) -> int:
+        return self._memory.read_bytes(address, size)
+
+    def write_byte(
+        self, address: int, value: int, source_pc: int | None = None
+    ) -> None:
+        pc = self._current_pc() if source_pc is None else source_pc
+        if address == INTERNAL_MEMORY_START + IMEMRegisters.ISR:
+            value &= (
+                int(getattr(self._memory, "peek_byte_for_preflight")(address, pc))
+                | self._writable_mask
+            ) & 0xFF
+        _write_byte_with_pc(self._memory, address, value, pc)
+
+
 class Emulator:
-    def __init__(self, memory: Memory, reset_on_init: bool = True) -> None:
+    def __init__(
+        self,
+        memory: Memory,
+        reset_on_init: bool = True,
+        *,
+        block_transfer_policy: str = "independent",
+        byte_arithmetic_source_policy: str = "strict",
+        isr_software_write_policy: str = "replace",
+    ) -> None:
+        if block_transfer_policy not in {"independent", "coupled_predecrement"}:
+            raise ValueError(f"Unknown block transfer policy: {block_transfer_policy}")
+        self.block_transfer_policy = block_transfer_policy
+        if byte_arithmetic_source_policy not in {"strict", "low_byte"}:
+            raise ValueError(
+                f"Unknown byte arithmetic source policy: {byte_arithmetic_source_policy}"
+            )
+        self.byte_arithmetic_source_policy = byte_arithmetic_source_policy
+        if isr_software_write_policy not in {
+            "replace",
+            "clear_only",
+            "clear_only_except_mti",
+        }:
+            raise ValueError(
+                f"Unknown ISR software write policy: {isr_software_write_policy}"
+            )
+        if isr_software_write_policy != "replace" and not callable(
+            getattr(memory, "peek_byte_for_preflight", None)
+        ):
+            raise ValueError(
+                "clear-only ISR policy requires a silent internal-register peek"
+            )
+        self.isr_software_write_policy = isr_software_write_policy
         # Register SC62015-specific intrinsics with the evaluation system
         register_sc62015_intrinsics()
 
         self.regs = Registers()
         self.memory = memory
+        self._evaluation_memory = (
+            _ClearOnlyIsrMemory(
+                memory,
+                lambda: self._current_pc,
+                1 if isr_software_write_policy == "clear_only_except_mti" else 0,
+            )
+            if isr_software_write_policy != "replace"
+            else memory
+        )
         self.state = State()
+        setattr(
+            self.state, "byte_arithmetic_source_policy", byte_arithmetic_source_policy
+        )
         setattr(self.state, "power_state", "running")
         self._poisoned: str | None = None
         self._execution_may_have_side_effects = False
@@ -929,7 +1030,12 @@ class Emulator:
             decoder = CachedFetchDecoder(fecher, ADDRESS_SPACE_SIZE)
         else:
             decoder = FetchDecoder(fecher, ADDRESS_SPACE_SIZE)
-        instr = decode(decoder, address, OPCODES)  # type: ignore
+        instr = decode(
+            decoder,
+            address,
+            OPCODES,
+            byte_arithmetic_source_policy=self.byte_arithmetic_source_policy,
+        )
         if instr is None or isinstance(instr, UnknownInstruction):
             opcode = fetched_opcode
             if opcode is None:
@@ -974,6 +1080,7 @@ class Emulator:
             require_immutable=require_immutable,
             scope=scope,
             require_stability_metadata=True,
+            byte_arithmetic_source_policy=self.byte_arithmetic_source_policy,
         )
         self._pending_vector_transfer = transfer
         return transfer.target
@@ -1160,6 +1267,7 @@ class Emulator:
                 self.regs,
                 INTERRUPT_VECTOR_ADDR,
                 source_pc=address,
+                byte_arithmetic_source_policy=self.byte_arithmetic_source_policy,
             )
         elif isinstance(instr, RESET) and prepared_transfer is None:
             validate_vector_transfer(
@@ -1167,6 +1275,7 @@ class Emulator:
                 self.regs,
                 ENTRY_POINT_ADDR,
                 source_pc=address,
+                byte_arithmetic_source_policy=self.byte_arithmetic_source_policy,
             )
 
         # A prepared software IR carries only its silent destination proof.
@@ -1255,6 +1364,8 @@ class Emulator:
             return InstructionEvalInfo(instruction_info=info, instruction=instr)
 
         il = MockLowLevelILFunction()
+        if isinstance(instr, MVL):
+            instr.block_transfer_policy = self.block_transfer_policy
         instr.lift(il, address)
 
         info = InstructionInfo()
@@ -1340,7 +1451,7 @@ class Emulator:
         return evaluate_llil(
             llil,
             self.regs,
-            self.memory,
+            self._evaluation_memory,
             self.state,
             self.regs.get_flag,
             self.regs.set_flag,
@@ -1383,6 +1494,7 @@ class Emulator:
                 self.memory,
                 self.regs,
                 ENTRY_POINT_ADDR,
+                byte_arithmetic_source_policy=self.byte_arithmetic_source_policy,
             )
 
         register_snapshot = dict(self.regs._values)

@@ -48,6 +48,67 @@ pub enum PowerState {
     Off,
 }
 
+/// Nonarchitectural transfer policy. The coupled variant is inferred from
+/// ESR-P firmware save/restore pairs; it is not a qualified silicon contract.
+/// Keep the measured SC62015 policy as the default for existing machines.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockTransferPolicy {
+    #[default]
+    Independent,
+    CoupledPredecrement,
+}
+
+impl BlockTransferPolicy {
+    pub fn is_independent(&self) -> bool {
+        *self == Self::Independent
+    }
+}
+
+/// Explicit firmware compatibility hypothesis for ESR-P byte ADD/SUB.
+/// LowByte truncates a wider source before arithmetic and flag calculation;
+/// it is not a measured silicon contract. Existing SC62015 users stay strict.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ByteArithmeticSourcePolicy {
+    #[default]
+    Strict,
+    LowByte,
+}
+
+impl ByteArithmeticSourcePolicy {
+    pub fn is_strict(&self) -> bool {
+        *self == Self::Strict
+    }
+}
+
+/// Explicit ISR guest-write compatibility hypothesis. Hardware/host latch
+/// updates bypass this CPU-store policy. Existing machines retain replacement.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IsrSoftwareWritePolicy {
+    #[default]
+    Replace,
+    ClearOnly,
+    /// Firmware F0B34 explicitly sets MTI after a keyboard wait. Other
+    /// sources remain clear-only in this separate, unqualified hypothesis.
+    ClearOnlyExceptMti,
+}
+
+impl IsrSoftwareWritePolicy {
+    pub fn is_replace(&self) -> bool {
+        *self == Self::Replace
+    }
+
+    pub fn apply_guest_write(&self, previous: u8, requested: u8) -> u8 {
+        match self {
+            Self::Replace => requested,
+            Self::ClearOnly => requested & previous,
+            Self::ClearOnlyExceptMti => requested & (previous | 0x01),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LlamaState {
     // Architectural registers are hot enough that hashing every access (and
@@ -67,6 +128,9 @@ pub struct LlamaState {
     // inputs without putting a HashMap on normal execution paths.
     extra_regs: HashMap<RegName, u32>,
     power_state: PowerState,
+    block_transfer_policy: BlockTransferPolicy,
+    byte_arithmetic_source_policy: ByteArithmeticSourcePolicy,
+    isr_software_write_policy: IsrSoftwareWritePolicy,
     last_off_pc: Option<u32>,
     last_off_call_stack: Vec<u32>,
     call_depth: u32,
@@ -110,6 +174,9 @@ impl LlamaState {
             temps: [0; FAST_TEMP_REGISTERS],
             extra_regs: HashMap::new(),
             power_state: PowerState::Running,
+            block_transfer_policy: BlockTransferPolicy::Independent,
+            byte_arithmetic_source_policy: ByteArithmeticSourcePolicy::Strict,
+            isr_software_write_policy: IsrSoftwareWritePolicy::Replace,
             last_off_pc: None,
             last_off_call_stack: Vec::new(),
             call_depth: 0,
@@ -139,6 +206,9 @@ impl LlamaState {
             temps: self.temps,
             extra_regs: self.extra_regs.clone(),
             power_state: self.power_state,
+            block_transfer_policy: self.block_transfer_policy,
+            byte_arithmetic_source_policy: self.byte_arithmetic_source_policy,
+            isr_software_write_policy: self.isr_software_write_policy,
             last_off_pc: None,
             last_off_call_stack: Vec::new(),
             call_depth: 0,
@@ -148,6 +218,31 @@ impl LlamaState {
             call_stack: Vec::new(),
             call_stack_stamp: 0,
         }
+    }
+
+    pub fn block_transfer_policy(&self) -> BlockTransferPolicy {
+        self.block_transfer_policy
+    }
+
+    pub fn set_block_transfer_policy(&mut self, policy: BlockTransferPolicy) {
+        self.block_transfer_policy = policy;
+    }
+
+    pub fn byte_arithmetic_source_policy(&self) -> ByteArithmeticSourcePolicy {
+        self.byte_arithmetic_source_policy
+    }
+
+    pub fn set_byte_arithmetic_source_policy(&mut self, policy: ByteArithmeticSourcePolicy) {
+        self.byte_arithmetic_source_policy = policy;
+    }
+
+    #[inline]
+    pub fn isr_software_write_policy(&self) -> IsrSoftwareWritePolicy {
+        self.isr_software_write_policy
+    }
+
+    pub fn set_isr_software_write_policy(&mut self, policy: IsrSoftwareWritePolicy) {
+        self.isr_software_write_policy = policy;
     }
 
     #[inline]

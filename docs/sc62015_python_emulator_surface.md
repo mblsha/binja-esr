@@ -60,6 +60,35 @@ configuration knobs, and how pytest exercises those behaviours.
 The Python emulator must stay in lockstep with the Rust core so existing consumers (assemblers, snapshot steppers, and the PC-E500 device model) continue to work unchanged.
 
 ## Memory & Peripheral Expectations
+
+Display observations use `sc62015/core/src/lcd_frame.rs` and the matching
+`pce500.display.lcd_frame.LcdFrame`: owned row-major zero/one pixels with
+validated nonzero dimensions and exact pixel count. PBM packing is MSB-first
+with separate, clear padding for each row. `LcdHal::matrix_frame()` supplies
+controller geometry to native and WASM exporters; larger controllers can
+override it without using older fixed arrays. These observations neither
+perform architectural bus reads nor restore CPU/controller execution state.
+The Python and Rust golden fixtures include non-byte-aligned rows and a full
+336 × 240 image, keeping the final row and column.
+
+Machine peripheral boundary work uses `sc62015/core/src/runtime_device.rs`.
+`pce500.runtime_device.BoundaryScheduler` is its reference callback/error
+protocol, with a backend-supplied restricted context and CPU-only step method.
+Before/after callbacks run once per public boundary, including idle states;
+internal IRQ continuation does not tick twice. CPU errors skip the after
+callback, after-callback errors poison committed progress, and device state
+survives errors. Snapshot v4 cannot represent it. These Python contract
+fixtures do not themselves add an OZ hardware model or replace the current CPU backend.
+
+The separate `pce500.oz9600` reference package mirrors the provisional Rust
+LCD/RTC/tablet/logical bus, bundle/retained formats and physical/profile
+contracts. `test_oz9600_reference.py` recomputes the shared controller corpus;
+Rust executes its 1,870 operations and checks 15 complete observations,
+including framebuffer/RAM/event hashes. These are peripheral/format reference
+implementations, not a second complete organizer CPU/machine backend. The
+executing OZ factory is `CoreRuntime::for_model(DeviceModel::Oz9600, bundle)`;
+strict defaults and explicit experimental CPU/clock settings remain separate.
+
 - `Memory` callbacks are provided by callers; the emulator assumes `read_byte`/`write_byte` raise on out-of-range access. Internal memory accesses use `INTERNAL_MEMORY_START` offsets. Tests rely on this to mirror IMEM behaviour.
 - The emulator does not own peripheral emulation; instead the backing memory object is expected to intercept writes/reads for IO behaviour. Several pce500 components hang attributes (e.g. `_perf_tracer`) or override methods on the memory instance.
 - `Registers.call_sub_level` is used downstream for profiling (`pce500/tests/test_tracing_call_stack.py`). The Rust implementation must expose the same attribute on the register file or an equivalent property reachable from Python.
@@ -78,9 +107,44 @@ modeled device state matches silicon.
 ## Configuration & Environment Hooks
 - `USE_CACHED_DECODER` toggles automatically depending on whether `cached_decoder` imports successfully. Parity requires the native backend to expose a similar knob or transparently outperform the Python cache.
 - Tests set `FORCE_BINJA_MOCK=1` so imports from `binaryninja` resolve to `binja_test_mocks`. The native tooling should continue to honour this environment variable, especially when generating LLIL metadata.
+- `block_transfer_policy`: an explicit CPU execution option shared by the Python
+  evaluator, native bindings, and snapshot stepper. Default `"independent"`
+  retains SC62015 behavior. `"coupled_predecrement"` makes an MVL internal
+  operand descend with an external pre-decrement register operand; this
+  ESR-P firmware inference is provisional, not a silicon contract. Rust core
+  snapshots preserve a non-default policy in an optional metadata member;
+  the PC-E500 Python machine snapshot wrapper rejects that unsupported
+  member. Ordinary/default snapshots retain their existing shape.
 - `reset_on_init`: honoured by both `Emulator` and `CPUStepper`; the native constructor must take—and default—this flag identically.
+- `isr_software_write_policy`: default `"replace"` preserves existing guest
+  stores. Explicit ESR-P hypotheses `"clear_only"` and
+  `"clear_only_except_mti"` filter only internal ISR (`0x1000FC`), using
+  `previous & requested` or `(previous | 1) & requested` respectively. Bit 0
+  is MTI. All ordered guest byte stores, including wide/block/RMW/exchange
+  instructions, apply the rule. Hardware/host writes retain their original
+  bus; external `0xFC` is unaffected. Non-default policies require a silent
+  SFR peek. Trace writes and register hooks report the filtered latch value.
+  CPU snapshot stepping preserves the caller's policy; native full snapshots
+  serialize an optional member, absent/default meaning `"replace"`.
+  `test_isr_software_writes.py` checks both backends, hardware latch updates,
+  adjacent ports, external-address separation and rejected configuration.
+  These policies are experiments, not qualified hardware semantics. The OZ
+  BP=00 experiments reach the initialization dialog but later enter OFF;
+  permitting software MTI does not establish successful empty-memory boot.
 
 ## pytest Coverage Matrix
+
+`CPU`, `Emulator`, and `CPUStepper` accept the explicit
+`byte_arithmetic_source_policy="strict"` default or `"low_byte"` compatibility
+hypothesis. The latter permits byte ADD/SUB to truncate a wider source before
+arithmetic and carry/zero calculation; byte destinations and reserved selector
+bits remain checked. Unmodified ESR-P organizer firmware contains `4E 03`
+(`SUB A,I`), but this policy is not measured silicon behavior. Decoder and
+assembler defaults stay strict. CPU snapshot stepping and vector preflight
+carry the caller's option; native full snapshots persist it as an optional
+metadata member, with absent members defaulting to strict. Byte ADD/SUB
+preflight/decode caches do not reuse proofs across this mutable policy.
+
 The following files are under `sc62015/pysc62015/` and define the behavioural envelope the Rust backend must satisfy:
 
 | Feature area | Expectations | Tests |

@@ -1,3 +1,6 @@
+// PY_SOURCE: pce500/tests/test_interrupts.py
+// Interrupt primitive reference; this IQ-7000 ROM test has no direct Python equivalent.
+
 #[allow(dead_code)]
 mod common;
 

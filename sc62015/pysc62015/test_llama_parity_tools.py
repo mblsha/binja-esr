@@ -129,6 +129,9 @@ def test_run_case_seeds_stacks_in_valid_external_memory(monkeypatch) -> None:
 
 def test_run_case_classifies_two_sided_reserved_rejection(monkeypatch) -> None:
     class RejectingCPU(_FakeCPU):
+        def snapshot_registers(self) -> _Snapshot:
+            return _Snapshot()
+
         def execute_instruction(self, _pc: int) -> None:
             raise ValueError("reserved")
 
@@ -148,6 +151,9 @@ def test_run_case_classifies_two_sided_reserved_rejection(monkeypatch) -> None:
 
 def test_run_case_classifies_two_sided_quarantined_tcl_rejection(monkeypatch) -> None:
     class RejectingCPU(_FakeCPU):
+        def snapshot_registers(self) -> _Snapshot:
+            return _Snapshot()
+
         def execute_instruction(self, _pc: int) -> None:
             raise NotImplementedError("timer hardware trace required")
 
@@ -161,6 +167,42 @@ def test_run_case_classifies_two_sided_quarantined_tcl_rejection(monkeypatch) ->
 
     assert result is not None
     assert result.expected_error
+
+
+@pytest.mark.parametrize("mutation", ["register", "write", "wait"])
+def test_expected_rejection_requires_atomic_failure(monkeypatch, mutation: str) -> None:
+    class MutatingCPU(_FakeCPU):
+        def __init__(self, memory, backend: str) -> None:
+            super().__init__(backend)
+            self.memory = memory
+            self.changed = False
+
+        def snapshot_registers(self) -> _Snapshot:
+            return _Snapshot(f=int(self.changed))
+
+        def execute_instruction(self, _pc: int) -> None:
+            if mutation == "register":
+                self.changed = True
+            elif mutation == "write":
+                self.memory.write_byte(0x10, 0xAA)
+            else:
+                self.memory.wait_cycles(5)
+            raise ValueError("reserved")
+
+    monkeypatch.setattr(
+        llama_parity_sweep,
+        "CPU",
+        lambda memory, *, reset_on_init, backend: MutatingCPU(memory, backend),
+    )
+
+    result = llama_parity_sweep.run_case(b"\x20", pc=0)
+
+    assert result is not None
+    assert not result.expected_error
+    if mutation == "write":
+        assert result.writes_diff == (((0x10, 0xAA),), ((0x10, 0xAA),))
+    elif mutation == "wait":
+        assert result.waits_diff == ((5,), (5,))
 
 
 def test_expected_rejection_does_not_hide_arbitrary_two_sided_errors() -> None:
@@ -243,6 +285,18 @@ def test_python_oracle_preserves_explicit_zero_subregister_seeds(monkeypatch) ->
 
     assert snapshot.regs["BA"] == 0
     assert snapshot.regs["I"] == 0
+
+
+@pytest.mark.parametrize("count", [0, 1, 5, 0xFFFF])
+def test_python_oracle_accounts_for_wait_timing(count: int) -> None:
+    snapshot = llama_parity_runner.run_once(
+        json.dumps(_oracle_payload(bytes=[0xEF], regs={"I": count, "F": 3}))
+    )
+
+    assert snapshot.regs["I"] == 0
+    assert snapshot.regs["PC"] == 1
+    assert snapshot.regs["F"] == 3
+    assert json.loads(snapshot.to_json())["wait_cycles"] == [count or 0x10000]
 
 
 @pytest.mark.parametrize("missing", ["mem_imr", "mem_isr"])

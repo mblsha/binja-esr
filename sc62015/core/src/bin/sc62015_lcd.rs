@@ -194,6 +194,7 @@ fn lcd_geometry(model: DeviceModel) -> (usize, usize) {
             (rows, cols)
         }
         DeviceModel::Iq7000 => (IQ7000_TEXT_ROWS, IQ7000_TEXT_COLS),
+        DeviceModel::Oz9600 => (0, 0), // Text-grid UI has no OZ glyph decoder.
     }
 }
 
@@ -911,6 +912,7 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         DeviceModel::PcE500 => root.join("rom-analysis/pc-e500/en/bnida.json"),
         DeviceModel::PcE500Jp => root.join("rom-analysis/pc-e500/jp/bnida.json"),
         DeviceModel::Iq7000 => root.join("rom-analysis/iq-7000/bnida.json"),
+        DeviceModel::Oz9600 => root.join("rom-analysis/oz-9600/bnida.json"),
     }
 }
 
@@ -1702,6 +1704,9 @@ fn main() -> std::process::ExitCode {
 
 fn run_native() -> Result<std::process::ExitCode, Box<dyn Error>> {
     let args = Args::parse();
+    if args.model == DeviceModel::Oz9600 {
+        return Err("OZ-9600 has no text-grid TUI yet; use pce500 --model oz-9600 with --capture-png for the full bitmap".into());
+    }
     validate_execution_args(&args)?;
     let mut pacer = Pacer::for_model(args.model, args.mode);
     let mut warnings = vec![format!("[execution] {}: {} compatibility timing units/s, not hardware calibrated; IQ uses the PC fallback. RTC follows guest elapsed time, not paused host time.", args.mode.label(), pacer.timebase_hz())];

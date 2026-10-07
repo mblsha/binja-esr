@@ -1,4 +1,5 @@
-// PY_SOURCE: iq7000/emulator.py:IQ7000Emulator (placeholder)
+// PY_SOURCE: sc62015/pysc62015/emulator.py
+// Shared CPU/bus contract reference; the IQ-7000 peripheral model is Rust-only.
 
 use crate::memory::MemoryImage;
 use crate::{CoreRuntime, Result};

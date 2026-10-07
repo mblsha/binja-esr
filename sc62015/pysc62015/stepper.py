@@ -224,9 +224,15 @@ class CPUStepper:
         *,
         default_memory_value: int = 0,
         backend: str | None = None,
+        block_transfer_policy: str = "independent",
+        byte_arithmetic_source_policy: str = "strict",
+        isr_software_write_policy: str = "replace",
     ) -> None:
         self._default_memory_value = default_memory_value & 0xFF
         self._backend = backend
+        self._block_transfer_policy = block_transfer_policy
+        self._byte_arithmetic_source_policy = byte_arithmetic_source_policy
+        self._isr_software_write_policy = isr_software_write_policy
 
     def step(
         self,
@@ -239,7 +245,14 @@ class CPUStepper:
             memory_image,
             default_value=self._default_memory_value,
         )
-        cpu = CPU(snapshot_memory, reset_on_init=False, backend=self._backend)
+        cpu = CPU(
+            snapshot_memory,
+            reset_on_init=False,
+            backend=self._backend,
+            block_transfer_policy=self._block_transfer_policy,
+            byte_arithmetic_source_policy=self._byte_arithmetic_source_policy,
+            isr_software_write_policy=self._isr_software_write_policy,
+        )
         cpu.apply_snapshot(registers)
 
         eval_info = cpu.execute_instruction(registers.pc)

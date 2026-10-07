@@ -333,9 +333,7 @@ def test_control_flow_llil_uses_explicit_widths_and_20_bit_targets() -> None:
     ret = next(node for node in reversed(il.ils) if node.op == "RET")
     ret_nodes = list(_walk_mock_llil(ret))
     assert any(node.op == "ZX.l" for node in ret_nodes)
-    assert any(
-        node.op == "CONST.l" and node.ops == [PC_MASK & ~0xFFFF] for node in ret_nodes
-    )
+    assert any(node.op == "CONST.l" and node.ops == [0xD0000] for node in ret_nodes)
 
     far_il = _WidthStrictMockLLIL()
     far_ret = decode(bytearray.fromhex("07"), 0x1234)
@@ -344,6 +342,22 @@ def test_control_flow_llil_uses_explicit_widths_and_20_bit_targets() -> None:
     assert isinstance(far_target, MockLLIL)
     assert far_target.op == "AND.l"
     assert far_target.ops[1] == mllil("CONST.l", [PC_MASK])
+
+
+@pytest.mark.parametrize("address", [0xD1234, 0x7FFFF, 0xFFFFF])
+def test_near_ret_llil_does_not_require_an_emulator_pc_update(address: int) -> None:
+    """Static LLIL must know the return page from the instruction address."""
+    instruction = decode(bytearray.fromhex("06"), address)
+    il = _WidthStrictMockLLIL()
+    instruction.lift(il, address)
+    target = next(node for node in il.ils if node.op == "RET").ops[0]
+    nodes = list(_walk_mock_llil(target))
+
+    assert not any(
+        node.bare_op() == "REG" and node.ops[0].name == "PC" for node in nodes
+    )
+    page = ((address + 1) & PC_MASK) & ~0xFFFF
+    assert any(node.op == "CONST.l" and node.ops == [page] for node in nodes)
 
 
 @pytest.mark.parametrize(
@@ -375,6 +389,16 @@ def test_call_lift_preserves_real_call_op_with_explicit_wrapped_frame(
 def test_reset_analysis_is_unresolved_branch() -> None:
     instr = decode(bytearray([0xFF]), 0x1234)
     assert instr.name() == "RESET"
+
+    info = MockAnalysisInfo()
+    instr.analyze(info, 0x1234)
+    assert info.length == 1
+    assert info.mybranches == [(BranchType.UnresolvedBranch, None)]
+
+
+def test_ir_analysis_is_unresolved_branch() -> None:
+    instr = decode(bytearray([0xFE]), 0x1234)
+    assert isinstance(instr, IR)
 
     info = MockAnalysisInfo()
     instr.analyze(info, 0x1234)
@@ -1811,3 +1835,24 @@ def test_compare_opcodes() -> None:
 
         if not isinstance(instr, (UnknownInstruction, PRE, TCL, HALT, OFF, IR)):
             start_check_lifting(il.ils)
+
+
+def test_byte_source_policy_roundtrip_requires_explicit_decode_option() -> None:
+    image = bytes.fromhex("4e 03")
+    assert decode_instr(image, 0x1234, OPCODES) is None
+    instruction = decode_instr(
+        image, 0x1234, OPCODES, byte_arithmetic_source_policy="low_byte"
+    )
+    assert instruction is not None
+    assert encode(instruction, 0x1234) == image
+    assert (
+        decode_instr(
+            bytes.fromhex("4e 0b"),
+            0x1234,
+            OPCODES,
+            byte_arithmetic_source_policy="low_byte",
+        )
+        is None
+    )
+    # Selecting compatibility on one decoder must not change other callers.
+    assert decode_instr(image, 0x1234, OPCODES) is None

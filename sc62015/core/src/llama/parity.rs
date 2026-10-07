@@ -41,6 +41,7 @@ pub struct Snapshot {
     pub mem_writes: Vec<MemWrite>,
     pub mem_imr: u8,
     pub mem_isr: u8,
+    pub wait_cycles: Vec<u32>,
 }
 
 /// Memory space classification for parity traces.
@@ -77,6 +78,7 @@ pub struct ParityDiff {
     pub mem_write_sequence_mismatch: bool,
     pub mem_imr_mismatch: Option<(u8, u8)>,
     pub mem_isr_mismatch: Option<(u8, u8)>,
+    pub wait_cycles_mismatch: bool,
 }
 
 impl Snapshot {
@@ -107,6 +109,7 @@ impl Snapshot {
             mem_writes: Vec::new(),
             mem_imr: state.get_reg(RegName::IMR) as u8,
             mem_isr: 0,
+            wait_cycles: Vec::new(),
         }
     }
 }
@@ -127,6 +130,7 @@ pub fn compare_snapshots(lhs: &Snapshot, rhs: &Snapshot) -> Option<ParityDiff> {
     // writes and ordering can trigger peripheral side effects.  Keep the
     // last-value summary below for diagnostics, but gate on exact sequence.
     diff.mem_write_sequence_mismatch = lhs.mem_writes != rhs.mem_writes;
+    diff.wait_cycles_mismatch = lhs.wait_cycles != rhs.wait_cycles;
     if lhs.mem_imr != rhs.mem_imr {
         diff.mem_imr_mismatch = Some((lhs.mem_imr, rhs.mem_imr));
     }
@@ -156,6 +160,7 @@ pub fn compare_snapshots(lhs: &Snapshot, rhs: &Snapshot) -> Option<ParityDiff> {
         && diff.reg_presence_mismatches.is_empty()
         && diff.mem_mismatches.is_empty()
         && !diff.mem_write_sequence_mismatch
+        && !diff.wait_cycles_mismatch
         && diff.mem_imr_mismatch.is_none()
         && diff.mem_isr_mismatch.is_none()
     {
@@ -340,6 +345,18 @@ pub fn run_python_oracle(
         .and_then(|value| value.as_u64())
         .and_then(|value| u8::try_from(value).ok())
         .ok_or("oracle JSON missing or invalid mem_isr byte")?;
+    let wait_cycles = parsed
+        .get("wait_cycles")
+        .and_then(|value| value.as_array())
+        .ok_or("oracle JSON missing wait_cycles array")?
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or("oracle JSON has invalid wait_cycles value")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let perfetto_path = match parsed.get("perfetto_path") {
         Some(serde_json::Value::String(path)) if !path.is_empty() => Some(path.clone()),
         Some(serde_json::Value::Null) => None,
@@ -449,6 +466,7 @@ pub fn run_python_oracle(
             mem_writes: writes,
             mem_imr: output_mem_imr,
             mem_isr: output_mem_isr,
+            wait_cycles,
         },
         perfetto_path,
         process_output: output,
@@ -655,6 +673,7 @@ fn state_snapshot_regs() -> impl Iterator<Item = RegName> {
 struct RecordingBus {
     mem: HashMap<u32, u8>,
     writes: Vec<MemWrite>,
+    waits: Vec<u32>,
 }
 
 #[cfg(feature = "llama-tests")]
@@ -717,7 +736,9 @@ impl LlamaBus for RecordingBus {
         base
     }
 
-    fn wait_cycles(&mut self, _cycles: u32) {}
+    fn wait_cycles(&mut self, cycles: u32) {
+        self.waits.push(cycles);
+    }
 }
 
 /// Execute one instruction in LLAMA and produce a trace event plus snapshot.
@@ -779,6 +800,7 @@ pub fn run_llama_step(
         mem_writes: bus.writes,
         mem_imr,
         mem_isr,
+        wait_cycles: bus.waits,
     };
     Ok((event, snap))
 }
@@ -867,6 +889,21 @@ mod tests {
     use std::{env, fs};
 
     #[test]
+    fn snapshot_comparison_preserves_wait_transactions() {
+        let lhs = Snapshot {
+            wait_cycles: vec![1, 4],
+            ..Snapshot::default()
+        };
+        let rhs = Snapshot {
+            wait_cycles: vec![5],
+            ..Snapshot::default()
+        };
+
+        assert!(compare_snapshots(&lhs, &rhs).unwrap().wait_cycles_mismatch);
+        assert!(compare_snapshots(&lhs, &lhs).is_none());
+    }
+
+    #[test]
     fn snapshot_roundtrip_matches() {
         let mut state = LlamaState::new();
         state.set_reg(RegName::A, 0x12);
@@ -878,6 +915,7 @@ mod tests {
             mem_writes: snap_a.mem_writes.clone(),
             mem_imr: snap_a.mem_imr,
             mem_isr: snap_a.mem_isr,
+            wait_cycles: snap_a.wait_cycles.clone(),
         };
         assert!(compare_snapshots(&snap_a, &snap_b).is_none());
     }
@@ -1038,7 +1076,6 @@ mod tests {
     /// Feature-gated parity check for WAIT semantics: drains I to zero and leaves flags untouched.
     #[cfg(feature = "llama-tests")]
     #[test]
-    #[ignore = "Requires python perfetto tooling; skip in CI"]
     fn parity_wait_matches_python() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1046,8 +1083,10 @@ mod tests {
             .expect("workspace root");
         let workdir = root.join("target").join("llama-parity-wait");
         let _ = fs::create_dir_all(&workdir);
-        let regs = &[(RegName::I, 5), (RegName::FC, 1), (RegName::FZ, 1)];
-        assert_parity_mem(&[0xEF], regs, &[], &workdir);
+        for count in [0, 1, 5, 0xFFFF] {
+            let regs = &[(RegName::I, count), (RegName::FC, 1), (RegName::FZ, 1)];
+            assert_parity_mem(&[0xEF], regs, &[], &workdir);
+        }
     }
 
     /// Helper to run a single-instruction parity check and panic on mismatch.

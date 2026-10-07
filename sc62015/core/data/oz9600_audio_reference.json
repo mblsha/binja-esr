@@ -1,0 +1,3687 @@
+{
+  "operations": [
+    [
+      "advance",
+      123,
+      16,
+      false,
+      false
+    ],
+    [
+      "enable",
+      true
+    ],
+    [
+      "advance",
+      32,
+      144,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      32,
+      128,
+      false,
+      false
+    ],
+    [
+      "advance",
+      269,
+      252,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      105,
+      159,
+      false,
+      true
+    ],
+    [
+      "advance",
+      6,
+      149,
+      false,
+      false
+    ],
+    [
+      "advance",
+      186,
+      150,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      294,
+      11,
+      true,
+      false
+    ],
+    [
+      "advance",
+      251,
+      26,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      212,
+      166,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      12,
+      56,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      254,
+      247,
+      false,
+      false
+    ],
+    [
+      "advance",
+      96,
+      223,
+      false,
+      false
+    ],
+    [
+      "advance",
+      187,
+      117,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      115,
+      195,
+      true,
+      true
+    ],
+    [
+      "advance",
+      75,
+      142,
+      false,
+      true
+    ],
+    [
+      "advance",
+      166,
+      225,
+      false,
+      true
+    ],
+    [
+      "advance",
+      220,
+      124,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      262,
+      152,
+      false,
+      true
+    ],
+    [
+      "advance",
+      4,
+      93,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      82,
+      2,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      76,
+      206,
+      false,
+      true
+    ],
+    [
+      "advance",
+      110,
+      9,
+      false,
+      false
+    ],
+    [
+      "advance",
+      73,
+      85,
+      true,
+      false
+    ],
+    [
+      "advance",
+      176,
+      219,
+      false,
+      false
+    ],
+    [
+      "advance",
+      0,
+      133,
+      false,
+      true
+    ],
+    [
+      "advance",
+      54,
+      53,
+      false,
+      true
+    ],
+    [
+      "advance",
+      161,
+      79,
+      false,
+      false
+    ],
+    [
+      "advance",
+      17,
+      87,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      291,
+      220,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      77,
+      202,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      283,
+      81,
+      false,
+      false
+    ],
+    [
+      "advance",
+      41,
+      240,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      22,
+      134,
+      true,
+      true
+    ],
+    [
+      "advance",
+      3,
+      241,
+      false,
+      true
+    ],
+    [
+      "advance",
+      48,
+      69,
+      false,
+      true
+    ],
+    [
+      "advance",
+      127,
+      100,
+      true,
+      false
+    ],
+    [
+      "advance",
+      17,
+      133,
+      false,
+      false
+    ],
+    [
+      "advance",
+      213,
+      239,
+      false,
+      false
+    ],
+    [
+      "advance",
+      55,
+      155,
+      false,
+      true
+    ],
+    [
+      "advance",
+      184,
+      19,
+      false,
+      false
+    ],
+    [
+      "advance",
+      256,
+      250,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      259,
+      167,
+      false,
+      true
+    ],
+    [
+      "advance",
+      286,
+      109,
+      true,
+      true
+    ],
+    [
+      "advance",
+      282,
+      248,
+      false,
+      true
+    ],
+    [
+      "advance",
+      168,
+      44,
+      true,
+      true
+    ],
+    [
+      "advance",
+      259,
+      60,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      5,
+      133,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      278,
+      234,
+      false,
+      true
+    ],
+    [
+      "advance",
+      205,
+      105,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      47,
+      137,
+      false,
+      false
+    ],
+    [
+      "advance",
+      230,
+      248,
+      false,
+      true
+    ],
+    [
+      "advance",
+      94,
+      205,
+      false,
+      true
+    ],
+    [
+      "advance",
+      209,
+      30,
+      false,
+      true
+    ],
+    [
+      "advance",
+      233,
+      251,
+      false,
+      false
+    ],
+    [
+      "advance",
+      287,
+      0,
+      false,
+      false
+    ],
+    [
+      "advance",
+      269,
+      118,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      118,
+      255,
+      false,
+      false
+    ],
+    [
+      "advance",
+      157,
+      241,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      272,
+      133,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      32,
+      220,
+      false,
+      false
+    ],
+    [
+      "advance",
+      292,
+      20,
+      true,
+      false
+    ],
+    [
+      "advance",
+      277,
+      249,
+      false,
+      true
+    ],
+    [
+      "advance",
+      246,
+      199,
+      true,
+      false
+    ],
+    [
+      "advance",
+      223,
+      222,
+      false,
+      true
+    ],
+    [
+      "advance",
+      14,
+      99,
+      false,
+      false
+    ],
+    [
+      "advance",
+      77,
+      132,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      293,
+      190,
+      false,
+      false
+    ],
+    [
+      "advance",
+      66,
+      73,
+      false,
+      false
+    ],
+    [
+      "advance",
+      167,
+      44,
+      false,
+      false
+    ],
+    [
+      "advance",
+      237,
+      66,
+      false,
+      true
+    ],
+    [
+      "advance",
+      263,
+      198,
+      false,
+      true
+    ],
+    [
+      "advance",
+      152,
+      183,
+      false,
+      false
+    ],
+    [
+      "advance",
+      244,
+      61,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      81,
+      41,
+      false,
+      true
+    ],
+    [
+      "advance",
+      213,
+      197,
+      false,
+      false
+    ],
+    [
+      "advance",
+      233,
+      141,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      99,
+      78,
+      false,
+      true
+    ],
+    [
+      "advance",
+      118,
+      153,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      279,
+      135,
+      false,
+      false
+    ],
+    [
+      "advance",
+      21,
+      119,
+      false,
+      false
+    ],
+    [
+      "advance",
+      161,
+      210,
+      false,
+      true
+    ],
+    [
+      "advance",
+      190,
+      117,
+      false,
+      false
+    ],
+    [
+      "advance",
+      117,
+      146,
+      false,
+      false
+    ],
+    [
+      "advance",
+      116,
+      59,
+      false,
+      true
+    ],
+    [
+      "advance",
+      299,
+      80,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      102,
+      253,
+      false,
+      false
+    ],
+    [
+      "advance",
+      194,
+      100,
+      false,
+      false
+    ],
+    [
+      "advance",
+      276,
+      178,
+      false,
+      true
+    ],
+    [
+      "advance",
+      228,
+      178,
+      true,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      98,
+      253,
+      false,
+      true
+    ],
+    [
+      "advance",
+      184,
+      154,
+      false,
+      false
+    ],
+    [
+      "advance",
+      249,
+      183,
+      false,
+      false
+    ],
+    [
+      "advance",
+      125,
+      42,
+      false,
+      false
+    ],
+    [
+      "advance",
+      76,
+      238,
+      false,
+      true
+    ],
+    [
+      "advance",
+      144,
+      9,
+      false,
+      false
+    ],
+    [
+      "advance",
+      5,
+      134,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      272,
+      77,
+      false,
+      true
+    ],
+    [
+      "advance",
+      130,
+      177,
+      false,
+      true
+    ],
+    [
+      "advance",
+      96,
+      57,
+      false,
+      false
+    ],
+    [
+      "advance",
+      0,
+      26,
+      true,
+      false
+    ],
+    [
+      "advance",
+      121,
+      171,
+      false,
+      true
+    ],
+    [
+      "advance",
+      68,
+      100,
+      false,
+      true
+    ],
+    [
+      "advance",
+      237,
+      62,
+      false,
+      false
+    ],
+    [
+      "advance",
+      255,
+      131,
+      false,
+      false
+    ],
+    [
+      "advance",
+      0,
+      197,
+      false,
+      false
+    ],
+    [
+      "advance",
+      289,
+      110,
+      false,
+      true
+    ],
+    [
+      "advance",
+      189,
+      255,
+      false,
+      false
+    ],
+    [
+      "advance",
+      16,
+      215,
+      true,
+      false
+    ],
+    [
+      "advance",
+      125,
+      224,
+      false,
+      false
+    ],
+    [
+      "advance",
+      157,
+      161,
+      false,
+      true
+    ],
+    [
+      "advance",
+      145,
+      244,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      84,
+      52,
+      false,
+      true
+    ],
+    [
+      "advance",
+      255,
+      141,
+      true,
+      true
+    ],
+    [
+      "advance",
+      153,
+      107,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      254,
+      232,
+      false,
+      true
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      145,
+      169,
+      false,
+      false
+    ],
+    [
+      "advance",
+      199,
+      38,
+      false,
+      false
+    ],
+    [
+      "advance",
+      121,
+      253,
+      true,
+      true
+    ],
+    [
+      "advance",
+      219,
+      126,
+      false,
+      true
+    ],
+    [
+      "advance",
+      107,
+      214,
+      false,
+      true
+    ],
+    [
+      "advance",
+      93,
+      221,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      78,
+      31,
+      false,
+      false
+    ],
+    [
+      "advance",
+      3072000,
+      16,
+      false,
+      false
+    ],
+    [
+      "take"
+    ],
+    [
+      "reset"
+    ],
+    [
+      "take"
+    ],
+    [
+      "advance",
+      64,
+      16,
+      false,
+      false
+    ],
+    [
+      "enable",
+      false
+    ],
+    [
+      "take"
+    ]
+  ],
+  "replies": [
+    {
+      "chunk": null,
+      "status": {
+        "enabled": false,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 32,
+        "total_samples": 1,
+        "queued_samples": 1,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 0,
+        "total_samples": 1,
+        "dropped_samples": 0,
+        "sample_count": 1,
+        "pcm_sha256": "474f2af47544e9c7ce4338cabd43c5ca1c26432b7300ce387406157ea433891f"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 32,
+        "total_samples": 1,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 64,
+        "total_samples": 3,
+        "queued_samples": 2,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 333,
+        "total_samples": 15,
+        "queued_samples": 14,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 1,
+        "total_samples": 15,
+        "dropped_samples": 0,
+        "sample_count": 14,
+        "pcm_sha256": "833c027e8e7dea6fc6ce718e5e747ae6ef51c29c111f173b563100725dabc2a0"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 333,
+        "total_samples": 15,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 438,
+        "total_samples": 20,
+        "queued_samples": 5,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 444,
+        "total_samples": 20,
+        "queued_samples": 5,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 630,
+        "total_samples": 29,
+        "queued_samples": 14,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 15,
+        "total_samples": 29,
+        "dropped_samples": 0,
+        "sample_count": 14,
+        "pcm_sha256": "e3db3be726808569279c118c9d87d29b320b56eebae4539fc6fe038689b41b14"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 630,
+        "total_samples": 29,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 924,
+        "total_samples": 43,
+        "queued_samples": 14,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1175,
+        "total_samples": 55,
+        "queued_samples": 26,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 29,
+        "total_samples": 55,
+        "dropped_samples": 0,
+        "sample_count": 26,
+        "pcm_sha256": "6fd2d37960471b32031da7c8774ae05503aaacf4f04a779c8cac338ba34022e7"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1175,
+        "total_samples": 55,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 269,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1387,
+        "total_samples": 65,
+        "queued_samples": 10,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 481,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 55,
+        "total_samples": 65,
+        "dropped_samples": 0,
+        "sample_count": 10,
+        "pcm_sha256": "c9e381cae2dfee90506a494266a116f3e167ec4cbaf2b1c1c20070c2e60afffe"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1387,
+        "total_samples": 65,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 481,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1399,
+        "total_samples": 65,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 493,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 65,
+        "total_samples": 65,
+        "dropped_samples": 0,
+        "sample_count": 0,
+        "pcm_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1399,
+        "total_samples": 65,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 269,
+        "provisional_units": 493,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1653,
+        "total_samples": 77,
+        "queued_samples": 12,
+        "dropped_samples": 0,
+        "unsupported_units": 523,
+        "provisional_units": 747,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1749,
+        "total_samples": 81,
+        "queued_samples": 16,
+        "dropped_samples": 0,
+        "unsupported_units": 523,
+        "provisional_units": 843,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1936,
+        "total_samples": 90,
+        "queued_samples": 25,
+        "dropped_samples": 0,
+        "unsupported_units": 710,
+        "provisional_units": 1030,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 65,
+        "total_samples": 90,
+        "dropped_samples": 0,
+        "sample_count": 25,
+        "pcm_sha256": "f44f92399d305ff58a6e59c29ca68ddb71a88aa07829f31c531c10a529f208b9"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 1936,
+        "total_samples": 90,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 710,
+        "provisional_units": 1030,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2051,
+        "total_samples": 96,
+        "queued_samples": 6,
+        "dropped_samples": 0,
+        "unsupported_units": 710,
+        "provisional_units": 1030,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2126,
+        "total_samples": 99,
+        "queued_samples": 9,
+        "dropped_samples": 0,
+        "unsupported_units": 710,
+        "provisional_units": 1030,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2292,
+        "total_samples": 107,
+        "queued_samples": 17,
+        "dropped_samples": 0,
+        "unsupported_units": 876,
+        "provisional_units": 1196,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2512,
+        "total_samples": 117,
+        "queued_samples": 27,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1416,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 90,
+        "total_samples": 117,
+        "dropped_samples": 0,
+        "sample_count": 27,
+        "pcm_sha256": "0fb5317afc7f8206ff2001da8904558b9445395ece50ed0f4721a20130f0d68a"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2512,
+        "total_samples": 117,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1416,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2774,
+        "total_samples": 130,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1416,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2778,
+        "total_samples": 130,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1420,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 117,
+        "total_samples": 130,
+        "dropped_samples": 0,
+        "sample_count": 13,
+        "pcm_sha256": "1aef048ff51bbd89c639c86543e56c9e3ae56522456dc97e6a5b5af0e062a70a"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2778,
+        "total_samples": 130,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1420,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2860,
+        "total_samples": 134,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1420,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 130,
+        "total_samples": 134,
+        "dropped_samples": 0,
+        "sample_count": 4,
+        "pcm_sha256": "a4dd39dd86aac2faa310ff75ea07671e1b457f39923ba27ce9c404419593168f"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2860,
+        "total_samples": 134,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1420,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 2936,
+        "total_samples": 137,
+        "queued_samples": 3,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1496,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3046,
+        "total_samples": 142,
+        "queued_samples": 8,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1496,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3119,
+        "total_samples": 146,
+        "queued_samples": 12,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1496,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3295,
+        "total_samples": 154,
+        "queued_samples": 20,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1672,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3295,
+        "total_samples": 154,
+        "queued_samples": 20,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1672,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3349,
+        "total_samples": 156,
+        "queued_samples": 22,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1726,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3510,
+        "total_samples": 164,
+        "queued_samples": 30,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1887,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3527,
+        "total_samples": 165,
+        "queued_samples": 31,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1904,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 134,
+        "total_samples": 165,
+        "dropped_samples": 0,
+        "sample_count": 31,
+        "pcm_sha256": "35c9d10c0a8b3b23532b76545b7b1763bb183659cb1741dd86742477cecb3f76"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3527,
+        "total_samples": 165,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 1904,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3818,
+        "total_samples": 178,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 2195,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 165,
+        "total_samples": 178,
+        "dropped_samples": 0,
+        "sample_count": 13,
+        "pcm_sha256": "9ff50a8f580d45af01818039ec51b496d801bd48560a55a2c5a915c5c6d9e154"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3818,
+        "total_samples": 178,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 2195,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3895,
+        "total_samples": 182,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 2272,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 178,
+        "total_samples": 182,
+        "dropped_samples": 0,
+        "sample_count": 4,
+        "pcm_sha256": "a55565154b8f109f0d5238ff54f687a88c48fbf468b46db0102dc774cdba2dc7"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3895,
+        "total_samples": 182,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 2272,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4178,
+        "total_samples": 195,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 1096,
+        "provisional_units": 2555,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4219,
+        "total_samples": 197,
+        "queued_samples": 15,
+        "dropped_samples": 0,
+        "unsupported_units": 1137,
+        "provisional_units": 2596,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 182,
+        "total_samples": 197,
+        "dropped_samples": 0,
+        "sample_count": 15,
+        "pcm_sha256": "dabbe66e310e6aa8d6b30f48ce5013aa4c7fdf68c5ce0184f1b2a54ba35c541a"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4219,
+        "total_samples": 197,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1137,
+        "provisional_units": 2596,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4241,
+        "total_samples": 198,
+        "queued_samples": 1,
+        "dropped_samples": 0,
+        "unsupported_units": 1137,
+        "provisional_units": 2596,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4244,
+        "total_samples": 198,
+        "queued_samples": 1,
+        "dropped_samples": 0,
+        "unsupported_units": 1140,
+        "provisional_units": 2599,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4292,
+        "total_samples": 201,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 1140,
+        "provisional_units": 2647,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4419,
+        "total_samples": 207,
+        "queued_samples": 10,
+        "dropped_samples": 0,
+        "unsupported_units": 1140,
+        "provisional_units": 2647,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4436,
+        "total_samples": 207,
+        "queued_samples": 10,
+        "dropped_samples": 0,
+        "unsupported_units": 1140,
+        "provisional_units": 2647,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4649,
+        "total_samples": 217,
+        "queued_samples": 20,
+        "dropped_samples": 0,
+        "unsupported_units": 1353,
+        "provisional_units": 2860,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4704,
+        "total_samples": 220,
+        "queued_samples": 23,
+        "dropped_samples": 0,
+        "unsupported_units": 1353,
+        "provisional_units": 2860,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 4888,
+        "total_samples": 229,
+        "queued_samples": 32,
+        "dropped_samples": 0,
+        "unsupported_units": 1353,
+        "provisional_units": 2860,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 5144,
+        "total_samples": 241,
+        "queued_samples": 44,
+        "dropped_samples": 0,
+        "unsupported_units": 1609,
+        "provisional_units": 3116,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 197,
+        "total_samples": 241,
+        "dropped_samples": 0,
+        "sample_count": 44,
+        "pcm_sha256": "6dcc1101216e0aff423faae19ac9582e139cbcde42971799728cf809d55dcde7"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 5144,
+        "total_samples": 241,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1609,
+        "provisional_units": 3116,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 5403,
+        "total_samples": 253,
+        "queued_samples": 12,
+        "dropped_samples": 0,
+        "unsupported_units": 1609,
+        "provisional_units": 3375,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 5689,
+        "total_samples": 266,
+        "queued_samples": 25,
+        "dropped_samples": 0,
+        "unsupported_units": 1609,
+        "provisional_units": 3375,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 5971,
+        "total_samples": 279,
+        "queued_samples": 38,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3657,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6139,
+        "total_samples": 287,
+        "queued_samples": 46,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3657,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6398,
+        "total_samples": 299,
+        "queued_samples": 58,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3916,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 241,
+        "total_samples": 299,
+        "dropped_samples": 0,
+        "sample_count": 58,
+        "pcm_sha256": "6d0016f8eabb2a2df0a19b7696d941cd0b8a9adeae596da74df37371b9d13b89"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6398,
+        "total_samples": 299,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3916,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6403,
+        "total_samples": 300,
+        "queued_samples": 1,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3916,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 299,
+        "total_samples": 300,
+        "dropped_samples": 0,
+        "sample_count": 1,
+        "pcm_sha256": "057cbbfb4f5936e7b5e66856bf25d1fb46a0413143c0e7528ba137d2c2d024d1"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6403,
+        "total_samples": 300,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 1891,
+        "provisional_units": 3916,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6681,
+        "total_samples": 313,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 2169,
+        "provisional_units": 4194,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6886,
+        "total_samples": 322,
+        "queued_samples": 22,
+        "dropped_samples": 0,
+        "unsupported_units": 2374,
+        "provisional_units": 4399,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 300,
+        "total_samples": 322,
+        "dropped_samples": 0,
+        "sample_count": 22,
+        "pcm_sha256": "ad3da865d5d432f083cfa6a07c8ae0b9ec44cb1ddf307cb24c05979e13c09927"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6886,
+        "total_samples": 322,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 2374,
+        "provisional_units": 4399,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 6933,
+        "total_samples": 324,
+        "queued_samples": 2,
+        "dropped_samples": 0,
+        "unsupported_units": 2374,
+        "provisional_units": 4399,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 7163,
+        "total_samples": 335,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 2604,
+        "provisional_units": 4629,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 7257,
+        "total_samples": 340,
+        "queued_samples": 18,
+        "dropped_samples": 0,
+        "unsupported_units": 2604,
+        "provisional_units": 4723,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 7466,
+        "total_samples": 349,
+        "queued_samples": 27,
+        "dropped_samples": 0,
+        "unsupported_units": 2604,
+        "provisional_units": 4723,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 7699,
+        "total_samples": 360,
+        "queued_samples": 38,
+        "dropped_samples": 0,
+        "unsupported_units": 2837,
+        "provisional_units": 4956,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 7986,
+        "total_samples": 374,
+        "queued_samples": 52,
+        "dropped_samples": 0,
+        "unsupported_units": 2837,
+        "provisional_units": 4956,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8255,
+        "total_samples": 386,
+        "queued_samples": 64,
+        "dropped_samples": 0,
+        "unsupported_units": 3106,
+        "provisional_units": 5225,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 322,
+        "total_samples": 386,
+        "dropped_samples": 0,
+        "sample_count": 64,
+        "pcm_sha256": "3ed3de5cbab4bf05cc048ef1f214164ccfdaaa72d80a56c2f9b240eddb64535c"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8255,
+        "total_samples": 386,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3106,
+        "provisional_units": 5225,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8373,
+        "total_samples": 392,
+        "queued_samples": 6,
+        "dropped_samples": 0,
+        "unsupported_units": 3224,
+        "provisional_units": 5343,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8530,
+        "total_samples": 399,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5500,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 386,
+        "total_samples": 399,
+        "dropped_samples": 0,
+        "sample_count": 13,
+        "pcm_sha256": "04ae5783bf7420946328231a19e4a88c3f4826fd905ce9709f247dd6cd6169f1"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8530,
+        "total_samples": 399,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5500,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8802,
+        "total_samples": 412,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5500,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 399,
+        "total_samples": 412,
+        "dropped_samples": 0,
+        "sample_count": 13,
+        "pcm_sha256": "558836b72b406041cb9414b97bd1726047ea83dbef956449f6a1fdcf523f7860"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8802,
+        "total_samples": 412,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5500,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 8834,
+        "total_samples": 414,
+        "queued_samples": 2,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5532,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9126,
+        "total_samples": 427,
+        "queued_samples": 15,
+        "dropped_samples": 0,
+        "unsupported_units": 3381,
+        "provisional_units": 5532,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9403,
+        "total_samples": 440,
+        "queued_samples": 28,
+        "dropped_samples": 0,
+        "unsupported_units": 3658,
+        "provisional_units": 5809,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9649,
+        "total_samples": 452,
+        "queued_samples": 40,
+        "dropped_samples": 0,
+        "unsupported_units": 3658,
+        "provisional_units": 5809,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9872,
+        "total_samples": 462,
+        "queued_samples": 50,
+        "dropped_samples": 0,
+        "unsupported_units": 3658,
+        "provisional_units": 6032,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9886,
+        "total_samples": 463,
+        "queued_samples": 51,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6046,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9963,
+        "total_samples": 467,
+        "queued_samples": 55,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6046,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 412,
+        "total_samples": 467,
+        "dropped_samples": 0,
+        "sample_count": 55,
+        "pcm_sha256": "402c596177d68fa862a6f6d33aa01e491e8a85a168e09c97397ad411a5e2560a"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 9963,
+        "total_samples": 467,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6046,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 10256,
+        "total_samples": 480,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6339,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 10322,
+        "total_samples": 483,
+        "queued_samples": 16,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6405,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 10489,
+        "total_samples": 491,
+        "queued_samples": 24,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6572,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 10726,
+        "total_samples": 502,
+        "queued_samples": 35,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 6809,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 10989,
+        "total_samples": 515,
+        "queued_samples": 48,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7072,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11141,
+        "total_samples": 522,
+        "queued_samples": 55,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7224,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11385,
+        "total_samples": 533,
+        "queued_samples": 66,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7468,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 467,
+        "total_samples": 533,
+        "dropped_samples": 0,
+        "sample_count": 66,
+        "pcm_sha256": "fb008e48488a4aefb47832b0769622cf2e1e0e16cc6dbe43065948a590da88ed"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11385,
+        "total_samples": 533,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7468,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11466,
+        "total_samples": 537,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7549,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11679,
+        "total_samples": 547,
+        "queued_samples": 14,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7762,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11912,
+        "total_samples": 558,
+        "queued_samples": 25,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7762,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 533,
+        "total_samples": 558,
+        "dropped_samples": 0,
+        "sample_count": 25,
+        "pcm_sha256": "325653338ee3fe38ddf45c28ae6437ff745af1b35b2f1870f455a3072e5760d1"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 11912,
+        "total_samples": 558,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7762,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12011,
+        "total_samples": 563,
+        "queued_samples": 5,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7861,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12129,
+        "total_samples": 568,
+        "queued_samples": 10,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7861,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 558,
+        "total_samples": 568,
+        "dropped_samples": 0,
+        "sample_count": 10,
+        "pcm_sha256": "84752b7f70cb2f2129a5824da208ac152939730976026f5b71e29442a49b8127"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12129,
+        "total_samples": 568,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7861,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12408,
+        "total_samples": 581,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 3672,
+        "provisional_units": 7861,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12429,
+        "total_samples": 582,
+        "queued_samples": 14,
+        "dropped_samples": 0,
+        "unsupported_units": 3693,
+        "provisional_units": 7882,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12590,
+        "total_samples": 590,
+        "queued_samples": 22,
+        "dropped_samples": 0,
+        "unsupported_units": 3693,
+        "provisional_units": 8043,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12780,
+        "total_samples": 599,
+        "queued_samples": 31,
+        "dropped_samples": 0,
+        "unsupported_units": 3883,
+        "provisional_units": 8233,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 12897,
+        "total_samples": 604,
+        "queued_samples": 36,
+        "dropped_samples": 0,
+        "unsupported_units": 3883,
+        "provisional_units": 8233,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13013,
+        "total_samples": 609,
+        "queued_samples": 41,
+        "dropped_samples": 0,
+        "unsupported_units": 3883,
+        "provisional_units": 8349,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13312,
+        "total_samples": 624,
+        "queued_samples": 56,
+        "dropped_samples": 0,
+        "unsupported_units": 3883,
+        "provisional_units": 8648,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 568,
+        "total_samples": 624,
+        "dropped_samples": 0,
+        "sample_count": 56,
+        "pcm_sha256": "b4b0291a1ff95c4644e7b928db9dad38936870ca22a2b287bef13d2bb297cf37"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13312,
+        "total_samples": 624,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 3883,
+        "provisional_units": 8648,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13414,
+        "total_samples": 628,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 3985,
+        "provisional_units": 8750,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13608,
+        "total_samples": 637,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 4179,
+        "provisional_units": 8944,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 13884,
+        "total_samples": 650,
+        "queued_samples": 26,
+        "dropped_samples": 0,
+        "unsupported_units": 4179,
+        "provisional_units": 9220,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14112,
+        "total_samples": 661,
+        "queued_samples": 37,
+        "dropped_samples": 0,
+        "unsupported_units": 4179,
+        "provisional_units": 9220,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 624,
+        "total_samples": 661,
+        "dropped_samples": 0,
+        "sample_count": 37,
+        "pcm_sha256": "02912dea34708869c9d09b3ab4e582f249825002b46668455405a5ebf4b1fdfc"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14112,
+        "total_samples": 661,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 4179,
+        "provisional_units": 9220,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14210,
+        "total_samples": 666,
+        "queued_samples": 5,
+        "dropped_samples": 0,
+        "unsupported_units": 4277,
+        "provisional_units": 9318,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14394,
+        "total_samples": 674,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 4277,
+        "provisional_units": 9318,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14643,
+        "total_samples": 686,
+        "queued_samples": 25,
+        "dropped_samples": 0,
+        "unsupported_units": 4277,
+        "provisional_units": 9567,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14768,
+        "total_samples": 692,
+        "queued_samples": 31,
+        "dropped_samples": 0,
+        "unsupported_units": 4277,
+        "provisional_units": 9692,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14844,
+        "total_samples": 695,
+        "queued_samples": 34,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 9768,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14988,
+        "total_samples": 702,
+        "queued_samples": 41,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 9768,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14993,
+        "total_samples": 702,
+        "queued_samples": 41,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 9768,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 661,
+        "total_samples": 702,
+        "dropped_samples": 0,
+        "sample_count": 41,
+        "pcm_sha256": "5435203266320e239595cdcecb5572edea6881d6805302aacbbae0a287e181fd"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 14993,
+        "total_samples": 702,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 9768,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15265,
+        "total_samples": 715,
+        "queued_samples": 13,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 10040,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15395,
+        "total_samples": 721,
+        "queued_samples": 19,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 10170,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15491,
+        "total_samples": 726,
+        "queued_samples": 24,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 10266,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15491,
+        "total_samples": 726,
+        "queued_samples": 24,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 10266,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15612,
+        "total_samples": 731,
+        "queued_samples": 29,
+        "dropped_samples": 0,
+        "unsupported_units": 4353,
+        "provisional_units": 10387,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15680,
+        "total_samples": 735,
+        "queued_samples": 33,
+        "dropped_samples": 0,
+        "unsupported_units": 4421,
+        "provisional_units": 10455,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 15917,
+        "total_samples": 746,
+        "queued_samples": 44,
+        "dropped_samples": 0,
+        "unsupported_units": 4421,
+        "provisional_units": 10692,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16172,
+        "total_samples": 758,
+        "queued_samples": 56,
+        "dropped_samples": 0,
+        "unsupported_units": 4421,
+        "provisional_units": 10692,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16172,
+        "total_samples": 758,
+        "queued_samples": 56,
+        "dropped_samples": 0,
+        "unsupported_units": 4421,
+        "provisional_units": 10692,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16461,
+        "total_samples": 771,
+        "queued_samples": 69,
+        "dropped_samples": 0,
+        "unsupported_units": 4710,
+        "provisional_units": 10981,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16650,
+        "total_samples": 780,
+        "queued_samples": 78,
+        "dropped_samples": 0,
+        "unsupported_units": 4899,
+        "provisional_units": 11170,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16666,
+        "total_samples": 781,
+        "queued_samples": 79,
+        "dropped_samples": 0,
+        "unsupported_units": 4899,
+        "provisional_units": 11170,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16791,
+        "total_samples": 787,
+        "queued_samples": 85,
+        "dropped_samples": 0,
+        "unsupported_units": 5024,
+        "provisional_units": 11295,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 16948,
+        "total_samples": 794,
+        "queued_samples": 92,
+        "dropped_samples": 0,
+        "unsupported_units": 5024,
+        "provisional_units": 11452,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17093,
+        "total_samples": 801,
+        "queued_samples": 99,
+        "dropped_samples": 0,
+        "unsupported_units": 5169,
+        "provisional_units": 11597,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 702,
+        "total_samples": 801,
+        "dropped_samples": 0,
+        "sample_count": 99,
+        "pcm_sha256": "e70e3408229a62f62d4286aa4092767934c17f975552cd5aa672054f002236a1"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17093,
+        "total_samples": 801,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 5169,
+        "provisional_units": 11597,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17177,
+        "total_samples": 805,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 5169,
+        "provisional_units": 11681,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17432,
+        "total_samples": 817,
+        "queued_samples": 16,
+        "dropped_samples": 0,
+        "unsupported_units": 5169,
+        "provisional_units": 11681,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17585,
+        "total_samples": 824,
+        "queued_samples": 23,
+        "dropped_samples": 0,
+        "unsupported_units": 5322,
+        "provisional_units": 11834,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 801,
+        "total_samples": 824,
+        "dropped_samples": 0,
+        "sample_count": 23,
+        "pcm_sha256": "fde4c29edecd452acd54f30ed927713a5bb4d33a59056f7ee1eeea0b372d1f29"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17585,
+        "total_samples": 824,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 5322,
+        "provisional_units": 11834,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17839,
+        "total_samples": 836,
+        "queued_samples": 12,
+        "dropped_samples": 0,
+        "unsupported_units": 5576,
+        "provisional_units": 12088,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 824,
+        "total_samples": 836,
+        "dropped_samples": 0,
+        "sample_count": 12,
+        "pcm_sha256": "e44bb52c6423f2b025a4ba972000a011ef82b792fc7d0fbf1a9782211a61c1d4"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17839,
+        "total_samples": 836,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 5576,
+        "provisional_units": 12088,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 17984,
+        "total_samples": 843,
+        "queued_samples": 7,
+        "dropped_samples": 0,
+        "unsupported_units": 5576,
+        "provisional_units": 12233,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18183,
+        "total_samples": 852,
+        "queued_samples": 16,
+        "dropped_samples": 0,
+        "unsupported_units": 5576,
+        "provisional_units": 12432,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18304,
+        "total_samples": 858,
+        "queued_samples": 22,
+        "dropped_samples": 0,
+        "unsupported_units": 5576,
+        "provisional_units": 12432,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18523,
+        "total_samples": 868,
+        "queued_samples": 32,
+        "dropped_samples": 0,
+        "unsupported_units": 5795,
+        "provisional_units": 12651,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18630,
+        "total_samples": 873,
+        "queued_samples": 37,
+        "dropped_samples": 0,
+        "unsupported_units": 5795,
+        "provisional_units": 12758,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18723,
+        "total_samples": 877,
+        "queued_samples": 41,
+        "dropped_samples": 0,
+        "unsupported_units": 5795,
+        "provisional_units": 12851,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 836,
+        "total_samples": 877,
+        "dropped_samples": 0,
+        "sample_count": 41,
+        "pcm_sha256": "c79d3a67d5e49c2a4e5f7857214b350761e925adcb758e6feb46561ed506b9ad"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18723,
+        "total_samples": 877,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 5795,
+        "provisional_units": 12851,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 18801,
+        "total_samples": 881,
+        "queued_samples": 4,
+        "dropped_samples": 0,
+        "unsupported_units": 5795,
+        "provisional_units": 12851,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3090801,
+        "total_samples": 144881,
+        "queued_samples": 96000,
+        "dropped_samples": 48004,
+        "unsupported_units": 5795,
+        "provisional_units": 12851,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 48881,
+        "total_samples": 144881,
+        "dropped_samples": 48004,
+        "sample_count": 96000,
+        "pcm_sha256": "8e41d493eeddf20e02af32cc4dace3de8843e28c368061b0ba9d2cfcd42ebafd"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 3090801,
+        "total_samples": 144881,
+        "queued_samples": 0,
+        "dropped_samples": 48004,
+        "unsupported_units": 5795,
+        "provisional_units": 12851,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 0,
+        "total_samples": 0,
+        "dropped_samples": 0,
+        "sample_count": 0,
+        "pcm_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": true,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 64,
+        "total_samples": 3,
+        "queued_samples": 3,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": null,
+      "status": {
+        "enabled": false,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    },
+    {
+      "chunk": {
+        "sample_rate": 48000,
+        "first_sample": 0,
+        "total_samples": 0,
+        "dropped_samples": 0,
+        "sample_count": 0,
+        "pcm_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "status": {
+        "enabled": false,
+        "sample_rate": 48000,
+        "timebase_hz": 1024000,
+        "elapsed_units": 0,
+        "total_samples": 0,
+        "queued_samples": 0,
+        "dropped_samples": 0,
+        "unsupported_units": 0,
+        "provisional_units": 0,
+        "qualification": "Nominal digital CO: 000/001 low/high, provisional 010/011 2/4 kHz, 100/101 low/high, 110/111 explicit CI input. CI wiring, physical mode table, pitch, amplitude and speaker remain unqualified."
+      }
+    }
+  ]
+}

@@ -17,7 +17,10 @@ use sc62015_core::{
             ValidatedVectorTransfer,
         },
         opcodes::RegName as LlamaRegName,
-        state::{validate_f_image, CallMetricsSnapshot, LlamaState, PowerState},
+        state::{
+            validate_f_image, BlockTransferPolicy, ByteArithmeticSourcePolicy, CallMetricsSnapshot,
+            IsrSoftwareWritePolicy, LlamaState, PowerState,
+        },
     },
     memory::MemoryImage,
     pce500::ROM_RESET_VECTOR_ADDR,
@@ -2032,8 +2035,43 @@ fn scheduler_snapshot_candidate(
 #[pymethods]
 impl LlamaCpu {
     #[new]
-    #[pyo3(signature = (memory, *, reset_on_init = true, timer_scale = 1.0))]
-    fn new(memory: PyObject, reset_on_init: bool, timer_scale: f64) -> PyResult<Self> {
+    #[pyo3(signature = (memory, *, reset_on_init = true, timer_scale = 1.0, block_transfer_policy = "independent", byte_arithmetic_source_policy = "strict", isr_software_write_policy = "replace"))]
+    fn new(
+        memory: PyObject,
+        reset_on_init: bool,
+        timer_scale: f64,
+        block_transfer_policy: &str,
+        byte_arithmetic_source_policy: &str,
+        isr_software_write_policy: &str,
+    ) -> PyResult<Self> {
+        let policy = match block_transfer_policy {
+            "independent" => BlockTransferPolicy::Independent,
+            "coupled_predecrement" => BlockTransferPolicy::CoupledPredecrement,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown block transfer policy: {block_transfer_policy}"
+                )))
+            }
+        };
+        let byte_source_policy = match byte_arithmetic_source_policy {
+            "strict" => ByteArithmeticSourcePolicy::Strict,
+            "low_byte" => ByteArithmeticSourcePolicy::LowByte,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown byte arithmetic source policy: {byte_arithmetic_source_policy}"
+                )))
+            }
+        };
+        let isr_policy = match isr_software_write_policy {
+            "replace" => IsrSoftwareWritePolicy::Replace,
+            "clear_only" => IsrSoftwareWritePolicy::ClearOnly,
+            "clear_only_except_mti" => IsrSoftwareWritePolicy::ClearOnlyExceptMti,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown ISR software write policy: {isr_software_write_policy}"
+                )))
+            }
+        };
         let (read_callback, write_callback, read_with_pc, write_with_pc) =
             Python::with_gil(|py| -> PyResult<_> {
                 let read_callback = memory.getattr(py, "read_byte")?;
@@ -2069,6 +2107,10 @@ impl LlamaCpu {
             pending_vector_transfer: None,
             pending_scheduled_opcode: None,
         };
+        cpu.state.set_block_transfer_policy(policy);
+        cpu.state
+            .set_byte_arithmetic_source_policy(byte_source_policy);
+        cpu.state.set_isr_software_write_policy(isr_policy);
         cpu.timer.set_timer_scale(timer_scale);
         if reset_on_init {
             Python::with_gil(|py| cpu.prepare_immediate_machine_reset_transfer(py))?;
@@ -3069,6 +3111,9 @@ impl LlamaCpu {
             ..SnapshotMetadata::default()
         };
         metadata.power_state = self.state.power_state();
+        metadata.block_transfer_policy = self.state.block_transfer_policy();
+        metadata.byte_arithmetic_source_policy = self.state.byte_arithmetic_source_policy();
+        metadata.isr_software_write_policy = self.state.isr_software_write_policy();
         metadata.onk_level = image
             .read_internal_byte(IMEM_SSR_OFFSET)
             .is_some_and(|ssr| ssr & 0x08 != 0);
@@ -3254,6 +3299,28 @@ impl LlamaCpu {
     fn get_stats(&self, py: Python<'_>) -> PyResult<PyObject> {
         let dict = PyDict::new_bound(py);
         dict.set_item("backend", "llama")?;
+        dict.set_item(
+            "isr_software_write_policy",
+            match self.state.isr_software_write_policy() {
+                IsrSoftwareWritePolicy::Replace => "replace",
+                IsrSoftwareWritePolicy::ClearOnly => "clear_only",
+                IsrSoftwareWritePolicy::ClearOnlyExceptMti => "clear_only_except_mti",
+            },
+        )?;
+        dict.set_item(
+            "byte_arithmetic_source_policy",
+            match self.state.byte_arithmetic_source_policy() {
+                ByteArithmeticSourcePolicy::Strict => "strict",
+                ByteArithmeticSourcePolicy::LowByte => "low_byte",
+            },
+        )?;
+        dict.set_item(
+            "block_transfer_policy",
+            match self.state.block_transfer_policy() {
+                BlockTransferPolicy::Independent => "independent",
+                BlockTransferPolicy::CoupledPredecrement => "coupled_predecrement",
+            },
+        )?;
         Ok(dict.into_py(py))
     }
 
@@ -3551,7 +3618,15 @@ class Mem:
             let module =
                 PyModule::from_code_bound(py, code, "temp15.py", "temp15").expect("mem module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             cpu.state.set_reg(LlamaRegName::Temp(15), 0x12_3456);
             cpu.sync_temps_from_state();
 
@@ -3617,7 +3692,15 @@ class Mem:
                 ("short_internal", "internal memory length mismatch"),
             ] {
                 let mem = cls.call1((mode,)).expect("memory instance");
-                let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+                let mut cpu = LlamaCpu::new(
+                    mem.to_object(py),
+                    false,
+                    1.0,
+                    "independent",
+                    "strict",
+                    "replace",
+                )
+                .expect("cpu init");
                 cpu.mirror.sync_committed_host_write(0x12345, 0x11);
                 cpu.mirror
                     .sync_committed_host_write(INTERNAL_MEMORY_START + 0x42, 0x22);
@@ -3666,7 +3749,15 @@ class Mem:
             let module = PyModule::from_code_bound(py, code, "bridge_init_ok.py", "bridge_init_ok")
                 .expect("memory module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             cpu.mirror.sync_committed_host_write(0x12345, 0x11);
             cpu.memory_synced = false;
 
@@ -3725,7 +3816,15 @@ class Mem:
                 ("extra_item", "expected exactly 3"),
             ] {
                 let mem = cls.call1((mode,)).expect("memory instance");
-                let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+                let mut cpu = LlamaCpu::new(
+                    mem.to_object(py),
+                    false,
+                    1.0,
+                    "independent",
+                    "strict",
+                    "replace",
+                )
+                .expect("cpu init");
                 let err = cpu
                     .save_snapshot(py, "/__sc62015_missing__/snapshot.pcsnap")
                     .unwrap_err();
@@ -3783,7 +3882,15 @@ class Mem:
                 ("empty", "must contain at least one chip"),
             ] {
                 let mem = cls.call1((mode,)).expect("memory instance");
-                let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+                let mut cpu = LlamaCpu::new(
+                    mem.to_object(py),
+                    false,
+                    1.0,
+                    "independent",
+                    "strict",
+                    "replace",
+                )
+                .expect("cpu init");
 
                 let err = cpu
                     .save_snapshot(py, "/__sc62015_missing__/snapshot.pcsnap")
@@ -3809,7 +3916,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "keyboard_snapshot.py", "keyboard_snapshot")
                     .expect("memory module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             cpu.keyboard
                 .inject_matrix_event(0x11, false, &mut cpu.mirror, true);
             cpu.keyboard.handle_write(0xF0, 0x04, &mut cpu.mirror);
@@ -3897,7 +4012,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "scheduler_snapshot.py", "scheduler_snapshot")
                     .expect("memory module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             let timer = json!({
                 "enabled": true,
                 "mti_period": 101,
@@ -4091,7 +4214,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "runtime_snapshot.py", "runtime_snapshot")
                     .expect("memory module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             cpu.cycles = 7;
             cpu.memory_reads = 8;
             cpu.memory_writes = 9;
@@ -4176,7 +4307,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "mem_mod.py", "mem_mod").expect("mem module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
 
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
             // Seed WAIT at PC=0 and configure a fast timer tick.
             let mem_obj = cpu.memory.clone_ref(py);
             let bound_before = mem_obj.bind(py);
@@ -4243,7 +4382,15 @@ class Mem:
             let module = PyModule::from_code_bound(py, code, "wide_hooks.py", "wide_hooks")
                 .expect("memory module");
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).expect("cpu init");
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .expect("cpu init");
 
             cpu.state.set_reg(LlamaRegName::X, 0x02_3456);
             cpu.execute_instruction(py, 0).expect("wide KIO store");
@@ -4312,7 +4459,15 @@ class Mem:
             let module =
                 PyModule::from_code_bound(py, code, "read_error.py", "read_error").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
 
             let err = cpu.execute_instruction(py, 0).unwrap_err();
 
@@ -4340,7 +4495,15 @@ class Mem:
             let module =
                 PyModule::from_code_bound(py, code, "write_error.py", "write_error").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
 
             let err = cpu.execute_instruction(py, 0).unwrap_err();
 
@@ -4372,7 +4535,15 @@ class Mem:
 "#;
             let module = PyModule::from_code_bound(py, code, "lcd_error.py", "lcd_error").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.state.set_reg(LlamaRegName::A, 0x5A);
             cpu.memory_reads = 31;
             cpu.memory_writes = 37;
@@ -4419,7 +4590,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "reset_flush_error.py", "reset_flush_error")
                     .unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.mirror.write_external_byte(0x1234, 0xAA);
             cpu.prepare_immediate_machine_reset_transfer(py)
                 .expect("prepare recovery reset");
@@ -4475,7 +4654,15 @@ class Mem:
             )
             .unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.state.set_pc(0x012345);
             cpu.state.set_reg(LlamaRegName::S, 0x000240);
             cpu.state.set_reg(LlamaRegName::F, 0x03);
@@ -4585,7 +4772,15 @@ class Mem:
 
             for opcode in [0xFEu8, 0xFFu8] {
                 let mem = module.getattr("Mem").unwrap().call1((opcode,)).unwrap();
-                let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+                let mut cpu = LlamaCpu::new(
+                    mem.to_object(py),
+                    false,
+                    1.0,
+                    "independent",
+                    "strict",
+                    "replace",
+                )
+                .unwrap();
 
                 for expected_peeks in [vec![0u32], vec![0u32, 0u32]] {
                     let err = cpu.execute_instruction(py, 0).unwrap_err();
@@ -4641,7 +4836,15 @@ class Mem:
             )
             .unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
 
             let first = cpu.execute_instruction(py, 0).unwrap_err();
             assert_python_error_contains(first, "changed after silent preflight");
@@ -4719,7 +4922,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "prefetched_reset.py", "prefetched_reset")
                     .unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.state.set_pc(0x12345);
             cpu.state.halt();
 
@@ -4777,7 +4988,15 @@ class Mem:
                 PyModule::from_code_bound(py, code, "multibyte_error.py", "multibyte_error")
                     .unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.notify_host_write(INTERNAL_MEMORY_START + IMEM_KOL_OFFSET, 0x77)
                 .unwrap();
             cpu.state.set_reg(LlamaRegName::PC, 0);
@@ -4880,7 +5099,15 @@ class Mem:
 "#;
             let module = PyModule::from_code_bound(py, code, "key_error.py", "key_error").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             let timer_before = cpu.timer.clone();
 
             let err = cpu.keyboard_press_matrix_code(py, 0x11).unwrap_err();
@@ -4960,7 +5187,15 @@ class Mem:
 "#;
             let module = PyModule::from_code_bound(py, code, "on_key.py", "on_key").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
 
             assert!(cpu.keyboard_press_on_key(py).unwrap());
             assert_eq!(
@@ -5019,7 +5254,15 @@ class Mem:
 "#;
             let module = PyModule::from_code_bound(py, code, "host_sync.py", "host_sync").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
 
             cpu.notify_host_write(0x20, 0x42).unwrap();
             cpu.notify_host_write(0x200020, 0x99).unwrap();
@@ -5060,7 +5303,15 @@ class Mem:
 "#;
             let module = PyModule::from_code_bound(py, code, "rollback.py", "rollback").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.notify_host_write(INTERNAL_MEMORY_START + IMEM_KOL_OFFSET, 0x77)
                 .unwrap();
             cpu.state.set_reg(LlamaRegName::A, 0x12);
@@ -5113,7 +5364,15 @@ class Mem:
             let module =
                 PyModule::from_code_bound(py, code, "wait_error.py", "wait_error").unwrap();
             let mem = module.getattr("Mem").unwrap().call0().unwrap();
-            let mut cpu = LlamaCpu::new(mem.to_object(py), false, 1.0).unwrap();
+            let mut cpu = LlamaCpu::new(
+                mem.to_object(py),
+                false,
+                1.0,
+                "independent",
+                "strict",
+                "replace",
+            )
+            .unwrap();
             cpu.state.set_reg(LlamaRegName::I, 1);
 
             let err = cpu.execute_instruction(py, 0).unwrap_err();
