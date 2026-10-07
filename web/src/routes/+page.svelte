@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { BatterySession, ozBatteryIdentity } from '$lib/emulator/oz_battery_store';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
@@ -84,6 +85,18 @@
 	let romModelWasPersisted = false;
 	$: romModel = $romModelStore;
 
+	const ozAutosaveStore = createPersistedStore<boolean>('sc62015:oz-autosave', true, {
+		serialize: (value) => String(value),
+		deserialize: (value) => value !== 'false',
+	});
+	let ozBatterySession: BatterySession | null = null;
+	let ozBatteryGeneration = -1;
+	let ozBatteryStatus = 'Automatic saving is ready';
+	let ozBatteryError = '';
+	let ozBatteryBusy = false;
+	let ozBatterySave: Promise<boolean> | null = null;
+	let ozBatteryTimer: ReturnType<typeof setInterval> | null = null;
+	let requestedRom: { bytes: Uint8Array; model: RomModel; source: string | null } | null = null;
 	let ozProfile: OzProfile = 'provisional-v1';
 	let ozLoadedProfile: OzProfile = 'strict';
 	let ozReplayReport: any = null;
@@ -905,30 +918,194 @@
 		}
 	}
 
+	async function saveOzBattery(force = false): Promise<boolean> {
+		if (ozBatterySave) return ozBatterySave;
+		const session = ozBatterySession;
+		const generation = ozBatteryGeneration;
+		if (!session) return true;
+		if (workerHealth !== 'ready' || installedRom?.model !== 'oz-9600') return false;
+		if (
+			!force &&
+			(loadingRom || !romLoaded || stepBusy || functionRunnerBusy || controlPending || generation !== romLoadGeneration)
+		)
+			return true;
+		const save = (async () => {
+			try {
+				const bytes: Uint8Array = worker
+					? await workerCall('oz_retained_export', { generation })
+					: emulator.export_oz9600_retained();
+				if (session !== ozBatterySession) return false;
+				const result = await session.save(bytes);
+				if (session !== ozBatterySession) return false;
+				ozBatteryError = '';
+				ozBatteryStatus = `Saved at ${new Date(result.savedAt).toLocaleTimeString()}`;
+				return true;
+			} catch (error) {
+				if (session === ozBatterySession)
+					ozBatteryError = `Automatic save failed: ${String(error)}. Export a backup or retry.`;
+				return false;
+			}
+		})();
+		ozBatterySave = save;
+		try {
+			return await save;
+		} finally {
+			if (ozBatterySave === save) ozBatterySave = null;
+		}
+	}
+	async function closeOzBattery() {
+		if (!(await saveOzBattery(true)))
+			throw new Error('Current records could not be saved. Export a backup or retry before replacing the session.');
+		const session = ozBatterySession;
+		ozBatterySession = null;
+		await session?.close();
+	}
+	async function retryRequestedRom() {
+		if (!requestedRom || loadingRom) return;
+		const requested = requestedRom;
+		if (
+			romLoaded &&
+			!window.confirm('Recover saved records? Export a backup first if you want to keep current session changes.')
+		)
+			return;
+		const generation = ++romLoadGeneration;
+		loadingRom = true;
+		try {
+			await ensureWorker();
+			await installRom(requested.bytes.slice(), requested.model, requested.source, generation);
+		} catch (error) {
+			if (generation === romLoadGeneration) lastError = `Load failed: ${String(error)}`;
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
+		}
+	}
+	async function changeOzAutosave() {
+		if (ozBatteryBusy) return;
+		ozBatteryBusy = true;
+		try {
+			if (!$ozAutosaveStore) {
+				await closeOzBattery();
+				ozBatteryStatus = 'Automatic saving is off; export backups to keep records';
+				ozBatteryError = '';
+				if (!romLoaded) await retryRequestedRom();
+				return;
+			}
+			if (!romLoaded) {
+				await retryRequestedRom();
+				return;
+			}
+			try {
+				const generation = romLoadGeneration;
+				const bytes: Uint8Array = worker
+					? await workerCall('oz_retained_export', { generation })
+					: emulator.export_oz9600_retained();
+				const key = 'oz9600:' + Array.from(bytes.subarray(0, 72), (b) => b.toString(16).padStart(2, '0')).join('');
+				const session = await BatterySession.open(key);
+				if (generation !== romLoadGeneration || !$ozAutosaveStore || loadingRom) {
+					await session.close();
+					return;
+				}
+				if (
+					session.loaded &&
+					(session.loaded.image.length !== bytes.length || !session.loaded.image.every((b, i) => b === bytes[i]))
+				) {
+					await session.close();
+					throw new Error(
+						'Existing saved records are present. Reload to recover them before enabling automatic saving.',
+					);
+				}
+				ozBatterySession = session;
+				ozBatteryGeneration = generation;
+				await saveOzBattery(true);
+			} catch (error) {
+				ozBatteryError = String(error);
+			}
+		} catch (error) {
+			$ozAutosaveStore = true;
+			ozBatteryError = String(error);
+		} finally {
+			ozBatteryBusy = false;
+		}
+	}
+	function saveOzOnHidden() {
+		if (document.hidden) void saveOzBattery(true);
+	}
 	async function installRom(bytes: Uint8Array, model: RomModel, source: string | null, generation: number) {
 		const originalBytes = bytes.slice();
 		if (generation !== romLoadGeneration) return;
+		requestedRom = { bytes: originalBytes, model, source };
 		if (!(await stop())) throw new Error('Pause was not acknowledged; ROM was not replaced');
 		if (generation !== romLoadGeneration) return;
 		releaseAllPhysicalHeldCodes();
-		resetSymbols();
-		if (worker) {
-			await workerCall(
-				'load_rom',
-				{ bytes, romSource: source, model, generation, ...(model === 'oz-9600' ? { ozProfile } : {}) },
-				[bytes.buffer],
-			);
-		} else {
-			const emu = await ensureEmulator();
-			if (generation !== romLoadGeneration) return;
-			if (model === 'oz-9600') emu.load_oz9600(bytes, new Uint8Array(), ozProfile);
-			else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
-			else emu.load_rom(bytes);
-			fallbackInputs.clear();
-			resetFallbackSerial();
-			refreshAllNow();
+		try {
+			await closeOzBattery();
+		} catch (error) {
+			romLoaded = installedRom !== null;
+			throw error;
 		}
 		if (generation !== romLoadGeneration) return;
+		let candidateBattery: BatterySession | null = null;
+		if (model === 'oz-9600' && $ozAutosaveStore) {
+			try {
+				let key: string;
+				if (worker) {
+					const copy = originalBytes.slice();
+					key = await workerCall('oz_battery_identity', { bytes: copy }, [copy.buffer]);
+				} else {
+					await ensureEmulator();
+					key = ozBatteryIdentity(() => new wasm.Sc62015Emulator(), originalBytes);
+				}
+				candidateBattery = await BatterySession.open(key);
+			} catch (error) {
+				ozBatteryError = `Saved records were preserved: ${String(error)}`;
+				throw error;
+			}
+		}
+		if (generation !== romLoadGeneration) {
+			await candidateBattery?.close();
+			return;
+		}
+		const retained = candidateBattery?.loaded?.image.slice() ?? new Uint8Array();
+		resetSymbols();
+		try {
+			if (worker) {
+				await workerCall(
+					'load_rom',
+					{ bytes, romSource: source, model, generation, ...(model === 'oz-9600' ? { ozProfile, retained } : {}) },
+					[bytes.buffer],
+				);
+			} else {
+				const emu = await ensureEmulator();
+				if (generation !== romLoadGeneration) {
+					await candidateBattery?.close();
+					return;
+				}
+				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
+				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
+				else emu.load_rom(bytes);
+				fallbackInputs.clear();
+				resetFallbackSerial();
+				refreshAllNow();
+			}
+		} catch (error) {
+			await candidateBattery?.close();
+			if (model === 'oz-9600') ozBatteryError = `Saved records were preserved: ${String(error)}`;
+			throw error;
+		}
+		if (generation !== romLoadGeneration) {
+			await candidateBattery?.close();
+			return;
+		}
+		ozBatterySession = candidateBattery;
+		ozBatteryGeneration = generation;
+		if (model === 'oz-9600') {
+			ozBatteryError = '';
+			ozBatteryStatus = candidateBattery?.loaded
+				? 'Recovered saved records; paused'
+				: candidateBattery
+					? 'Automatic saving is on'
+					: 'Automatic saving is off; export backups to keep records';
+		}
 		if (model === 'oz-9600') ozLoadedProfile = ozProfile;
 		ozReplayReport = null;
 		ozReplayStatus = '';
@@ -1365,7 +1542,9 @@
 
 		if (
 			!window.confirm(
-				'Reset the machine and discard all session changes? This reloads the last successfully loaded ROM, not a saved session.',
+				installedRom.model === 'oz-9600' && $ozAutosaveStore
+					? 'Recover the OZ-9600 from its last automatic save? Changes since that save will be lost.'
+					: 'Reset the machine and discard all session changes? This reloads the last successfully loaded ROM, not a saved session.',
 			)
 		)
 			return;
@@ -1375,6 +1554,11 @@
 			lastError = 'Wait for the cancelled operation to finish before resetting.';
 			return;
 		}
+		// The user accepted recovery from the last durable image. A failed worker
+		// cannot supply a final snapshot; release ownership before replacing it.
+		const battery = ozBatterySession;
+		ozBatterySession = null;
+		await battery?.close();
 		const generation = ++romLoadGeneration;
 		workerRequests?.fail(new Error('Machine reset by user'));
 		audioPlayback.pause();
@@ -1440,6 +1624,7 @@
 			}
 			lastError = null;
 			ozReplayStatus = `Restored ${file.name}; fresh CPU`;
+			await saveOzBattery(true);
 		} catch (error) {
 			lastError = String(error);
 		}
@@ -1560,6 +1745,7 @@
 				await workerCall('stop');
 				running = false;
 				workerHealth = 'ready';
+				await saveOzBattery(true);
 				return true;
 			} catch (error) {
 				lastError = String(error);
@@ -1573,6 +1759,7 @@
 		running = false;
 		runLoopId += 1;
 		syncFallbackAudio();
+		await saveOzBattery(true);
 		return true;
 	}
 
@@ -1652,6 +1839,10 @@
 
 	onMount(() => {
 		mounted = true;
+		ozBatteryTimer = setInterval(() => {
+			void saveOzBattery();
+		}, 5000);
+		document.addEventListener('visibilitychange', saveOzOnHidden);
 		document.addEventListener('visibilitychange', onAudioVisibilityChange);
 		try {
 			const requestedModel = normalizeRomModel(new URL(window.location.href).searchParams.get('model'));
@@ -1684,6 +1875,11 @@
 	}
 
 	onDestroy(() => {
+		if (ozBatteryTimer) clearInterval(ozBatteryTimer);
+		document.removeEventListener('visibilitychange', saveOzOnHidden);
+		const battery = ozBatterySession;
+		ozBatterySession = null;
+		void battery?.close();
 		document.removeEventListener('visibilitychange', onAudioVisibilityChange);
 		audioPlayback.close();
 		uninstallPhysicalKeyboardHook();
@@ -1925,6 +2121,49 @@
 	{/if}
 	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
 	{#if romModel === 'oz-9600'}
+		<section class="serial-panel" aria-label="Saved records" data-testid="oz-saved-records">
+			<label
+				><input
+					type="checkbox"
+					bind:checked={$ozAutosaveStore}
+					on:change={changeOzAutosave}
+					data-testid="oz-autosave"
+					disabled={loadingRom || ozBatteryBusy || !!controlPending}
+				/> Automatically save to this browser</label
+			>
+			<p role="status" data-testid="oz-save-status">{ozBatteryStatus}</p>
+			{#if ozBatteryError}<p class="error" role="alert" data-testid="oz-save-error">{ozBatteryError}</p>{/if}
+			<button
+				on:click={() => saveOzBattery(true)}
+				data-testid="oz-save-now"
+				disabled={!romLoaded ||
+					!ozBatterySession ||
+					!!ozBatterySave ||
+					functionRunnerBusy ||
+					stepBusy ||
+					!!controlPending}>Save now</button
+			>
+			{#if !loadingRom && !ozBatteryBusy && (!romLoaded || ($ozAutosaveStore && !ozBatterySession))}<button
+					on:click={retryRequestedRom}
+					data-testid="oz-retry-load">Retry recovery</button
+				>{/if}
+			<label
+				>Import backup <input
+					type="file"
+					accept=".ozbat,.bin"
+					data-testid="oz-retained-file"
+					on:change={importOzRetained}
+					disabled={!romLoaded || functionRunnerBusy}
+				/></label
+			>
+			<button data-testid="oz-retained-export" on:click={exportOzRetained} disabled={!romLoaded || functionRunnerBusy}
+				>Export backup</button
+			>
+			<p class="hint">
+				Records recover with this firmware in the same browser profile. Keep an exported backup before clearing browser
+				data or changing computers. Sudden closure can lose changes since the last save.
+			</p>
+		</section>
 		<details class="serial-panel" data-testid="serial-panel">
 			<summary>Serial</summary>
 			<label
@@ -2080,18 +2319,6 @@
 					Loaded profile: {ozLoadedProfile}. v1 uses provisional power-on and timing assumptions. Load an OZROM01
 					bundle; Save RAM/RTC preserves organizer entries for later restoration.
 				</p>
-				<label
-					>Restore RAM/RTC <input
-						type="file"
-						accept=".ozbat,.bin"
-						data-testid="oz-retained-file"
-						on:change={importOzRetained}
-						disabled={!romLoaded || functionRunnerBusy}
-					/></label
-				>
-				<button data-testid="oz-retained-export" on:click={exportOzRetained} disabled={!romLoaded || functionRunnerBusy}
-					>Save RAM/RTC</button
-				>
 				<label
 					>Physical replay <input
 						type="file"
