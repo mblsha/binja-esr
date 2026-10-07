@@ -1,8 +1,10 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/oz9600/ui.py
 //! Native host frontend for the ordinary public OZ machine factory.
+mod retained_store;
 mod ui;
 use clap::Parser;
+use retained_store::{atomic_write, RetainedStore};
 use sc62015_core::{
     oz9600::{input::PhysicalReplay, ExecutionProfile},
     pacing::{ExecutionMode, Pacer},
@@ -44,6 +46,10 @@ struct Args {
     retained: Option<PathBuf>,
     #[arg(long)]
     retained_out: Option<PathBuf>,
+    /// Load existing RAM/RTC and atomically save every five seconds and on exit.
+    /// An invalid existing image rejects startup without overwriting it.
+    #[arg(long, conflicts_with = "retained")]
+    state: Option<PathBuf>,
     /// Verified OZ-707 ROM; explicit provisional logical cartridge view.
     #[arg(long, requires = "card_sram")]
     card_rom: Option<PathBuf>,
@@ -293,7 +299,12 @@ fn apply(rt: &mut CoreRuntime, events: Vec<Event>, record: &mut Recorder, at: u6
 }
 fn run(args: Args) -> Result<()> {
     let rom = fs::read(&args.rom)?;
-    let retained = args.retained.as_ref().map(fs::read).transpose()?;
+    let (mut state_store, retained) = if let Some(path) = &args.state {
+        let (store, saved) = RetainedStore::open(path)?;
+        (Some(store), saved)
+    } else {
+        (None, args.retained.as_ref().map(fs::read).transpose()?)
+    };
     let card = args
         .card_rom
         .as_ref()
@@ -333,13 +344,27 @@ fn run(args: Args) -> Result<()> {
     }
     let mut contacts = Contacts::new(u64::from(args.minimum_contact_boundaries));
     if !args.headless {
-        live(&args, &rom, &mut rt, &mut contacts, boundaries)?;
+        let result = live(
+            &args,
+            &rom,
+            &mut rt,
+            &mut contacts,
+            boundaries,
+            state_store.as_mut(),
+        );
+        // Also preserve backing when the window exits with a host error.
+        if let Some(store) = &mut state_store {
+            store.save(&rt.oz9600_retained_state()?)?;
+        }
+        result?;
+    } else if let Some(store) = &mut state_store {
+        store.save(&rt.oz9600_retained_state()?)?;
     }
     if let Some(path) = &args.capture_prefix {
         capture(&rt, path, &contacts, true)?;
     }
     if let Some(path) = &args.retained_out {
-        fs::write(path, rt.oz9600_retained_state()?)?;
+        atomic_write(path, &rt.oz9600_retained_state()?)?;
     }
     if let Some(path) = &args.card_sram_out {
         fs::write(path, rt.oz9600_card_sram()?.ok_or("OZ card unavailable")?)?;
@@ -369,11 +394,34 @@ struct NativeApp<'a> {
     started: Instant,
     next_frame: Instant,
     last_host_status: Instant,
+    state_store: Option<&'a mut RetainedStore>,
+    next_save: Instant,
+    save_error: Option<String>,
     fault: Option<String>,
     fatal: Option<String>,
     status: String,
 }
 impl NativeApp<'_> {
+    fn save_state(&mut self) {
+        if let Some(store) = &mut self.state_store {
+            match self
+                .rt
+                .oz9600_retained_state()
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| store.save(&bytes).map_err(|e| e.to_string()))
+            {
+                Ok(true) => {
+                    self.status = format!("Saved {}", store.path().display());
+                    self.save_error = None;
+                }
+                Ok(false) => {
+                    self.save_error = None;
+                }
+                Err(e) => self.save_error = Some(format!("Autosave failed: {e}")),
+            }
+        }
+        self.next_save = Instant::now() + Duration::from_secs(5);
+    }
     fn sync(&mut self) -> Result<()> {
         let mut keys = self
             .host_keys
@@ -435,6 +483,9 @@ impl NativeApp<'_> {
                 } else {
                     self.paused = !self.paused;
                     self.pacer.rebase();
+                    if self.paused {
+                        self.save_state();
+                    }
                 }
             }
             Action::Step | Action::Wait if self.fault.is_none() => {
@@ -453,6 +504,7 @@ impl NativeApp<'_> {
             }
             Action::Reset => {
                 self.cancel()?;
+                self.save_state();
                 let saved = self.rt.oz9600_retained_state()?;
                 let card = self
                     .rt
@@ -482,9 +534,13 @@ impl NativeApp<'_> {
                 self.status = "Reset preserved logical retained memory; paused".into();
             }
             Action::Save => {
+                self.save_state();
                 let mut saved = Vec::new();
+                if let Some(store) = &self.state_store {
+                    saved.push(store.path().display().to_string());
+                }
                 if let Some(path) = &self.args.retained_out {
-                    fs::write(path, self.rt.oz9600_retained_state()?)?;
+                    atomic_write(path, &self.rt.oz9600_retained_state()?)?;
                     saved.push(path.display().to_string());
                 }
                 if let Some(path) = &self.args.card_sram_out {
@@ -495,7 +551,7 @@ impl NativeApp<'_> {
                     saved.push(path.display().to_string());
                 }
                 self.status = if saved.is_empty() {
-                    "Set --retained-out or --card-sram-out to enable SAVE".into()
+                    "Set --state, --retained-out or --card-sram-out to enable SAVE".into()
                 } else {
                     format!("Saved {}", saved.join(", "))
                 };
@@ -544,6 +600,9 @@ impl NativeApp<'_> {
             self.pending = 0;
             self.cancel()?;
         }
+        if Instant::now() >= self.next_save {
+            self.save_state();
+        }
         let window = self.window.as_ref().ok_or("native window unavailable")?;
         let mode = if self.pending > 0 {
             "stepping"
@@ -552,7 +611,11 @@ impl NativeApp<'_> {
         } else {
             self.args.execution_mode.label()
         };
-        let status = self.fault.as_deref().unwrap_or(&self.status);
+        let status = self
+            .fault
+            .as_deref()
+            .or(self.save_error.as_deref())
+            .unwrap_or(&self.status);
         window.set_title(&format!(
             "OZ-9600 | {:?} | {mode} | {status}",
             self.args.profile
@@ -756,6 +819,7 @@ fn live(
     rt: &mut CoreRuntime,
     contacts: &mut Contacts,
     boundaries: u64,
+    state_store: Option<&mut RetainedStore>,
 ) -> Result<()> {
     let now = Instant::now();
     let mut app = NativeApp {
@@ -784,6 +848,9 @@ fn live(
         started: now,
         next_frame: now,
         last_host_status: now,
+        state_store,
+        next_save: now + Duration::from_secs(5),
+        save_error: None,
         fault: None,
         fatal: None,
         status: "F9 run/pause; F10 20K; F11 1M; F5 reset; F7 capture; F8 save".into(),
@@ -876,6 +943,16 @@ mod tests {
             ExecutionProfile::Strict
         );
         assert!(Args::try_parse_from(["window", "--rom", "bundle.ozrom", "--headless"]).is_err());
+        assert!(Args::try_parse_from([
+            "window",
+            "--rom",
+            "bundle.ozrom",
+            "--retained",
+            "import.ozbat",
+            "--state",
+            "automatic.ozbat"
+        ])
+        .is_err());
         assert!(Args::try_parse_from(["window", "--rom", "bundle.ozrom", "--scale", "3"]).is_err());
         assert!(Args::try_parse_from([
             "window",
