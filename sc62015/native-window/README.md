@@ -78,6 +78,17 @@ slices without throttling; `deterministic` requires explicit step budgets.
 boundaries of host assistance by default; `--minimum-contact-boundaries 0`
 selects immediate release. Focus loss cancels all contacts immediately.
 Ordered OS key/mouse events preserve short taps and modifier ownership.
+A fresh pointer press works after keyboard focus returns. A press held across
+focus loss or started in the background remains cancelled until release.
+Guest faults reject contacts, including keys held during later synchronization;
+visible host Save, Capture and Reset controls remain available. Run/step controls
+continue to require a healthy guest.
+
+![Headless ROM handler probe: 12 plus 3 equals 15](native-input.png)
+
+This image comes from genuine ROM execution through the native contact handlers.
+It qualifies the complete controller pixels and logical record-preserving fault
+recovery. A live OS focus/click recheck remains pending for this change.
 
 The **Sound off/on** button above the LCD enables playback of the shared core's
 48 kHz digital PCM through the default audio output device. `--sound` enables it

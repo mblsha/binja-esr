@@ -58,6 +58,38 @@ class CloseGate:
 
 
 @dataclass
+class PointerGate:
+    """Focus/press eligibility; callers cancel Contacts on focus loss or fault."""
+
+    active: bool = False
+    down: bool = False
+    blocked: bool = False
+
+    def focus(self, active: bool):
+        self.active = active
+        if not active:
+            self.blocked = self.down
+
+    def button(self, pressed: bool) -> bool:
+        self.down = pressed
+        if not pressed:
+            self.blocked = False
+            return False
+        if not self.active:
+            self.blocked = True
+            return False
+        return not self.blocked
+
+    def accepts_target(self, *, host_control: bool, fault: bool) -> bool:
+        return (
+            self.active
+            and self.down
+            and not self.blocked
+            and (host_control or not fault)
+        )
+
+
+@dataclass
 class HostKeys:
     """Keep both edges of a short host key tap; repeated down is not a new tap."""
 
