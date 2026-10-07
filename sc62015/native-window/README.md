@@ -16,6 +16,26 @@ sc62015/native-window/target/release/oz9600-window \
   --capture-prefix /tmp/oz-screen
 ```
 
+The native build requires Rust 1.89 or newer for
+[standard-library advisory file locking](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock).
+
+For automatic recovery and saving, add `--state /path/to/my-oz9600.ozbat`.
+It loads that file if present, then atomically saves RAM/RTC every five seconds,
+on Pause/Reset/Save and at exit. Start the same command again to recover records.
+A missing file starts empty; an invalid or unreadable existing file rejects
+startup without replacing it. Save failures appear in the window title and
+retry; use Save or quit for a final flush. The parent directory must exist.
+
+A sidecar `.lock` prevents another cooperating native process from using the
+same state path; the OS releases its advisory lock on exit or crash. The empty
+sidecar may remain. Atomic replacement keeps the previous complete image if a
+write fails, and Unix directory sync covers the rename. Sudden termination can
+lose changes since the last successful save. Card SRAM still uses the separate
+explicit card output. This is battery-backed RAM/RTC recovery, not a paused
+CPU/LCD checkpoint or a guarantee that an unsaved editor operation survives.
+
+`--retained` is an explicit import and cannot be combined with `--state`.
+`--retained-out` remains an explicit backup/export; it now uses atomic writes.
 Add `--retained /path/to/saved.ozbat` to recover saved records. For empty memory,
 touch initialization YES, wait for Welcome, and use ADJUST to set the clock.
 The default profile is **strict**; `provisional-v1` must be selected explicitly.
@@ -38,6 +58,11 @@ API as physical replays and the browser. It does not expose a guessed RTC B0
 cause or qualify the RTC's electrical ON-output route. Manual ON resumes CPU
 execution under the experimental RTC profile; previous-application restoration,
 automatic alarm wake and alarm dismissal remain unresolved.
+
+A stored Notebook record recovered through genuine ROM execution after restart
+(full controller bitmap in the host renderer):
+
+![Notebook record recovered from the state file](images/state-recovery.png)
 
 F9 runs/pauses, F10 steps 20,000 boundaries, F11 steps 1,000,000, F5 resets
 while preserving logical retained memory, F7 captures, and F8 saves. Host
