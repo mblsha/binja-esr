@@ -6,7 +6,7 @@ export type VirtualKey = { label: string; code: InputContact; testId: string };
 export type HostKeyboardMode = 'symbols' | 'keycaps';
 const maps: Record<string, Record<string, number>> = physicalMaps;
 export function physicalKey(model: RomModel, name: string): number | null {
-	return maps[model === 'iq-7000' ? 'iq-7000' : 'pc-e500'][name] ?? null;
+	return maps[model][name] ?? null;
 }
 
 // Keycap mapping, not a desktop text composer: device CAPS controls case and
@@ -69,10 +69,22 @@ const iqHost: Record<string, string> = {
 	PageUp: 'SEARCH_UP',
 	PageDown: 'SEARCH_DOWN',
 };
+const ozHost: Record<string, string> = {
+	F1: 'NEW ENTRY',
+	F2: 'EDIT',
+	F9: 'SHIFT',
+	F10: 'CAPS',
+	F11: '2ND',
+	Escape: 'CANCEL',
+	PageUp: 'PREV',
+	PageDown: 'NEXT',
+	NumpadEnter: 'ENTER',
+};
+const modelHost = (model: RomModel) => (model === 'iq-7000' ? iqHost : model === 'oz-9600' ? ozHost : pcHost);
 function hostName(code: string, model: RomModel): string | null {
 	if (/^Key[A-Z]$/.test(code)) return code.slice(3);
 	if (/^(Digit|Numpad)[0-9]$/.test(code)) return code.slice(-1);
-	return (model === 'iq-7000' ? iqHost : pcHost)[code] ?? commonHost[code] ?? null;
+	return modelHost(model)[code] ?? commonHost[code] ?? null;
 }
 
 export function matrixCodeForKeyEvent(event: KeyboardEvent, model: RomModel = 'pc-e500'): InputContact | null {
@@ -123,7 +135,7 @@ export function contactsForKeyEvent(event: KeyboardEvent, model: RomModel, mode:
 }
 
 export function hostKeyHints(contact: InputContact, model: RomModel, mode: HostKeyboardMode): string {
-	const hosts = { ...commonHost, ...(model === 'iq-7000' ? iqHost : pcHost) };
+	const hosts = { ...commonHost, ...modelHost(model) };
 	const names = Object.entries(hosts)
 		.filter(
 			([host, name]) =>
@@ -136,7 +148,7 @@ export function hostKeyHints(contact: InputContact, model: RomModel, mode: HostK
 	if (contact === 'on') names.push('F12');
 	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') if (physicalKey(model, c) === contact) names.push(c);
 	if (mode === 'symbols') {
-		for (const c of '+-*/=.,;()') if (physicalKey(model, c) === contact) names.push(c);
+		for (const c of '%+-*/=.,;()') if (physicalKey(model, c) === contact) names.push(c);
 		if (model === 'iq-7000' && contact === physicalKey(model, 'RETURN')) names.push('Shift+Enter');
 	}
 	return [...new Set(names)].join(' / ');
@@ -164,8 +176,14 @@ export function virtualKeysForModel(model: RomModel): VirtualKey[] {
 	const modeKeys =
 		model === 'iq-7000'
 			? ['CALENDAR', 'SCHEDULE', 'TEL', 'MEMO', 'CALC', 'CARD', 'WORLD', 'HOME']
-			: ['PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'BASIC', 'MENU'];
+			: model === 'oz-9600'
+				? ['NEW ENTRY', 'EDIT', 'PREV', 'NEXT', 'CANCEL', 'MENU', '2ND', 'WORD', 'SYMBOL', 'OFF']
+				: ['PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'BASIC', 'MENU'];
 	for (const name of modeKeys) add(name);
+	if (model === 'oz-9600') {
+		add('M+', 'M+', 'm-plus');
+		add('M-', 'M−', 'm-minus');
+	}
 	for (const [name, label] of [
 		['UP', '↑'],
 		['LEFT', '←'],
@@ -187,6 +205,7 @@ export function virtualKeysForModel(model: RomModel): VirtualKey[] {
 	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') add(c);
 	add('SPACE');
 	for (const [name, id] of [
+		['%', 'percent'],
 		['+', 'plus'],
 		['-', 'minus'],
 		['*', 'multiply'],

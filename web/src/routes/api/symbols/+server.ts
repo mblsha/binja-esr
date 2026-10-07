@@ -12,6 +12,8 @@ function reportRelativePath(model: RomModel): string {
 	switch (model) {
 		case 'iq-7000':
 			return 'rom-analysis/iq-7000/bnida.json';
+		case 'oz-9600':
+			return 'rom-analysis/oz-9600/bnida.json';
 		case 'pc-e500':
 			return 'rom-analysis/pc-e500/en/bnida.json';
 	}
@@ -38,12 +40,21 @@ function walkParents(start: string, maxDepth = 6): string[] {
 
 function symbolCandidates(model: RomModel): Candidate[] {
 	const env =
-		model === 'pc-e500' ? process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH : process.env.IQ7000_BNIDA_ADDRESS_REPORT_PATH;
+		model === 'oz-9600'
+			? process.env.OZ9600_BNIDA_ADDRESS_REPORT_PATH
+			: model === 'pc-e500'
+				? process.env.PCE500_BNIDA_ADDRESS_REPORT_PATH
+				: process.env.IQ7000_BNIDA_ADDRESS_REPORT_PATH;
 	const candidates: Candidate[] = [];
 	if (env) {
 		candidates.push({
 			path: env,
-			source: model === 'pc-e500' ? 'env:PCE500_BNIDA_ADDRESS_REPORT_PATH' : 'env:IQ7000_BNIDA_ADDRESS_REPORT_PATH',
+			source:
+				model === 'oz-9600'
+					? 'env:OZ9600_BNIDA_ADDRESS_REPORT_PATH'
+					: model === 'pc-e500'
+						? 'env:PCE500_BNIDA_ADDRESS_REPORT_PATH'
+						: 'env:IQ7000_BNIDA_ADDRESS_REPORT_PATH',
 		});
 	}
 

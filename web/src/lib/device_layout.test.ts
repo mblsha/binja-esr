@@ -3,7 +3,7 @@ import { deviceLayout, rectStyle } from './device_layout';
 import { physicalKey, virtualKeysForModel } from './keymap';
 
 describe('reference-based device layouts', () => {
-	for (const model of ['pc-e500', 'iq-7000'] as const) {
+	for (const model of ['pc-e500', 'iq-7000', 'oz-9600'] as const) {
 		it(`${model}: preserves every supported key exactly once and never guesses an unmapped contact`, () => {
 			const layout = deviceLayout(model);
 			expect(layout.provenance).toBe('photo-reference-approximation');
@@ -27,7 +27,7 @@ describe('reference-based device layouts', () => {
 			for (const key of virtualKeysForModel(model)) {
 				expect(layout.keys.filter((candidate) => candidate.testId === key.testId)).toHaveLength(1);
 			}
-			expect(layout.keys.find((key) => key.id === 'OFF')?.code).toBeNull();
+			expect(layout.keys.find((key) => key.id === 'OFF')?.code).toBe(model === 'oz-9600' ? 1 : null);
 		});
 	}
 	it('keeps the original alphabet groupings and IQ screen left of keyboard', () => {
