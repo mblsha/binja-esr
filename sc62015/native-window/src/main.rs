@@ -482,6 +482,16 @@ impl NativeApp<'_> {
         self.refresh_audio()
     }
     fn sync(&mut self) -> Result<()> {
+        if self.fault.is_some() {
+            self.pointer = None;
+            self.lcd_drag = false;
+            return apply(
+                self.rt,
+                self.contacts.cancel(),
+                &mut self.record,
+                self.boundaries,
+            );
+        }
         let mut keys = self
             .host_keys
             .down
@@ -754,15 +764,43 @@ impl NativeApp<'_> {
         }
         Ok(())
     }
+    fn focus_changed(&mut self, active: bool) -> Result<()> {
+        self.active = active;
+        if !active {
+            self.cancel()?;
+            self.blocked_mouse = self.mouse;
+        }
+        Ok(())
+    }
+    fn mouse_changed(&mut self, state: ElementState) -> Result<()> {
+        self.mouse = state == ElementState::Pressed;
+        if !self.mouse {
+            self.blocked_mouse = false;
+            self.pointer = None;
+            self.lcd_drag = false;
+            self.sync()?;
+        } else if !self.active {
+            // A press that starts in the background must not resume on focus.
+            self.blocked_mouse = true;
+        } else if !self.blocked_mouse {
+            let target = self.position.and_then(|(x, y)| ui::hit(x, y));
+            if let Some(Target::Control(a)) = target {
+                self.pointer = None;
+                self.lcd_drag = false;
+                self.action(a)?;
+            } else if self.fault.is_none() {
+                self.pointer = target;
+                self.lcd_drag = self.position.is_some_and(|(x, y)| ui::LCD.contains(x, y));
+                self.sync()?;
+            }
+        }
+        Ok(())
+    }
     fn event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) -> Result<()> {
         match event {
             WindowEvent::CloseRequested => self.close(event_loop),
             WindowEvent::Focused(active) => {
-                self.active = active;
-                if !active {
-                    self.cancel()?;
-                    self.blocked_mouse = true;
-                }
+                self.focus_changed(active)?;
                 self.refresh_audio()?;
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -799,22 +837,7 @@ impl NativeApp<'_> {
                 button: MouseButton::Left,
                 ..
             } => {
-                self.mouse = state == ElementState::Pressed;
-                if !self.mouse {
-                    self.blocked_mouse = false;
-                    self.pointer = None;
-                    self.lcd_drag = false;
-                    self.sync()?;
-                } else if self.active && !self.blocked_mouse && self.fault.is_none() {
-                    self.pointer = self.position.and_then(|(x, y)| ui::hit(x, y));
-                    self.lcd_drag = self.position.is_some_and(|(x, y)| ui::LCD.contains(x, y));
-                    if let Some(Target::Control(a)) = self.pointer {
-                        self.pointer = None;
-                        self.action(a)?;
-                    } else {
-                        self.sync()?;
-                    }
-                }
+                self.mouse_changed(state)?;
             }
             WindowEvent::KeyboardInput {
                 event,
@@ -974,6 +997,139 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn component_runtime() -> CoreRuntime {
+        let mut fixed = vec![0; 0x20000];
+        fixed[0x1fffd..].copy_from_slice(&[0, 0, 14]);
+        sc62015_core::oz9600::configure_hardware(&fixed, sc62015_core::oz9600::Hardware::default())
+            .unwrap()
+    }
+    fn component_app<'a>(
+        args: &'a Args,
+        rt: &'a mut CoreRuntime,
+        contacts: &'a mut Contacts,
+    ) -> NativeApp<'a> {
+        let now = Instant::now();
+        NativeApp {
+            args,
+            rom: &[],
+            rt,
+            contacts,
+            window: None,
+            surface: None,
+            boundaries: 0,
+            record: Recorder {
+                steps: Vec::new(),
+                last: 0,
+                enabled: true,
+            },
+            host_keys: HostKeys::default(),
+            pointer: None,
+            position: None,
+            lcd_drag: false,
+            mouse: false,
+            blocked_mouse: false,
+            active: true,
+            paused: false,
+            pacer: Pacer::for_model(DeviceModel::Oz9600, ExecutionMode::Interactive),
+            pending: 0,
+            started: now,
+            next_frame: now,
+            last_host_status: now,
+            fault: None,
+            fatal: None,
+            status: String::new(),
+        }
+    }
+    fn point_to(app: &mut NativeApp<'_>, target: Target) {
+        let zone = ui::zones()
+            .into_iter()
+            .find(|z| z.target == target)
+            .unwrap();
+        app.position = Some((zone.rect.x + 1, zone.rect.y + 1));
+    }
+    #[test]
+    fn focus_without_a_held_pointer_accepts_the_first_fresh_press() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut rt = component_runtime();
+        let mut contacts = Contacts::new(0);
+        let mut app = component_app(&args, &mut rt, &mut contacts);
+        let key = matrix_key(DeviceModel::Oz9600, "1").unwrap();
+        point_to(&mut app, Target::Matrix(key));
+        app.focus_changed(false).unwrap();
+        app.focus_changed(true).unwrap(); // Keyboard activation, no pointer held.
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        assert_eq!(app.contacts.pressed_keys(), BTreeSet::from([key]));
+        app.mouse_changed(ElementState::Released).unwrap();
+        assert!(app.contacts.pressed_keys().is_empty());
+        assert_eq!(app.rt.instruction_count(), 0);
+    }
+    #[test]
+    fn held_or_background_started_pointer_stays_cancelled_until_release() {
+        for held in [false, true] {
+            let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+            let mut rt = component_runtime();
+            let mut contacts = Contacts::new(40_000);
+            let mut app = component_app(&args, &mut rt, &mut contacts);
+            let key = matrix_key(DeviceModel::Oz9600, "1").unwrap();
+            point_to(&mut app, Target::Matrix(key));
+            if held {
+                app.mouse_changed(ElementState::Pressed).unwrap();
+            }
+            app.focus_changed(false).unwrap();
+            assert!(app.contacts.pressed_keys().is_empty());
+            app.mouse_changed(ElementState::Pressed).unwrap(); // Background down.
+            app.focus_changed(true).unwrap();
+            app.mouse_changed(ElementState::Pressed).unwrap(); // Same held press.
+            assert!(app.contacts.pressed_keys().is_empty());
+            app.mouse_changed(ElementState::Released).unwrap();
+            app.mouse_changed(ElementState::Pressed).unwrap();
+            assert_eq!(app.contacts.pressed_keys(), BTreeSet::from([key]));
+            app.focus_changed(false).unwrap();
+            assert!(app.contacts.pressed_keys().is_empty()); // Cancel assistance immediately.
+            assert_eq!(app.rt.instruction_count(), 0);
+        }
+    }
+    #[test]
+    fn fault_does_not_reapply_a_held_guest_key_on_pointer_release() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut rt = component_runtime();
+        let mut contacts = Contacts::new(0);
+        let mut app = component_app(&args, &mut rt, &mut contacts);
+        app.fault = Some("guest fault".into());
+        app.host_keys.events(vec![(Key::Digit1, true)]);
+        app.mouse_changed(ElementState::Released).unwrap();
+        assert!(app.contacts.pressed_keys().is_empty());
+        assert!(app.record.steps.is_empty());
+        assert_eq!(app.rt.instruction_count(), 0);
+    }
+    #[test]
+    fn fault_blocks_guest_contacts_but_keeps_visible_host_controls() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut rt = component_runtime();
+        let mut contacts = Contacts::new(0);
+        let mut app = component_app(&args, &mut rt, &mut contacts);
+        app.fault = Some("guest fault".into());
+        app.host_keys.events(vec![(Key::Digit1, true)]);
+        app.sync().unwrap(); // A mouse release/tick must not reapply keys held during a fault.
+        assert!(app.contacts.pressed_keys().is_empty());
+        point_to(
+            &mut app,
+            Target::Matrix(matrix_key(DeviceModel::Oz9600, "1").unwrap()),
+        );
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        app.mouse_changed(ElementState::Released).unwrap();
+        assert!(app.contacts.pressed_keys().is_empty());
+        point_to(&mut app, Target::Control(Action::Capture));
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        assert_eq!(app.status, "Set --capture-prefix to enable CAPTURE");
+        assert_eq!(app.fault.as_deref(), Some("guest fault"));
+        point_to(&mut app, Target::Control(Action::Wait));
+        app.mouse_changed(ElementState::Released).unwrap();
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        assert_eq!(app.pending, 0); // Diagnostic stepping remains disabled during a fault.
+        assert_eq!(app.rt.instruction_count(), 0);
+    }
     #[test]
     fn queued_redraw_and_controls_cannot_run_after_trace_is_closed() {
         let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
