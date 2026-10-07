@@ -79,6 +79,30 @@ boundaries of host assistance by default; `--minimum-contact-boundaries 0`
 selects immediate release. Focus loss cancels all contacts immediately.
 Ordered OS key/mouse events preserve short taps and modifier ownership.
 
+The **Sound off/on** button above the LCD enables playback of the shared core's
+48 kHz digital PCM through the default audio output device. `--sound` enables it
+at launch. Sound is muted by default and plays during foreground interactive
+execution. Pause, stepping, focus loss, reset and mute clear queued audio;
+replay, headless and turbo execution stay silent. Mute leaves guest execution
+running. Device errors report “Sound unavailable” and leave the emulator usable.
+
+Playback keeps the newest 100 ms of source samples, converts to the device's
+rate and applies a 40 Hz host DC blocker. It supports float32, signed16 and
+unsigned16 output, with silence on underrun. These are host playback choices;
+physical buzzer pitch, volume and clock accuracy remain unqualified. The Python
+queue reference is `pce500/oz9600/native_audio.py`.
+
+Audio uses [CPAL](https://docs.rs/cpal/0.18.2/cpal/). Linux builds need the ALSA
+development package (for example, `sudo apt-get install libasound2-dev`). Add
+`--no-default-features` to the Cargo command to build without an audio backend;
+the Sound control then reports its unavailability without stopping execution.
+
+![Live ROM calculator with native sound enabled](native-audio.png)
+
+The pictured session used ordinary keyboard contacts. Its accepted input trace
+reproduced the final full guest state, controller bitmap and retained RAM/RTC
+exactly; the host device consumed nonzero PCM frames.
+
 `--replay` applies validated physical inputs before opening the window.
 `--headless --replay PATH` uses the same factory without an OS window.
 `--replay-report` exports the ordinary CPU/peripheral observations. Captures

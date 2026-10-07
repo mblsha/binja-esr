@@ -11,6 +11,7 @@ from pce500.display.lcd_frame import LcdFrame
 
 WIDTH, HEIGHT = 526, 530
 LCD = (162, 36, 336, 240)
+SOUND = (414, 7, 100, 22)
 PAPER, INK = 0xD8DFBC, 0x263325
 PANEL = (
     ("CAL", 61, 141),
@@ -31,11 +32,29 @@ PANEL = (
 )
 
 
+def sound_artwork(enabled: bool) -> tuple[str, int]:
+    """Host-only sound label/fill; the control does not drive a guest contact."""
+    return ("SOUND ON", 0xB2C9A5) if enabled else ("SOUND OFF", 0x94ACBB)
+
+
 def window_point(x: float, y: float, width: int, height: int) -> tuple[int, int] | None:
     """Invert physical surface scaling without assuming a platform pixel ratio."""
     if width <= 0 or height <= 0 or not (0 <= x < width and 0 <= y < height):
         return None
     return int(x * WIDTH / width), int(y * HEIGHT / height)
+
+
+@dataclass
+class CloseGate:
+    """Once close begins, queued redraws and controls cannot run a new epoch."""
+
+    closing: bool = False
+
+    def begin_close(self) -> bool:
+        if self.closing:
+            return False
+        self.closing = True
+        return True
 
 
 @dataclass
