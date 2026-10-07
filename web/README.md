@@ -56,14 +56,41 @@ callbacks. Arithmetic, transfer, IRQ and advancing RTC policies are provisional.
 Strict and historical experiments remain available for hardware investigation.
 The selected profile applies on the next load; the loaded profile is displayed
 separately. These choices do not establish physical hardware or full-mode
-completion. Save RAM/RTC pauses and exports the organizer backing; Load RAM/RTC
-starts a fresh CPU. More options → Reset machine preserves it and pauses.
-Resume and open an application after either operation. Export explicitly
-before closing or reloading the page; page reload is not automatic persistence.
+completion. Export backup pauses and exports the organizer backing; Import
+backup starts a fresh CPU. More options → Reset machine preserves it and pauses.
+Resume and open an application after either operation.
 Native and browser `.ozbat` files interoperate and validate ROM identities and
 payload checksums. A saved Schedule opened through Calendar can show blank
 text; ENTER to Index and ENTER back to View redraws the record. Clock's popup
 can disappear after additional nominal idle execution.
+
+### Automatic browser recovery
+
+![Browser saving and recovery controls](images/oz9600-saved-records.png)
+
+Automatic saving is enabled by default in the visible **Saved records** panel.
+The same firmware in the same browser profile recovers its RAM/RTC on the next
+load, with a fresh paused CPU. Resume and open an application to view records.
+The image contains RAM/RTC, not a running CPU or LCD snapshot. Different ROM
+identities have separate saves; filenames do not select or replace records.
+
+Saving uses committed IndexedDB transactions every five seconds and on Pause,
+backup import and page hiding. Save now commits immediately. A second tab for
+the same firmware is blocked until the owner closes. A corrupt save blocks
+startup and remains untouched; a failed write preserves the previous save and
+reports an error. A confirmed reset after a worker failure recovers the last
+committed image. Failed session closure retains the live session for retry or
+backup export. Enabling saving over different existing records requires an
+explicit recovery reload before those records can be replaced.
+
+Keep exported `.ozbat` backups before clearing browser data or changing
+computers. Browser storage can be cleared or evicted, and sudden tab/process
+termination can lose changes since the last completed save. This is not an
+exit-time durability guarantee. Storage needs IndexedDB and Web Locks on a
+secure origin (HTTPS or localhost); unsupported or restricted profiles report
+an error. Disable automatic saving to use explicit backups in a volatile
+session. Imported images still require matching ROM identity and checksum.
+Card SRAM backups remain separate.
 
 ### OZ serial byte peer
 
