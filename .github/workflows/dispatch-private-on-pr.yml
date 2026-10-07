@@ -1,7 +1,7 @@
 name: Private ROM tests (PRs, non-forks)
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ master, codex/oz9600-core ]
     types: [opened, reopened, synchronize]
 
 jobs:

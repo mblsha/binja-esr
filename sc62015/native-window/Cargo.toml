@@ -1,0 +1,19 @@
+[package]
+name = "oz9600-window"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Native bitmap and physical-input frontend for the shared OZ-9600 machine."
+
+[dependencies]
+sc62015-core = { path = "../core", default-features = false, features = ["cli", "oz9600", "snapshot"] }
+winit = "0.30"
+softbuffer = "0.4"
+font8x8 = "0.3"
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

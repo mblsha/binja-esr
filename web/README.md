@@ -38,6 +38,48 @@ npm run test
 npm run wasm:test
 ```
 
+## OZ-9600 v1
+
+Advanced model selection accepts a verified `OZROM01` bundle and explicit
+OZ execution profile. The native 336 × 240 canvas contains only controller
+pixels; the left mode labels are fixed artwork and supply tablet input.
+Save/Restore RAM/RTC uses logical backing for a fresh CPU, distinct from a
+running snapshot. Physical crop, RAM aliases, CPU reset/SFR and timing remain
+unqualified.
+
+The browser defaults to **provisional-v1** for OZ-9600. Open
+`/?model=oz-9600`, load the verified bundle if it was not configured on the
+server, Resume, touch initialization YES, and wait for Welcome. Use ADJUST to
+set the clock/date. This profile selects initial CPU BP=D0 for all-zero SRAM
+and BP=00 for populated saved SRAM before execution; the ROM installs its own
+callbacks. Arithmetic, transfer, IRQ and advancing RTC policies are provisional.
+Strict and historical experiments remain available for hardware investigation.
+The selected profile applies on the next load; the loaded profile is displayed
+separately. These choices do not establish physical hardware or full-mode
+completion. Save RAM/RTC pauses and exports the organizer backing; Load RAM/RTC
+starts a fresh CPU. More options → Reset machine preserves it and pauses.
+Resume and open an application after either operation. Export explicitly
+before closing or reloading the page; page reload is not automatic persistence.
+Native and browser `.ozbat` files interoperate and validate ROM identities and
+payload checksums. A saved Schedule opened through Calendar can show blank
+text; ENTER to Index and ENTER back to View redraws the record. Clock's popup
+can disappear after additional nominal idle execution.
+
+### OZ serial byte peer
+
+After opening Terminal through Peripherals and choosing Connect on the device,
+use the Serial panel to send UTF-8 text or whitespace-separated hex byte pairs.
+Choose None/CR/LF/CR+LF. Resume or Step advances the receiver while paused.
+Save raw bytes preserves the outgoing bytes, including NUL and controls; the
+preview escapes them. Clear display clears only the host capture. Reset or ROM
+replacement starts a new capture epoch. Invalid, disabled, full or oversized
+sends are rejected before queuing any bytes.
+
+Input is limited to 4096 bytes per send, delivery backlog to 16384 bytes, and
+raw capture to the latest 4 MiB, with explicit loss counters. Output credit is
+independent of LCD/audio updates. This is an emulated host peer; physical serial
+connection, PC Link protocol, handshake and timing qualification remain open.
+
 ## IQ-7000 MEMO typing benchmark
 
 From `public-src/web`, with your own ROM available:

@@ -9,6 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
 mod function_call;
+mod oz9600;
 
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
@@ -305,6 +306,7 @@ pub struct Sc62015Emulator {
     model: DeviceModel,
     text_decoder: Option<DeviceTextDecoder>,
     iq7000_rtc_seed: Option<String>,
+    oz9600_profile: sc62015_core::oz9600::ExecutionProfile,
     call_session: Option<function_call::FunctionCallSession>,
     next_call_id: u32,
     last_lcd_source: Option<LcdSource>,
@@ -358,6 +360,7 @@ impl Sc62015Emulator {
             model: DeviceModel::DEFAULT,
             text_decoder: None,
             iq7000_rtc_seed: None,
+            oz9600_profile: Default::default(),
             call_session: None,
             next_call_id: 0,
             last_lcd_source: None,
@@ -400,10 +403,10 @@ impl Sc62015Emulator {
         serde_wasm_bindgen::to_value(&Status {
             mode: self.pacer.mode(),
             nominal_timebase_hz: self.pacer.timebase_hz(),
-            calibration: if self.model == DeviceModel::Iq7000 {
-                "IQ-7000 PC compatibility fallback; not hardware calibrated"
-            } else {
-                "PC-E500 compatibility timebase; not hardware calibrated"
+            calibration: match self.model {
+                DeviceModel::Iq7000 => "IQ-7000 PC compatibility fallback; not hardware calibrated",
+                DeviceModel::Oz9600 => "OZ-9600 uncalibrated timing experiment",
+                _ => "PC-E500 compatibility timebase; not hardware calibrated",
             },
             dropped_host_ns: self.pacer.dropped_host_ns(),
             instructions_retired: self.runtime.instruction_count(),
@@ -507,23 +510,16 @@ impl Sc62015Emulator {
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) -> Result<(), JsValue> {
-        self.require_no_active_call()?;
-        if rom.is_empty() {
-            return Err(JsValue::from_str("ROM is empty"));
-        }
-        self.rom_image = rom.to_vec();
-        self.text_decoder = self.model.text_decoder(&self.rom_image);
-        self.reset()
+        self.install_rom(rom, self.model, Default::default(), &[])
     }
 
     pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
-        self.require_no_active_call()?;
-        self.model = DeviceModel::parse(model).ok_or_else(|| {
+        let model = DeviceModel::parse(model).ok_or_else(|| {
             JsValue::from_str(&format!(
-                "unknown model '{model}' (expected: iq-7000|pc-e500)"
+                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600)"
             ))
         })?;
-        self.load_rom(rom)
+        self.install_rom(rom, model, Default::default(), &[])
     }
 
     pub fn set_iq7000_rtc_yyyymmddhhmm(&mut self, raw: &str) -> Result<(), JsValue> {
@@ -550,30 +546,23 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// OZ reset starts a fresh CPU with the current logical RAM/RTC backing.
+    /// Other models keep their existing ROM-reload reset behavior.
     pub fn reset(&mut self) -> Result<(), JsValue> {
         self.require_no_active_call()?;
-        if self.rom_image.is_empty() {
-            return Err(JsValue::from_str("ROM not loaded"));
-        }
-        let rom = self.rom_image.clone();
-        self.runtime = CoreRuntime::for_model(self.model, &rom)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        self.last_lcd_source = None;
-        self.pacer = Pacer::for_model(self.model, self.pacer.mode());
-        if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
+        let retained = if self.model == DeviceModel::Oz9600 {
             self.runtime
-                .set_iq7000_clock_seed_yyyymmddhhmm(seed)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        }
-        self.runtime
-            .power_on_reset()
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        if let Some(seed) = self.iq7000_rtc_seed.as_deref() {
-            self.runtime
-                .set_iq7000_clock_seed_yyyymmddhhmm(seed)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        }
-        Ok(())
+                .oz9600_retained_state()
+                .map_err(|e| JsValue::from_str(&e.to_string()))?
+        } else {
+            Vec::new()
+        };
+        self.install_rom(
+            &self.rom_image.clone(),
+            self.model,
+            self.oz9600_profile,
+            &retained,
+        )
     }
 
     pub fn step_scheduler_boundaries(&mut self, boundaries: u32) -> Result<(), JsValue> {
@@ -764,6 +753,20 @@ impl Sc62015Emulator {
 
     pub fn sio_queue_rx_byte(&mut self, value: u8) {
         self.runtime.queue_sio_receive_byte(value);
+    }
+
+    /// Read-only register-UART transport/timing report. The legacy serial
+    /// helper has no such device model and returns null.
+    pub fn sio_uart_report(&self) -> Result<JsValue, JsValue> {
+        let report = self
+            .runtime
+            .sio
+            .as_ref()
+            .and_then(|sio| sio.uart())
+            .map(|uart| uart.report());
+        report
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn sio_rx_idle(&self) -> bool {
@@ -968,19 +971,8 @@ impl Sc62015Emulator {
 
     pub fn lcd_geometry(&self) -> Result<JsValue, JsValue> {
         let (kind, cols, rows) = if let Some(lcd) = self.runtime.lcd.as_deref() {
-            match lcd.kind() {
-                LcdKind::Iq7000Vram => (LcdKind::Iq7000Vram, 96u32, 64u32),
-                LcdKind::Hd61202 => (
-                    LcdKind::Hd61202,
-                    LCD_DISPLAY_COLS as u32,
-                    LCD_DISPLAY_ROWS as u32,
-                ),
-                LcdKind::Unknown => (
-                    LcdKind::Unknown,
-                    LCD_DISPLAY_COLS as u32,
-                    LCD_DISPLAY_ROWS as u32,
-                ),
-            }
+            let (cols, rows) = lcd.matrix_frame().geometry();
+            (lcd.kind(), cols as u32, rows as u32)
         } else {
             (
                 LcdKind::Unknown,
@@ -993,7 +985,12 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
-    pub fn lcd_chip_pixels(&self) -> Uint8Array {
+    pub fn lcd_chip_pixels(&self) -> Result<Uint8Array, JsValue> {
+        if self.model == DeviceModel::Oz9600 {
+            return Err(JsValue::from_str(
+                "OZ LCD has no HD61202 chip view; use lcd_capture",
+            ));
+        }
         let rows = LCD_CHIP_ROWS;
         let cols = LCD_CHIP_COLS;
         let mut flat = vec![0u8; rows * cols * 2];
@@ -1007,7 +1004,7 @@ impl Sc62015Emulator {
                 }
             }
         }
-        Uint8Array::from(flat.as_slice())
+        Ok(Uint8Array::from(flat.as_slice()))
     }
 
     pub fn lcd_text(&self) -> Result<JsValue, JsValue> {
@@ -1024,6 +1021,11 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
+        if self.model == DeviceModel::Oz9600 {
+            return Err(JsValue::from_str(
+                "OZ typed LCD write traces are not available",
+            ));
+        }
         let Some(lcd) = self.runtime.lcd.as_deref() else {
             return serde_wasm_bindgen::to_value(
                 &Vec::<Vec<sc62015_core::lcd::LcdWriteTrace>>::new(),
@@ -1091,6 +1093,30 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     const PF1_CODE: u8 = 0x56;
+
+    #[wasm_bindgen_test]
+    fn rejected_oz_replacement_preserves_current_model_ram_and_cpu() {
+        let mut emulator = Sc62015Emulator::new();
+        emulator
+            .load_rom_with_model(
+                include_bytes!("../testdata/pf1_demo_rom_window.rom"),
+                "pc-e500",
+            )
+            .unwrap();
+        emulator.set_reg("BA", 0x1234).unwrap();
+        emulator.write_u8(0xb2345, 0x56).unwrap();
+        assert_eq!(emulator.read_u8(0xb2345), 0x56);
+        for rom in [b"".as_slice(), b"OZROM01 invalid".as_slice()] {
+            assert!(emulator.load_rom_with_model(rom, "oz-9600").is_err());
+            assert_eq!(emulator.device_model(), "pc-e500");
+            assert_eq!(emulator.get_reg("BA"), 0x1234);
+            assert_eq!(emulator.read_u8(0xb2345), 0x56);
+        }
+        assert!(emulator.load_oz9600(b"invalid", &[], "implicit").is_err());
+        assert!(emulator.restore_oz9600_retained(b"invalid").is_err());
+        assert_eq!(emulator.device_model(), "pc-e500");
+        assert_eq!(emulator.get_reg("BA"), 0x1234);
+    }
 
     fn capture_pixels(value: &JsValue) -> Uint8Array {
         js_sys::Reflect::get(value, &JsValue::from_str("pixels"))

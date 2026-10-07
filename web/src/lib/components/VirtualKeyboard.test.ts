@@ -50,6 +50,27 @@ describe('VirtualKeyboard', () => {
 		expect(onRelease).toHaveBeenCalledWith(0x56, expect.any(String), false);
 	});
 
+	it('exposes OZ Move and Expand/Collapse through their physical calculator contacts', async () => {
+		const onPress = vi.fn();
+		const onRelease = vi.fn();
+		const { getByRole } = render(VirtualKeyboard, {
+			model: 'oz-9600',
+			layout: deviceLayout('oz-9600'),
+			onPress,
+			onRelease,
+		});
+		for (const [label, contact] of [
+			['M+', 33],
+			['M−', 41],
+		] as const) {
+			const button = getByRole('button', { name: label });
+			await fireEvent.pointerDown(button);
+			await fireEvent.pointerUp(window);
+			expect(onPress).toHaveBeenLastCalledWith(contact, expect.any(String));
+			expect(onRelease).toHaveBeenLastCalledWith(contact, expect.any(String), false);
+		}
+	});
+
 	it('uses the same matrix codes as keymap for arrows', async () => {
 		const onPress = vi.fn();
 		const onRelease = vi.fn();

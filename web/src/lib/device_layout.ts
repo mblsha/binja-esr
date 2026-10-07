@@ -63,6 +63,55 @@ export function deviceLayout(model: RomModel): DeviceLayout {
 			tone,
 		});
 	};
+
+	if (model === 'oz-9600') {
+		// The supplied unit photo places the calculator cluster beside the
+		// navigation keys. Move and Exp/Col are the ROM's 2nd functions of M+/M−.
+		add('ON', 52, 520, 60, 27);
+		add('OFF', 52, 568, 60, 27);
+		['%', '+', '-', '=', 'MENU'].forEach((id, c) =>
+			add(id, 126 + c * 72, 520, 61, 27, id === '-' ? '−' : id, '', 'mode'),
+		);
+		['CANCEL', '*', '/', 'M+', 'M-'].forEach((id, c) =>
+			add(
+				id,
+				126 + c * 72,
+				568,
+				61,
+				27,
+				id === '*' ? '×' : id === '/' ? '÷' : id === 'M-' ? 'M−' : id,
+				id === 'M+' ? '2nd: MOVE' : id === 'M-' ? '2nd: EXP/COL' : '',
+				'mode',
+			),
+		);
+		add('NEW ENTRY', 500, 529, 63, 57, 'NEW ENTRY', '', 'mode');
+		add('EDIT', 573, 529, 63, 57, 'EDIT', '', 'mode');
+		add('LEFT', 650, 529, 34, 57, '◀');
+		add('UP', 693, 520, 55, 27, '▲');
+		add('DOWN', 693, 568, 55, 27, '▼');
+		add('RIGHT', 757, 529, 34, 57, '▶');
+		add('PREV', 805, 529, 35, 57, 'PREV', '', 'mode');
+		add('NEXT', 852, 529, 35, 57, 'NEXT', '', 'mode');
+		const rows = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM,.'];
+		rows.forEach((row, r) =>
+			row.split('').forEach((id, c) => add(id, 90 + c * 72 + (r === 2 ? 18 : r === 3 ? 40 : 0), 610 + r * 50, 61, 36)),
+		);
+		add('BS', 815, 610, 65, 36);
+		add('ENTER', 815, 660, 65, 135, '↵');
+		['SHIFT', 'CAPS', '2ND', 'WORD', 'SYMBOL'].forEach((id, c) => add(id, 60 + c * 77, 825, 68, 36));
+		add('SPACE', 455, 825, 247, 36);
+		add('INS', 715, 825, 70, 36);
+		add('DEL', 800, 825, 70, 36);
+		return {
+			version: 1,
+			model,
+			width: 940,
+			height: 885,
+			lcd: { x: 260, y: 42, w: 600, h: (600 * 240) / 336 },
+			keys,
+			provenance: 'photo-reference-approximation',
+		};
+	}
 	if (model === 'iq-7000') {
 		const modeRows = [
 			['CALENDAR', 'SCHEDULE', 'TEL', 'MEMO', 'CALC'],

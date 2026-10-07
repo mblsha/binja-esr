@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master, fast ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, codex/oz9600-core ]
 
 jobs:
   rust-tests:
@@ -51,3 +51,17 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/.venv/lib/python3.11/site-packages
           FORCE_BINJA_MOCK: 1
         run: cargo test --all-targets --all-features
+
+  native-window:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Native window unit tests
+        run: cargo test --locked --manifest-path sc62015/native-window/Cargo.toml
+      - name: Native window lint and format
+        run: |
+          cargo clippy --locked --manifest-path sc62015/native-window/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path sc62015/native-window/Cargo.toml --all -- --check

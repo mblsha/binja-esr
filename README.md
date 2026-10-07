@@ -5,6 +5,56 @@ The ESR plugin provides an SC62015 (aka ESR-L) architecture for Binary Ninja.
 Currently it only works as a crude disassembler, with the goal to lift all the
 instructions and create memory mapping for Sharp PC-E500 and Sharp Organizers.
 
+For the older CPU family, see the
+[ESR-H / SC61860 references and implementation plan](docs/sc61860_esrh_references_and_plan.md).
+It links existing disassembler and CPU sources, records instruction-description
+discrepancies, and tracks the decoder, execution and organizer/card work still needed.
+
+## OZ-9600 v1 profile
+
+The shared Rust core, normal `pce500 --model oz-9600` runner and web frontend
+accept a verified `OZROM01` bundle. The controller exports its full 336 × 240
+working frame; fixed labels to the left are separate artwork. Physical LCD
+crop, SRAM aliases, reset/SFR behavior and clocks remain unqualified.
+
+The CLI defaults to strict. Select `--oz9600-profile provisional-v1` for
+empty-SRAM initialization and ordinary organizer use; the browser defaults to
+that profile for OZ-9600. Before execution it selects initial CPU BP=D0 for
+all-zero SRAM, including a saved empty image, and BP=00 for populated backing.
+The ROM performs initialization and installs its own callbacks. This reset
+assumption and the arithmetic, transfer, IRQ and nominal RTC policies remain
+provisional. Historical experimental profiles remain available for diagnosis.
+Logical RAM/RTC exports preserve records across reload and Reset; they are
+backing for a fresh CPU, not complete running snapshots.
+
+Schedule creation/recovery, Notebook editing, Calculator arithmetic, Scrapbook
+drawing/storage and a built-in application tour have native/browser proofs.
+Calendar entry into a saved Schedule can leave its text blank; ENTER to Index
+and ENTER back to View redraws the intact record. Exact physical timing,
+automatic alarm wake, complete peripherals and application edge cases remain
+follow-up work.
+
+`experimental-on-edge` retains the MTI-writable basis and asserts ONKI once
+per physical press, while SSR continues to report the held ON level. Native
+and WASM ROM workflows now cancel idle PC Link and reopen a stored Telephone
+record. This opt-in hypothesis does not qualify physical ON/RTC power wiring
+or cancellation during an active transfer; historical profiles retain their
+previous assertion behavior.
+
+The [native bitmap window](sc62015/native-window/README.md) uses the same
+model factory and physical matrix/tablet input. Its optional OZ-707 ROM/SRAM
+files launch BASIC and its guest-rendered touchscreen keypad. The normal CLI
+accepts the same media with `--oz9600-card-rom`, `--oz9600-card-sram` and
+`--oz9600-card-sram-out`. Card presence and memory aliases remain provisional;
+the strict machine default is unchanged.
+
+Representative controller frames from normal ROM execution under
+`provisional-v1` (acquired firmware is distributed separately):
+
+![Initialization and Welcome](docs/images/oz9600/v1-welcome.png)
+![Schedule, Notebook, Calculator and Scrapbook](docs/images/oz9600/v1-workflows.png)
+![Built-in application tour](docs/images/oz9600/v1-tour.png)
+
 ## Acknowledgements
 
 Overall structure of instruction logic based on

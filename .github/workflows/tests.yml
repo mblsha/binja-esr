@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, master, fast ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, codex/oz9600-core ]
 
 jobs:
   test:

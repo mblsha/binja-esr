@@ -9,6 +9,10 @@ import { runIsolatedScript } from './isolated_script';
 import { applyContact, HostInputs, InputBufferOverflow, type InputContact } from './host_inputs';
 import { LatestFrame } from './latest_frame';
 import { planPaste } from './paste_plan';
+import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from './oz9600_replay';
+import { TabletInputs } from './tablet_inputs';
+import { AudioDelivery } from './oz_audio';
+import { SerialDelivery, queueSerialInput } from './oz_serial';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -27,7 +31,21 @@ type WorkerRequest =
 			romSource?: string | null;
 			model?: RomModel;
 			generation?: number;
+			ozProfile?: OzProfile;
+			retained?: Uint8Array;
 	  }
+	| { id: number; type: 'oz_retained_export' }
+	| { id: number; type: 'oz_state' }
+	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
+	| { id: number; type: 'audio_consumed'; generation: number; epoch: number; sequence: number }
+	| { id: number; type: 'audio_status' }
+	| { id: number; type: 'serial_send'; generation: number; bytes: Uint8Array }
+	| { id: number; type: 'serial_consumed'; generation: number; epoch: number; sequence: number }
+	| { id: number; type: 'serial_status' }
+	| { id: number; type: 'oz_reset' }
+	| { id: number; type: 'oz_retained_restore'; bytes: Uint8Array }
+	| { id: number; type: 'oz_tablet'; contact: TabletContact; owner: string; cancel?: boolean; generation: number }
+	| { id: number; type: 'oz_replay'; document: string }
 	| { id: number; type: 'get_model' }
 	| { id: number; type: 'step'; instructions: number }
 	| { id: number; type: 'start' }
@@ -137,6 +155,47 @@ let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
 const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+const tabletInputs = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+const hostInputs = {
+	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
+	advance: (n: number) => {
+		inputs.advance(n);
+		tabletInputs.advance(n);
+	},
+	typingBoostBudget: inputs.typingBoostBudget,
+};
+let ozReplayActive = false;
+let soundWanted = false;
+let soundActive = false;
+const audio = new AudioDelivery((packet) => (self as any).postMessage({ type: 'audio', ...packet }, [packet.samples]));
+const serial = new SerialDelivery((packet) =>
+	(self as any).postMessage({ type: 'serial_tx', ...packet }, [packet.bytes]),
+);
+function resetSerial() {
+	self.postMessage({ type: 'serial_reset', ...serial.reset(machineGeneration) });
+}
+function pumpSerial() {
+	if (romModel === 'oz-9600' && emulator?.has_rom()) serial.pump(() => emulator.sio_drain_tx_bytes());
+}
+
+function syncAudio(force = false) {
+	const enabled = soundWanted && running && romModel === 'oz-9600' && emulator?.execution_mode() === 'interactive';
+	if (force || enabled !== soundActive) {
+		if (romModel === 'oz-9600' && emulator?.has_rom()) emulator.set_oz9600_audio_enabled(enabled);
+		soundActive = enabled;
+		self.postMessage({ type: 'audio_reset', ...audio.reset(machineGeneration, enabled) });
+	}
+}
+function pumpAudio() {
+	if (!soundActive) return;
+	try {
+		audio.pump(() => emulator.take_oz9600_audio());
+	} catch (error) {
+		soundWanted = false;
+		syncAudio();
+		self.postMessage({ type: 'audio_error', generation: machineGeneration, error: String(error) });
+	}
+}
 const diagnosticContacts = new Set<number>();
 
 function injectDiagnostic(code: number, release: boolean) {
@@ -257,7 +316,7 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 								},
 								{
 									signal,
-									limitBudget: inputs.limitBudget,
+									limitBudget: hostInputs.limitBudget,
 									onProgress: (used, slice) => {
 										inputs.advance(used);
 										const now = performance.now();
@@ -305,8 +364,8 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 						runWithErrorAsync(`step(${instructions})`, async () => {
 							await stepBounded(emulator, instructions, {
 								signal,
-								limitBudget: inputs.limitBudget,
-								onProgress: inputs.advance,
+								limitBudget: hostInputs.limitBudget,
+								onProgress: hostInputs.advance,
 							});
 						}),
 					getReg: (name: string) => runWithError(`getReg(${name})`, () => emulator.get_reg?.(name) ?? 0),
@@ -415,7 +474,7 @@ function replyErr(id: number, error: unknown) {
 }
 
 function stepCore(boundaries: number) {
-	return automaticHostSlice(emulator, boundaries, inputs, typingCatchUp);
+	return automaticHostSlice(emulator, boundaries, hostInputs, typingCatchUp);
 }
 
 function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: string } | null {
@@ -429,7 +488,8 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 		const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 		const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 		const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-		const fifoAddresses = resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+		const fifoAddresses =
+			romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 		const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
 		const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
 		const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -463,7 +523,7 @@ function captureFrame(forceText: boolean, forceDisplay = false): Frame {
 	const lcdKind = normalizeLcdKind(geometry?.kind) ?? undefined;
 	const annunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? new Uint8Array(4);
 	const annunciatorBytesCopy = new Uint8Array(annunciatorBytes);
-	const chipPixels = debugOptions.lcdChipsOpen ? emulator.lcd_chip_pixels() : undefined;
+	const chipPixels = debugOptions.lcdChipsOpen && romModel !== 'oz-9600' ? emulator.lcd_chip_pixels() : undefined;
 	const nowMs = performance.now();
 
 	const pc = (() => {
@@ -565,9 +625,12 @@ function pumpEmulator(id: number) {
 	let waitMs: number;
 	try {
 		waitMs = stepCore(RUN_SLICE_MAX_INSTRUCTIONS);
+		pumpAudio();
+		pumpSerial();
 	} catch (err) {
 		// Crash stops the run loop; render loop will stop too.
 		running = false;
+		syncAudio();
 		frames.discardPending();
 		(self as any).postMessage({ type: 'fatal', error: String(err) });
 		return;
@@ -588,6 +651,45 @@ function pumpRender(id: number) {
 async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 	try {
 		switch (msg.type) {
+			case 'serial_send': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale serial generation');
+				if (operations.busy) throw new Error('Wait for the current replay or step to finish before sending');
+				if (romModel !== 'oz-9600' || !emulator?.has_rom()) throw new Error('Requires a loaded OZ-9600');
+				replyOk(msg.id, { queued: queueSerialInput(emulator, msg.bytes) });
+				return;
+			}
+			case 'serial_consumed': {
+				serial.consumed(msg.generation, msg.epoch, msg.sequence);
+				pumpSerial();
+				return;
+			}
+			case 'serial_status': {
+				if (operations.busy) throw new Error('Wait for the current replay or step to finish');
+				replyOk(msg.id, {
+					delivery: serial.snapshot(),
+					uart: romModel === 'oz-9600' && emulator?.has_rom() ? emulator.sio_uart_report() : null,
+				});
+				return;
+			}
+			case 'set_audio': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale audio generation');
+				soundWanted = msg.enabled;
+				syncAudio(true);
+				replyOk(msg.id);
+				return;
+			}
+			case 'audio_consumed': {
+				audio.consumed(msg.generation, msg.epoch, msg.sequence);
+				pumpAudio();
+				return;
+			}
+			case 'audio_status': {
+				replyOk(msg.id, {
+					delivery: audio.snapshot(),
+					capture: romModel === 'oz-9600' && !operations.busy ? emulator?.oz9600_audio_status() : null,
+				});
+				return;
+			}
 			case 'frame_consumed': {
 				frames.consumed(msg.sequence);
 				return; // This is the one-way presentation credit, not another RPC.
@@ -607,13 +709,23 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'load_rom': {
 				const emu = await ensureEmulator();
 				if (signal?.aborted) throw new ExecutionCancelled(0);
-				romModel = msg.model ?? romModel;
+				const model = msg.model ?? romModel;
+				if (model === 'oz-9600')
+					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
+				else {
+					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
+					emu.load_rom_with_model(msg.bytes, model);
+				}
+				romModel = model;
 				perfettoSymbolsPromise = null;
 				releaseScriptInputs();
 				inputs.clear();
-				if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(msg.bytes, romModel);
-				else emu.load_rom(msg.bytes);
+				// The new core has no held pen. Do not apply stale ADC coordinates.
+				tabletInputs.discard();
+
 				machineGeneration = msg.generation ?? machineGeneration + 1;
+				resetSerial();
+				syncAudio(true);
 				if (romModel === 'iq-7000' && typeof emu.set_iq7000_rtc_yyyymmddhhmm === 'function') {
 					emu.set_iq7000_rtc_yyyymmddhhmm(formatHostUtcRtcSeed());
 				}
@@ -621,6 +733,67 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				lastLcdText = null;
 				requestFrame(true);
 				replyOk(msg.id);
+				return;
+			}
+			case 'oz_retained_export': {
+				await ensureEmulator();
+				replyOk(msg.id, emulator.export_oz9600_retained());
+				return;
+			}
+			case 'oz_state': {
+				await ensureEmulator();
+				replyOk(msg.id, emulator.oz9600_state());
+				return;
+			}
+			case 'oz_reset':
+			case 'oz_retained_restore': {
+				await ensureEmulator();
+				if (msg.type === 'oz_reset') {
+					if (romModel !== 'oz-9600') throw new Error('OZ reset requires OZ model');
+					emulator.reset();
+				} else emulator.restore_oz9600_retained(msg.bytes);
+				inputs.clear();
+				tabletInputs.discard();
+				syncAudio(true);
+				resetSerial();
+				requestFrame(true, true);
+				replyOk(msg.id);
+				return;
+			}
+			case 'oz_tablet': {
+				if (!emulator || romModel !== 'oz-9600') throw new Error('Requires loaded OZ');
+				if (msg.generation !== machineGeneration) throw new Error('Stale tablet generation');
+				if (ozReplayActive) throw new Error('Physical replay owns input until it finishes or Stop is acknowledged');
+				tabletInputs.set(msg.owner, msg.contact, msg.cancel);
+				replyOk(msg.id);
+				return;
+			}
+			case 'oz_replay': {
+				await ensureEmulator();
+				emulator.validate_oz9600_replay(msg.document);
+				inputs.clear();
+				tabletInputs.clear();
+				releaseScriptInputs();
+				ozReplayActive = true;
+				const reports: object[] = [];
+				try {
+					const boundaries = await runOzPhysicalReplay(emulator, msg.document, {
+						signal,
+						onProgress: pumpSerial,
+						onStep: async (index, state) => {
+							const bytes = ozPbm(emulator.lcd_capture());
+							const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>));
+							const pbm_sha256 = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+							reports.push({ step: index, ...state, pbm_sha256 });
+							requestFrame(false);
+							(self as any).postMessage({ type: 'oz_replay_progress', step: index + 1 });
+						},
+					});
+					requestFrame(true, true);
+					replyOk(msg.id, { boundaries, reports });
+				} finally {
+					ozReplayActive = false;
+				}
 				return;
 			}
 			case 'get_model': {
@@ -632,8 +805,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				await ensureEmulator();
 				await stepBounded(emulator, msg.instructions, {
 					signal,
-					limitBudget: inputs.limitBudget,
-					onProgress: inputs.advance,
+					limitBudget: hostInputs.limitBudget,
+					onProgress: (used) => {
+						hostInputs.advance(used);
+						pumpSerial();
+					},
 				});
 				requestFrame(true);
 				replyOk(msg.id);
@@ -704,6 +880,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (!running) {
 					emulator.rebase_pacing();
 					running = true;
+					syncAudio();
 					runLoopId += 1;
 					const id = runLoopId;
 					setTimeout(() => {
@@ -718,6 +895,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				running = false;
 				runLoopId += 1;
 				await operations.stop();
+				syncAudio();
 				emulator?.rebase_pacing();
 				replyOk(msg.id);
 				// Ownership has been released. A slow final LCD/text capture
@@ -734,6 +912,9 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				await ensureEmulator();
 				if (msg.generation !== undefined && msg.generation !== machineGeneration)
 					throw new Error('Stale input generation');
+				if (ozReplayActive) throw new Error('Physical replay owns input');
+				if (romModel === 'oz-9600' && msg.code !== 'on' && (msg.code < 0 || msg.code >= 88))
+					throw new Error('Unqualified OZ contact');
 				// ON is a priority power contact, never stuck behind a typing backlog.
 				if (msg.code === 'on' && msg.down) inputs.clearTyping();
 				inputs.set({
@@ -766,6 +947,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					throw new Error('Stale input generation');
 				if (msg.source !== 'physical' && msg.source !== 'virtual') throw new Error('Invalid host input source');
 				inputs.releaseSource(msg.source);
+				if (msg.source === 'virtual' && romModel === 'oz-9600' && !ozReplayActive) tabletInputs.clear();
 				(self as any).postMessage({
 					type: 'input_status',
 					generation: machineGeneration,
@@ -798,6 +980,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			running = false;
 			runLoopId++;
 			await operations.stop();
+			syncAudio();
 			emulator?.rebase_pacing();
 			(self as any).postMessage({ type: 'input_paused', generation: machineGeneration, error: err.message });
 			requestFrame(true);
@@ -807,12 +990,24 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 }
 
 async function dispatchRequest(msg: WorkerRequest) {
-	if (['load_rom', 'step', 'eval_js', 'start', 'set_execution_mode'].includes(msg.type)) {
+	if (
+		[
+			'load_rom',
+			'step',
+			'eval_js',
+			'start',
+			'set_execution_mode',
+			'oz_retained_restore',
+			'oz_reset',
+			'oz_replay',
+		].includes(msg.type)
+	) {
 		try {
 			await operations.run(async (signal) => {
 				if (msg.type !== 'start' && msg.type !== 'set_execution_mode') {
 					running = false;
 					runLoopId++;
+					syncAudio();
 				}
 				await handleRequest(msg, signal);
 			});
