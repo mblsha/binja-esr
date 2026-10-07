@@ -8,13 +8,16 @@ from pce500.oz9600.ui import (
     INK,
     LCD,
     PAPER,
+    SOUND,
     WIDTH,
     Contacts,
+    CloseGate,
     HostKeys,
     contains,
     window_point,
     lcd_into,
     lcd_tablet,
+    sound_artwork,
 )
 
 
@@ -103,3 +106,24 @@ def test_on_contact_has_independent_ownership_deadline_and_immediate_cancellatio
     raw = Contacts()
     assert raw.sync(set(), None, 0, True) == [("on", True)]
     assert raw.sync(set(), None, 1, False) == [("on", False)]
+
+
+def test_sound_control_remains_outside_guest_lcd_and_contact_owners():
+    x, y, width, height = SOUND
+    assert not any(
+        contains(LCD, px, py) for px in (x, x + width - 1) for py in (y, y + height - 1)
+    )
+    assert sound_artwork(False) == ("SOUND OFF", 0x94ACBB)
+    assert sound_artwork(True) == ("SOUND ON", 0xB2C9A5)
+    contacts = Contacts()
+    assert contacts.sync(set(), None, 0) == []
+    assert contacts.keys == {} and contacts.tablet is None
+
+
+def test_close_gate_seals_event_acceptance_and_is_idempotent():
+    gate = CloseGate()
+    assert not gate.closing
+    assert gate.begin_close()
+    assert gate.closing
+    assert not gate.begin_close()
+    assert gate.closing
