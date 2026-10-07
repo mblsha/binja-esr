@@ -210,7 +210,21 @@ fn cancel_restores_scaffolding_retains_progress_and_releases_trace_and_ownership
         assert!(emulator
             .call_function_begin(ENTRY, 1, JsValue::UNDEFINED)
             .is_err());
-        assert_eq!(slice(&mut emulator, id, 65)["steps"], 65);
+        // The public slice may yield at its host deadline before consuming the
+        // requested boundary budget. Resume it to the same deterministic guest
+        // endpoint rather than assuming CI completes 65 traced steps in 16 ms.
+        let mut completed = 0;
+        for attempt in 0..1000 {
+            let status = slice(&mut emulator, id, 65 - completed);
+            assert_eq!(status["state"], "running");
+            completed = status["steps"].as_u64().unwrap() as u32;
+            assert!(completed <= 65);
+            if completed == 65 {
+                break;
+            }
+            assert!(attempt < 999, "call must reach its finite boundary target");
+        }
+        assert_eq!(completed, 65);
         assert_eq!(emulator.get_reg("S"), STACK - 3);
         let report: serde_json::Value =
             serde_json::from_str(&emulator.call_function_cancel(id).unwrap()).unwrap();
