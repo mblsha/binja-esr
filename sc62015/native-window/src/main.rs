@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/oz9600/ui.py
 //! Native host frontend for the ordinary public OZ machine factory.
+mod audio;
 mod retained_store;
 mod ui;
 use clap::Parser;
@@ -75,6 +76,9 @@ struct Args {
     execution_mode: ExecutionMode,
     #[arg(long)]
     paused: bool,
+    /// Enable nominal PCM playback; replay/headless execution stays silent.
+    #[arg(long, conflicts_with = "headless")]
+    sound: bool,
     /// Host click assistance; set zero for immediate contact release.
     #[arg(long,default_value_t=40_000,value_parser=clap::value_parser!(u32).range(0..=10_000_000))]
     minimum_contact_boundaries: u32,
@@ -124,7 +128,13 @@ fn observation(rt: &CoreRuntime) -> Value {
 fn sibling(prefix: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(format!("{}{suffix}", prefix.display()))
 }
-fn capture(rt: &CoreRuntime, prefix: &Path, contacts: &Contacts, paused: bool) -> Result<()> {
+fn capture(
+    rt: &CoreRuntime,
+    prefix: &Path,
+    contacts: &Contacts,
+    paused: bool,
+    sound: bool,
+) -> Result<()> {
     let frame = rt
         .lcd
         .as_deref()
@@ -135,6 +145,7 @@ fn capture(rt: &CoreRuntime, prefix: &Path, contacts: &Contacts, paused: bool) -
         &contacts.pressed_keys(),
         paused,
         contacts.pressed_on(),
+        sound,
     )?;
     let mut ppm = format!("P6\n{} {}\n255\n", ui::WIDTH, ui::HEIGHT).into_bytes();
     for p in pixels {
@@ -361,7 +372,7 @@ fn run(args: Args) -> Result<()> {
         store.save(&rt.oz9600_retained_state()?)?;
     }
     if let Some(path) = &args.capture_prefix {
-        capture(&rt, path, &contacts, true)?;
+        capture(&rt, path, &contacts, true, false)?;
     }
     if let Some(path) = &args.retained_out {
         atomic_write(path, &rt.oz9600_retained_state()?)?;
@@ -388,6 +399,7 @@ struct NativeApp<'a> {
     mouse: bool,
     blocked_mouse: bool,
     active: bool,
+    closing: bool,
     paused: bool,
     pacer: Pacer,
     pending: usize,
@@ -400,6 +412,9 @@ struct NativeApp<'a> {
     fault: Option<String>,
     fatal: Option<String>,
     status: String,
+    sound: bool,
+    audio_capture: bool,
+    audio_output: Option<audio::Output>,
 }
 impl NativeApp<'_> {
     fn save_state(&mut self) {
@@ -421,6 +436,50 @@ impl NativeApp<'_> {
             }
         }
         self.next_save = Instant::now() + Duration::from_secs(5);
+    }
+    fn refresh_audio(&mut self) -> Result<()> {
+        if let Some(error) = self.audio_output.as_ref().and_then(audio::Output::error) {
+            self.status = format!("Sound unavailable: {error}; emulation continues");
+            self.sound = false;
+            self.audio_output = None;
+        }
+        let enabled = self.sound
+            && self.active
+            && !self.paused
+            && self.pending == 0
+            && self.fault.is_none()
+            && self.args.execution_mode == ExecutionMode::Interactive;
+        if enabled != self.audio_capture {
+            self.rt.set_oz9600_audio_enabled(enabled)?;
+            self.audio_capture = enabled;
+        }
+        if !enabled {
+            if let Some(output) = &self.audio_output {
+                output.clear();
+            }
+        }
+        Ok(())
+    }
+    fn toggle_sound(&mut self) -> Result<()> {
+        if self.sound {
+            self.sound = false;
+            self.audio_output = None;
+            self.status = "Sound off".into();
+        } else if self.args.execution_mode != ExecutionMode::Interactive {
+            self.status = "Sound is available during interactive execution".into();
+        } else {
+            match audio::Output::open() {
+                Ok(output) => {
+                    self.audio_output = Some(output);
+                    self.sound = true;
+                    self.status = "Sound on; nominal digital PCM".into();
+                }
+                Err(error) => {
+                    self.status = format!("Sound unavailable: {error}; emulation continues");
+                }
+            }
+        }
+        self.refresh_audio()
     }
     fn sync(&mut self) -> Result<()> {
         let mut keys = self
@@ -461,21 +520,36 @@ impl NativeApp<'_> {
             self.boundaries,
         )
     }
+    fn prepare_close(&mut self) -> Result<()> {
+        // Exit requests may leave a redraw queued. Seal this epoch before
+        // saving its trace so later events cannot advance or re-enable sound.
+        self.closing = true;
+        self.paused = true;
+        self.pending = 0;
+        self.sound = false;
+        self.audio_output = None;
+        self.refresh_audio()?;
+        self.cancel()?;
+        if let Some(path) = &self.args.event_log {
+            self.record.save(path, self.boundaries)?;
+        }
+        Ok(())
+    }
     fn close(&mut self, event_loop: &ActiveEventLoop) {
-        let result = (|| -> Result<()> {
-            self.cancel()?;
-            if let Some(path) = &self.args.event_log {
-                self.record.save(path, self.boundaries)?;
-            }
-            Ok(())
-        })();
-        if let Err(e) = result {
+        if self.closing {
+            return;
+        }
+        if let Err(e) = self.prepare_close() {
             self.fatal = Some(e.to_string());
         }
         event_loop.exit();
     }
     fn action(&mut self, action: Action) -> Result<()> {
+        if self.closing {
+            return Ok(());
+        }
         match action {
+            Action::Sound => self.toggle_sound()?,
             Action::RunPause if self.fault.is_none() => {
                 self.pending = 0;
                 if self.args.execution_mode == ExecutionMode::Deterministic {
@@ -503,6 +577,10 @@ impl NativeApp<'_> {
                         .into();
             }
             Action::Reset => {
+                if let Some(output) = &self.audio_output {
+                    output.clear();
+                }
+                self.audio_capture = false;
                 self.cancel()?;
                 self.save_state();
                 let saved = self.rt.oz9600_retained_state()?;
@@ -558,7 +636,7 @@ impl NativeApp<'_> {
             }
             Action::Capture => {
                 self.status = if let Some(path) = &self.args.capture_prefix {
-                    capture(self.rt, path, self.contacts, self.paused)?;
+                    capture(self.rt, path, self.contacts, self.paused, self.sound)?;
                     format!("Captured {}", path.display())
                 } else {
                     "Set --capture-prefix to enable CAPTURE".into()
@@ -566,10 +644,14 @@ impl NativeApp<'_> {
             }
             _ => {}
         }
-        Ok(())
+        self.refresh_audio()
     }
     fn tick(&mut self) -> Result<()> {
+        if self.closing {
+            return Ok(());
+        }
         self.sync()?;
+        self.refresh_audio()?;
         let deadline = Instant::now() + Duration::from_millis(4);
         let result = if self.pending > 0 && self.fault.is_none() {
             self.rt
@@ -603,6 +685,13 @@ impl NativeApp<'_> {
         if Instant::now() >= self.next_save {
             self.save_state();
         }
+        self.refresh_audio()?;
+        if self.audio_capture {
+            let chunk = self.rt.take_oz9600_audio()?;
+            if let Some(output) = &self.audio_output {
+                output.push(&chunk);
+            }
+        }
         let window = self.window.as_ref().ok_or("native window unavailable")?;
         let mode = if self.pending > 0 {
             "stepping"
@@ -631,6 +720,7 @@ impl NativeApp<'_> {
             &self.contacts.pressed_keys(),
             self.paused,
             self.contacts.pressed_on(),
+            self.sound,
         )?;
         let size = window.inner_size();
         if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
@@ -655,6 +745,8 @@ impl NativeApp<'_> {
                         "contacts":self.contacts.pressed_keys(),"pending_boundaries":self.pending,
                         "on_contact":self.contacts.pressed_on(),"cpu_off":self.rt.state.is_off(),
                         "boundaries":self.boundaries,"status":self.status,
+                        "sound_requested":self.sound,"audio_capture":self.audio_capture,
+                        "audio":self.audio_output.as_ref().map(audio::Output::status),
                     }))?,
                 )?;
                 self.last_host_status = Instant::now();
@@ -671,6 +763,7 @@ impl NativeApp<'_> {
                     self.cancel()?;
                     self.blocked_mouse = true;
                 }
+                self.refresh_audio()?;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let size = self
@@ -778,6 +871,9 @@ impl ApplicationHandler for NativeApp<'_> {
             self.surface = Some(softbuffer::Surface::new(&context, window.clone())?);
             self.active = window.has_focus();
             self.window = Some(window);
+            if self.args.sound {
+                self.toggle_sound()?;
+            }
             Ok(())
         })();
         if let Err(e) = result {
@@ -786,7 +882,7 @@ impl ApplicationHandler for NativeApp<'_> {
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if self.window.as_ref().is_none_or(|w| w.id() != id) {
+        if self.closing || self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
         if let Err(e) = self.event(event_loop, event) {
@@ -795,6 +891,9 @@ impl ApplicationHandler for NativeApp<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.closing {
+            return;
+        }
         let now = Instant::now();
         if self
             .args
@@ -842,6 +941,7 @@ fn live(
         mouse: false,
         blocked_mouse: false,
         active: false,
+        closing: false,
         paused: args.paused || args.execution_mode == ExecutionMode::Deterministic,
         pacer: Pacer::for_model(DeviceModel::Oz9600, args.execution_mode),
         pending: 0,
@@ -854,6 +954,9 @@ fn live(
         fault: None,
         fatal: None,
         status: "F9 run/pause; F10 20K; F11 1M; F5 reset; F7 capture; F8 save".into(),
+        sound: false,
+        audio_capture: false,
+        audio_output: None,
     };
     EventLoop::new()?.run_app(&mut app)?;
     if let Some(error) = app.fatal {
@@ -871,6 +974,58 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_redraw_and_controls_cannot_run_after_trace_is_closed() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut runtime = CoreRuntime::new();
+        let mut contacts = Contacts::new(0);
+        let now = Instant::now();
+        let mut app = NativeApp {
+            args: &args,
+            rom: &[],
+            rt: &mut runtime,
+            contacts: &mut contacts,
+            window: None,
+            surface: None,
+            boundaries: 0,
+            record: Recorder {
+                steps: Vec::new(),
+                last: 0,
+                enabled: true,
+            },
+            host_keys: HostKeys::default(),
+            pointer: None,
+            position: None,
+            lcd_drag: false,
+            mouse: false,
+            blocked_mouse: false,
+            active: true,
+            closing: false,
+            paused: false,
+            pacer: Pacer::for_model(DeviceModel::Oz9600, ExecutionMode::Interactive),
+            pending: 4096,
+            started: now,
+            next_frame: now,
+            last_host_status: now,
+            fault: None,
+            fatal: None,
+            status: String::new(),
+            sound: false,
+            audio_capture: false,
+            audio_output: None,
+        };
+        app.prepare_close().unwrap();
+        app.action(Action::Wait).unwrap();
+        app.action(Action::Sound).unwrap();
+        app.tick().unwrap(); // Would execute the queued budget before the fix.
+        assert!(app.closing && app.paused);
+        assert_eq!(app.pending, 0);
+        assert_eq!(app.boundaries, 0);
+        assert!(!app.sound && !app.audio_capture);
+        assert_eq!(app.rt.instruction_count(), 0);
+        assert_eq!(app.rt.cycle_count(), 0);
+        assert!(app.record.steps.is_empty());
+    }
     #[test]
     fn short_host_taps_keep_edges_and_two_modifiers_share_one_contact() {
         let mut keys = HostKeys::default();

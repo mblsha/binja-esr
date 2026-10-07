@@ -48,6 +48,7 @@ pub enum Action {
     Reset,
     Save,
     Capture,
+    Sound,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -69,7 +70,16 @@ pub fn lcd_tablet(x: usize, y: usize) -> (u16, u16) {
     )
 }
 pub fn zones() -> Vec<Zone> {
-    let mut output = Vec::new();
+    let mut output = vec![Zone {
+        rect: Rect {
+            x: 414,
+            y: 7,
+            w: 100,
+            h: 22,
+        },
+        label: "SOUND OFF",
+        target: Target::Control(Action::Sound),
+    }];
     // Fixed printed panel, outside the controller image. Coordinates are the
     // ROM's default calibration, not measured digitizer voltages.
     for (index, (label, x, y)) in [
@@ -240,6 +250,7 @@ pub fn render(
     keys: &BTreeSet<u8>,
     paused: bool,
     on: bool,
+    sound: bool,
 ) -> Result<Vec<u32>, &'static str> {
     if frame.geometry() != (LCD.w, LCD.h) {
         return Err("native window requires full 336x240 controller image");
@@ -273,6 +284,7 @@ pub fn render(
             Target::Matrix(..) => 0xddd9c8,
             Target::On if on => 0xb2c9a5,
             Target::On => 0xddd9c8,
+            Target::Control(Action::Sound) if sound => 0xb2c9a5,
             Target::Control(..) => 0x94acbb,
         };
         fill(&mut out, zone.rect, 0x4e574e);
@@ -288,6 +300,8 @@ pub fn render(
         );
         let label = if zone.target == Target::Control(Action::RunPause) && !paused {
             "PAUSE"
+        } else if zone.target == Target::Control(Action::Sound) && sound {
+            "SOUND ON"
         } else {
             zone.label
         };
@@ -442,7 +456,7 @@ mod tests {
             .map(|n| u8::from(n % 7 == 0 || n == 336 * 240 - 1))
             .collect::<Vec<_>>();
         let frame = LcdFrame::new(336, 240, pixels.clone()).unwrap();
-        let out = render(&frame, &BTreeSet::new(), true, false).unwrap();
+        let out = render(&frame, &BTreeSet::new(), true, false, false).unwrap();
         for (i, p) in pixels.iter().enumerate() {
             assert_eq!(
                 out[(LCD.y + i / 336) * WIDTH + LCD.x + i % 336],
@@ -549,10 +563,22 @@ mod tests {
         assert_eq!(raw.sync(&empty, None, 1, false), vec![Event::On(false)]);
     }
     #[test]
+    fn sound_control_changes_only_host_artwork_and_has_no_guest_contact() {
+        let frame = LcdFrame::new(336, 240, vec![1; 336 * 240]).unwrap();
+        let muted = render(&frame, &BTreeSet::new(), false, false, false).unwrap();
+        let playing = render(&frame, &BTreeSet::new(), false, false, true).unwrap();
+        assert_eq!(hit(420, 12), Some(Target::Control(Action::Sound)));
+        assert_ne!(muted, playing);
+        for y in LCD.y..LCD.y + LCD.h {
+            let start = y * WIDTH + LCD.x;
+            assert_eq!(muted[start..start + LCD.w], playing[start..start + LCD.w]);
+        }
+    }
+    #[test]
     fn power_key_highlight_changes_only_host_artwork() {
         let frame = LcdFrame::new(336, 240, vec![1; 336 * 240]).unwrap();
-        let before = render(&frame, &BTreeSet::new(), true, false).unwrap();
-        let after = render(&frame, &BTreeSet::new(), true, true).unwrap();
+        let before = render(&frame, &BTreeSet::new(), true, false, false).unwrap();
+        let after = render(&frame, &BTreeSet::new(), true, true, false).unwrap();
         let on_zone = zones()
             .into_iter()
             .find(|z| z.target == Target::On)
