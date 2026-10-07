@@ -1,4 +1,5 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
+import { ozBatteryIdentity } from './oz_battery_store';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 import { ExecutionCancelled, stepBounded } from './bounded_step';
@@ -34,7 +35,8 @@ type WorkerRequest =
 			ozProfile?: OzProfile;
 			retained?: Uint8Array;
 	  }
-	| { id: number; type: 'oz_retained_export' }
+	| { id: number; type: 'oz_retained_export'; generation?: number }
+	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'oz_state' }
 	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
 	| { id: number; type: 'audio_consumed'; generation: number; epoch: number; sequence: number }
@@ -735,8 +737,18 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id);
 				return;
 			}
+			case 'oz_battery_identity': {
+				await ensureEmulator();
+				replyOk(
+					msg.id,
+					ozBatteryIdentity(() => new wasm.Sc62015Emulator(), msg.bytes),
+				);
+				return;
+			}
 			case 'oz_retained_export': {
 				await ensureEmulator();
+				if (msg.generation !== undefined && msg.generation !== machineGeneration)
+					throw new Error('Stale saved-record generation');
 				replyOk(msg.id, emulator.export_oz9600_retained());
 				return;
 			}
