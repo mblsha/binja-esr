@@ -687,7 +687,9 @@ impl NativeApp<'_> {
             Ok(())
         };
         if let Err(e) = result {
-            self.fault = Some(e.to_string());
+            let error = e.to_string();
+            self.status = error.clone();
+            self.fault = Some(error);
             self.paused = true;
             self.pending = 0;
             self.cancel()?;
@@ -710,14 +712,11 @@ impl NativeApp<'_> {
         } else {
             self.args.execution_mode.label()
         };
-        let status = self
-            .fault
-            .as_deref()
-            .or(self.save_error.as_deref())
-            .unwrap_or(&self.status);
-        window.set_title(&format!(
-            "OZ-9600 | {:?} | {mode} | {status}",
-            self.args.profile
+        window.set_title(&ui::window_title(
+            &format!("{:?}", self.args.profile),
+            mode,
+            self.save_error.as_deref().unwrap_or(&self.status),
+            self.fault.as_deref(),
         ));
         let frame = self
             .rt

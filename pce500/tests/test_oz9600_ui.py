@@ -16,6 +16,7 @@ from pce500.oz9600.ui import (
     PointerGate,
     contains,
     window_point,
+    window_title,
     lcd_into,
     lcd_tablet,
     sound_artwork,
@@ -159,3 +160,18 @@ def test_fault_allows_host_controls_and_rejects_guest_targets():
     assert not gate.accepts_target(host_control=False, fault=True)
     gate.focus(False)
     assert not gate.accepts_target(host_control=True, fault=True)
+
+
+def test_fault_keeps_successful_host_feedback_visible():
+    assert window_title("Strict", "paused", "Saved backup.ozbat", "guest fault") == (
+        "OZ-9600 | Strict | faulted | Saved backup.ozbat"
+    )
+    assert window_title("Strict", "paused", "guest fault", "guest fault") == (
+        "OZ-9600 | Strict | faulted | guest fault"
+    )
+    assert window_title("Strict", "paused", "Captured guest", "") == (
+        "OZ-9600 | Strict | faulted | Captured guest"
+    )
+    assert window_title("Strict", "paused", "Saved backup.ozbat", None) == (
+        "OZ-9600 | Strict | paused | Saved backup.ozbat"
+    )
