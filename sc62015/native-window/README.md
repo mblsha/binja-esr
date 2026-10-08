@@ -74,21 +74,39 @@ controls are also visible below the keyboard. Faults stop execution until reset.
 
 `--execution-mode interactive` uses nominal shared pacing; `turbo` runs bounded
 slices without throttling; `deterministic` requires explicit step budgets.
-`--paused` starts paused. Very short contacts receive 40,000 scheduler
-boundaries of host assistance by default; `--minimum-contact-boundaries 0`
-selects immediate release. Focus loss cancels all contacts immediately.
+`--paused` starts paused. By default, very short contacts remain held until
+40,000 scheduler boundaries have elapsed; `--minimum-contact-boundaries 0`
+selects immediate release. Input does not advance a paused guest: use Run or
+Step to process it. Focus loss cancels all contacts immediately.
 Ordered OS key/mouse events preserve short taps and modifier ownership.
 A fresh pointer press works after keyboard focus returns. A press held across
 focus loss or started in the background remains cancelled until release.
 Guest faults reject contacts, including keys held during later synchronization;
-visible host Save, Capture and Reset controls remain available. Run/step controls
-continue to require a healthy guest.
+visible host Save, Capture and Reset controls remain available. The window title
+keeps the faulted state visible while acknowledging Save and Capture. Run/step
+controls continue to require a healthy guest.
 
 ![Headless ROM handler probe: 12 plus 3 equals 15](native-input.png)
 
-This image comes from genuine ROM execution through the native contact handlers.
-It qualifies the complete controller pixels and logical record-preserving fault
-recovery. A live OS focus/click recheck remains pending for this change.
+The headless handler probe matches an independent normal-input runner. A
+separate live macOS session entered 1 through a keycap, 2 through the LCD, then
++3= through pointer and keyboard input. All 25 replay observations agree between
+the window and ordinary CLI; the final live CPU/peripheral fields, complete LCD
+and saved RAM/RTC agree with both.
+
+![Live macOS ROM arithmetic: 12 plus 3 equals 15](native-input-live.png)
+
+A registered macOS app also records actual focus loss with all contacts released,
+keyboard focus restoration, and the first fresh pointer press entering 4. Its
+nine observation replay matches both runners and the complete final live state.
+
+![First fresh pointer digit after keyboard focus returns](native-focus-live.png)
+
+These images are enlarged native capture output from the live sessions; they
+omit macOS window decorations. A genuine strict-startup fault separately checks
+pointer and keyboard Save/Capture feedback, blocked guest contacts and Reset
+with exact retained-byte preservation and a matching fresh factory. Strict
+cold initialization and physical reset, calibration and timing remain open.
 
 The **Sound off/on** button above the LCD enables playback of the shared core's
 48 kHz digital PCM through the default audio output device. `--sound` enables it
