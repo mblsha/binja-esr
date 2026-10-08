@@ -6,6 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const WIDTH: usize = 526;
 pub const HEIGHT: usize = 530;
+
+/// Keep fault state visible while allowing host Save/Capture acknowledgments.
+pub fn window_title(profile: &str, mode: &str, status: &str, fault: Option<&str>) -> String {
+    let mode = if fault.is_some() { "faulted" } else { mode };
+    format!("OZ-9600 | {profile} | {mode} | {status}")
+}
 pub const LCD: Rect = Rect {
     x: 162,
     y: 36,
@@ -598,5 +604,29 @@ mod tests {
                 assert_eq!(*a, b);
             }
         }
+    }
+    #[test]
+    fn fault_keeps_successful_host_feedback_visible() {
+        assert_eq!(
+            window_title(
+                "Strict",
+                "paused",
+                "Saved backup.ozbat",
+                Some("guest fault")
+            ),
+            "OZ-9600 | Strict | faulted | Saved backup.ozbat"
+        );
+        assert_eq!(
+            window_title("Strict", "paused", "guest fault", Some("guest fault")),
+            "OZ-9600 | Strict | faulted | guest fault"
+        );
+        assert_eq!(
+            window_title("Strict", "paused", "Captured guest", Some("")),
+            "OZ-9600 | Strict | faulted | Captured guest"
+        );
+        assert_eq!(
+            window_title("Strict", "paused", "Saved backup.ozbat", None),
+            "OZ-9600 | Strict | paused | Saved backup.ozbat"
+        );
     }
 }

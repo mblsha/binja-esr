@@ -37,6 +37,12 @@ def sound_artwork(enabled: bool) -> tuple[str, int]:
     return ("SOUND ON", 0xB2C9A5) if enabled else ("SOUND OFF", 0x94ACBB)
 
 
+def window_title(profile: str, mode: str, status: str, fault: str | None) -> str:
+    """Keep fault state visible while allowing host control acknowledgments."""
+    mode = "faulted" if fault is not None else mode
+    return f"OZ-9600 | {profile} | {mode} | {status}"
+
+
 def window_point(x: float, y: float, width: int, height: int) -> tuple[int, int] | None:
     """Invert physical surface scaling without assuming a platform pixel ratio."""
     if width <= 0 or height <= 0 or not (0 <= x < width and 0 <= y < height):
