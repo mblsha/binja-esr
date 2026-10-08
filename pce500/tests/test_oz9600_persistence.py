@@ -1,5 +1,7 @@
 """Host persistence failure and ownership checks; no emulator state injection."""
 
+import os
+
 import pytest
 
 from pce500.oz9600.persistence import RetainedStore, _atomic_write
@@ -61,3 +63,17 @@ def test_existing_unreadable_target_is_not_empty_memory(tmp_path):
     with pytest.raises(OSError):
         RetainedStore(path)
     assert path.is_dir()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX inherited file description")
+def test_close_releases_lock_while_an_inherited_descriptor_is_open(tmp_path):
+    path = tmp_path / "state.ozbat"
+    store = RetainedStore(path)
+    inherited = os.dup(store._lock.fileno())
+    try:
+        store.close()
+        with RetainedStore(path) as reopened:
+            assert reopened.save(b"new owner")
+    finally:
+        store.close()
+        os.close(inherited)
