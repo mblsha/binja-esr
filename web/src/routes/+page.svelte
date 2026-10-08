@@ -1438,7 +1438,11 @@
 		if (
 			installedRom &&
 			!window.confirm(
-				'Replace the current ROM and discard this session? Browser sessions cannot currently be restored.',
+				installedRom.model === 'oz-9600'
+					? ozBatterySession
+						? 'Replace the current ROM? OZ-9600 RAM/RTC will be saved before replacement; execution restarts when reloaded.'
+						: 'Replace the current ROM and discard unsaved records? Use Export backup first to keep them.'
+					: 'Replace the current ROM and discard device RAM changes?',
 			)
 		) {
 			input.value = '';
@@ -1476,7 +1480,13 @@
 		if (!model || model === romModel) return;
 		if (
 			installedRom &&
-			!window.confirm('Change device model and discard this session? Browser sessions cannot currently be restored.')
+			!window.confirm(
+				installedRom.model === 'oz-9600'
+					? ozBatterySession
+						? 'Change device model? OZ-9600 RAM/RTC will be saved before replacement; execution restarts when reloaded.'
+						: 'Change device model and discard unsaved records? Use Export backup first to keep them.'
+					: 'Change device model and discard device RAM changes?',
+			)
 		) {
 			select.value = romModel;
 			return;
@@ -2266,11 +2276,16 @@
 		<details data-testid="session-safety">
 			<summary>Session safety & recovery</summary>
 			<p class="hint">
-				Browser sessions are held in memory only. Reload or ROM/model replacement loses device RAM changes. OZ reset
-				preserves logical RAM/RTC; export that backing with Save RAM/RTC for later restoration. It is not a running
-				CPU/peripheral snapshot. Complete WASM snapshot restoration is not available: native snapshot routines are not
-				exposed here, and they reject active RTC/peripheral/serial state they cannot represent. We do not silently save
-				a partial snapshot.
+				{#if romModel === 'oz-9600'}
+					Automatic saving preserves OZ-9600 RAM/RTC in this browser when enabled. Check Saved records for the last
+					completed save. Reloading the same ROM recovers that save into a fresh paused CPU; Reset preserves RAM/RTC.
+					With automatic saving off, use Export backup before reload or replacement, then restore it with Import backup.
+					Keep exported backups of records you want to retain. Saved RAM/RTC restores records and settings; device
+					execution starts afresh.
+				{:else}
+					Device RAM is held in memory only. Reload or ROM/model replacement loses device RAM changes.
+				{/if}
+				Full running-session snapshots are not supported.
 			</p>
 			<p class="hint">
 				LCD PNGs and diagnostics can preserve evidence, not a resumable machine. Device OFF is not emulator Pause: the
