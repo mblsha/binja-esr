@@ -75,6 +75,13 @@ pub struct RetainedStore {
     _lock: File,
     last_hash: Option<[u8; 32]>,
 }
+impl Drop for RetainedStore {
+    fn drop(&mut self) {
+        // A concurrent fork can briefly retain a duplicate open description.
+        // Release our ownership before closing the last local descriptor.
+        let _ = self._lock.unlock();
+    }
+}
 impl RetainedStore {
     pub fn open(path: &Path) -> io::Result<(Self, Option<Vec<u8>>)> {
         let name = path.file_name().ok_or_else(|| {
@@ -186,6 +193,22 @@ mod tests {
         assert!(RetainedStore::open(&path).is_err());
         drop(store);
         assert!(RetainedStore::open(&path).is_ok());
+        fs::remove_dir_all(&dir.0).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn releasing_store_unlocks_even_with_an_inherited_descriptor() {
+        let dir = directory();
+        let path = dir.0.join("saved.ozbat");
+        let (store, _) = RetainedStore::open(&path).unwrap();
+        // A concurrent fork may inherit this open description until exec.
+        // Store ownership, rather than the last descriptor, must release it.
+        let inherited = store._lock.try_clone().unwrap();
+        assert!(RetainedStore::open(&path).is_err());
+        drop(store);
+        let (reopened, _) = RetainedStore::open(&path).unwrap();
+        drop(reopened);
+        drop(inherited);
         fs::remove_dir_all(&dir.0).unwrap();
     }
     #[test]
