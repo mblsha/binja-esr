@@ -81,7 +81,20 @@ class RetainedStore:
         return True
 
     def close(self) -> None:
-        self._lock.close()
+        if self._lock.closed:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._lock.seek(0)
+                msvcrt.locking(self._lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._lock, fcntl.LOCK_UN)
+        finally:
+            self._lock.close()
 
     def __enter__(self):
         return self
