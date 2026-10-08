@@ -769,7 +769,7 @@ impl NativeApp<'_> {
             self.cancel()?;
             self.blocked_mouse = self.mouse;
         }
-        Ok(())
+        self.refresh_audio()
     }
     fn mouse_changed(&mut self, state: ElementState) -> Result<()> {
         self.mouse = state == ElementState::Pressed;
@@ -800,7 +800,6 @@ impl NativeApp<'_> {
             WindowEvent::CloseRequested => self.close(event_loop),
             WindowEvent::Focused(active) => {
                 self.focus_changed(active)?;
-                self.refresh_audio()?;
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let size = self
@@ -1029,15 +1028,22 @@ mod tests {
             mouse: false,
             blocked_mouse: false,
             active: true,
+            closing: false,
             paused: false,
             pacer: Pacer::for_model(DeviceModel::Oz9600, ExecutionMode::Interactive),
             pending: 0,
             started: now,
             next_frame: now,
             last_host_status: now,
+            state_store: None,
+            next_save: now,
+            save_error: None,
             fault: None,
             fatal: None,
             status: String::new(),
+            sound: false,
+            audio_capture: false,
+            audio_output: None,
         }
     }
     fn point_to(app: &mut NativeApp<'_>, target: Target) {
@@ -1046,6 +1052,30 @@ mod tests {
             .find(|z| z.target == target)
             .unwrap();
         app.position = Some((zone.rect.x + 1, zone.rect.y + 1));
+    }
+    #[test]
+    fn focus_changes_keep_audio_and_pointer_eligibility_consistent() {
+        let args = Args::try_parse_from(["window", "--rom", "unused.ozrom"]).unwrap();
+        let mut rt = component_runtime();
+        let mut contacts = Contacts::new(0);
+        let mut app = component_app(&args, &mut rt, &mut contacts);
+        app.sound = true;
+        app.refresh_audio().unwrap();
+        assert!(app.audio_capture);
+        app.focus_changed(false).unwrap();
+        assert!(!app.audio_capture);
+        app.focus_changed(true).unwrap();
+        assert!(app.audio_capture);
+        let key = matrix_key(DeviceModel::Oz9600, "1").unwrap();
+        point_to(&mut app, Target::Matrix(key));
+        app.mouse_changed(ElementState::Pressed).unwrap();
+        assert_eq!(app.contacts.pressed_keys(), BTreeSet::from([key]));
+        app.focus_changed(false).unwrap();
+        assert!(!app.audio_capture && app.contacts.pressed_keys().is_empty());
+        app.fault = Some("guest fault".into());
+        app.focus_changed(true).unwrap();
+        assert!(!app.audio_capture);
+        assert_eq!(app.rt.instruction_count(), 0);
     }
     #[test]
     fn focus_without_a_held_pointer_accepts_the_first_fresh_press() {

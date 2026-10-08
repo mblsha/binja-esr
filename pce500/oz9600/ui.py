@@ -62,6 +62,7 @@ class CloseGate:
         self.closing = True
         return True
 
+
 @dataclass
 class PointerGate:
     """Focus/press eligibility; callers cancel Contacts on focus loss or fault."""

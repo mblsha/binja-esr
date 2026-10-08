@@ -130,6 +130,7 @@ def test_close_gate_seals_event_acceptance_and_is_idempotent():
     assert not gate.begin_close()
     assert gate.closing
 
+
 def test_keyboard_focus_does_not_discard_the_first_fresh_pointer_press():
     gate = PointerGate(active=True)
     gate.focus(False)
