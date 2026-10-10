@@ -28,11 +28,29 @@ The graphical browser loader is not yet qualified for this profile.
 constructor remains available; other unknown reads and all writes at those
 addresses retain their traps. The v2 constructor is
 `from_bootstrap_bundle_with_observed_low_reads`. Physical decode under other
-modes remains unqualified. The WASM loader accepts either explicit version
+modes remains unqualified. The WASM loader accepts an explicit version
 and preserves the selected version across fresh reset with retained card SRAM.
 Normal Phonebook, Memo and Business Cards entry/Calendar return have source-
 bound native/WASM proofs. Their text entry/conversion and persistence remain
 open; v2 is an explicit board candidate, not complete application support.
+
+`bootstrap-v3` adds only native read-only addresses5..8, also E0 in the
+acquisition. Its constructor is `from_bootstrap_bundle_with_observed_field_reads`.
+The Phonebook name editor's immutable NAPR template has a null optional-format
+pointer; native code reads words at pointer+5 and pointer+7. A strict component
+reproduces that access and preserves strict neighboring reads, every low write
+and legacy data reads. Acquired-byte and zero controls produce identical pixels
+through a normal kana/edit/return replay, while temporary format metadata differs.
+The public candidate selects the acquired bytes and retains all v1/v2 behavior.
+Its selected profile and logical card SRAM survive fresh WASM reset.
+
+Native/WASM normal inputs now have a source-bound v3 consumer: M then A produces
+the native narrow kana glyph, Backspace clears it, E replaces it, Enter executes
+without a runtime fault, and Calendar returns. Immutable ROM font bits verify
+the two kana glyphs independently; the empty cell has an explicit underline
+cursor layout fixture. This does not qualify complete text conversion/modifiers,
+search semantics, registration, organizer retention or physical low-address
+decode. The native EC font codes differ from standard Shift JIS dialog glyphs.
 
 Normal Clock popup/save/restore uses the shared controller's signed pixel
 coordinates. A stream beginning outside backing can cross zero within one

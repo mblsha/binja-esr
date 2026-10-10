@@ -15,6 +15,18 @@ def test_observed_low_triad_keeps_neighbors_and_writes_strict():
     assert hw.observed_low_triad == bytes([0x12, 0x34, 0x05])
 
 
+def test_observed_field_words_are_finite_read_only_native_data():
+    hw = Hardware({})
+    assert all(hw.read(a) is None for a in range(5, 9))
+    hw.observed_field_words = bytes([1, 2, 3, 4])
+    assert [hw.read(a) for a in range(5, 9)] == [1, 2, 3, 4]
+    assert all(hw.read(a) is None for a in [4, 9, 10, 11])
+    for a in range(5, 9):
+        with pytest.raises(ValueError, match=f"unqualified PA write {a:05X}"):
+            hw.write(a, 0xFF)
+    assert hw.observed_field_words == bytes([1, 2, 3, 4])
+
+
 def test_lcd_coordinate_restore_alias_is_narrow_and_preserves_pixels():
     hw = Hardware({}, controller_hypothesis=True)
     for offset, value in [(31, 2), (3, 255), (16, 24), (18, 48), (2, 0x80)]:

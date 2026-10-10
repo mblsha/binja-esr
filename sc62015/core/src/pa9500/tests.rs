@@ -278,6 +278,45 @@ fn observed_low_triad_requires_fresh_pair_and_preserves_other_low_reads() {
 }
 
 #[test]
+fn observed_field_words_keep_fresh_setup_neighbors_and_writes_strict() {
+    let (mut rt, hw) = fixture();
+    assert!(install_observed_field_words(&mut rt, &hw, [0xe0; 4]).is_err());
+    install_zero_data(&mut rt, &hw, 0xe0).unwrap();
+    install_observed_low_pair(&mut rt, &hw, [0xe0; 2]).unwrap();
+    assert!(install_observed_field_words(&mut rt, &hw, [0xe0; 4]).is_err());
+    install_observed_low_triad(&mut rt, &hw, [0xe0; 3]).unwrap();
+    for a in 5..=8 {
+        assert_eq!(rt.memory.read_byte_for_preflight(a, None), None);
+    }
+    install_observed_field_words(&mut rt, &hw, [1, 2, 3, 4]).unwrap();
+    assert!(install_observed_field_words(&mut rt, &hw, [0; 4]).is_err());
+    for (a, b) in [(5, 1), (6, 2), (7, 3), (8, 4)] {
+        assert_eq!(rt.memory.read_byte_for_preflight(a, None), Some(b));
+        assert_eq!(hw.borrow().read(a), Some(b));
+    }
+    for a in [4, 9, 10, 11, 14] {
+        assert_eq!(rt.memory.read_byte_for_preflight(a, None), None);
+    }
+    for a in 5..=8 {
+        hw.borrow().fault = None;
+        rt.memory.store(a, 8, 0xff).unwrap();
+        assert!(hw
+            .borrow()
+            .fault
+            .as_ref()
+            .unwrap()
+            .contains("unqualified PA write"));
+    }
+    assert_eq!(hw.borrow().observed_field_words, Some([1, 2, 3, 4]));
+    let (mut running, running_hw) = fixture();
+    install_zero_data(&mut running, &running_hw, 0xe0).unwrap();
+    install_observed_low_pair(&mut running, &running_hw, [0xe0; 2]).unwrap();
+    install_observed_low_triad(&mut running, &running_hw, [0xe0; 3]).unwrap();
+    running.step(1).unwrap();
+    assert!(install_observed_field_words(&mut running, &running_hw, [0xe0; 4]).is_err());
+}
+
+#[test]
 fn scratch_candidate_is_bounded_distinct_and_hidden_until_the_explicit_command() {
     let (mut strict, strict_hw) = fixture();
     assert!(install_scratch_candidate(&mut strict, &strict_hw).is_err());

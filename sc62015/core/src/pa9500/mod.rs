@@ -114,6 +114,7 @@ pub struct Hardware {
     pub native_zero_data: Option<u8>,
     pub observed_low_pair: Option<[u8; 2]>,
     pub observed_low_triad: Option<[u8; 3]>,
+    pub observed_field_words: Option<[u8; 4]>,
     /// Separate optional 4 KiB candidate inferred from F28CA/F4146. No alias
     /// wiring is established by the captured open-bus low-address data.
     pub scratch_candidate: Option<Vec<u8>>,
@@ -151,6 +152,7 @@ impl Hardware {
             native_zero_data: None,
             observed_low_pair: None,
             observed_low_triad: None,
+            observed_field_words: None,
             scratch_candidate: None,
             scratch_mapped_active: false,
             card: None,
@@ -177,6 +179,9 @@ impl Hardware {
             0 if self.native_zero_data.is_some() => self.native_zero_data,
             1..=3 if self.observed_low_triad.is_some() => {
                 Some(self.observed_low_triad.unwrap()[(address - 1) as usize])
+            }
+            5..=8 if self.observed_field_words.is_some() => {
+                Some(self.observed_field_words.unwrap()[(address - 5) as usize])
             }
             0xc..=0xd if self.observed_low_pair.is_some() => {
                 Some(self.observed_low_pair.unwrap()[(address - 0xc) as usize])
@@ -615,6 +620,29 @@ pub fn install_observed_low_triad(
     Ok(())
 }
 
+/// Native data words consumed by the ROM's null NAPR format pointer. Only
+/// 5..8 are readable; no legacy alias, adjacent fill or writable low RAM.
+/// Acquired E0 bytes remain a board candidate, not a physical decode contract.
+pub fn install_observed_field_words(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    bytes: [u8; 4],
+) -> Result<(), String> {
+    if rt.instruction_count() != 0
+        || rt.cycle_count() != 0
+        || hw.borrow().observed_low_triad.is_none()
+        || hw.borrow().observed_field_words.is_some()
+    {
+        return Err("configure observed field words once after the triad, before execution".into());
+    }
+    hw.borrow().observed_field_words = Some(bytes);
+    rt.memory.remove_overlay("pa9500_bus_00004");
+    add_bus_view(rt, hw, 4, 4, false, "pa9500_bus_00004");
+    add_bus_view(rt, hw, 5, 8, true, "pa9500_observed_field_words");
+    add_bus_view(rt, hw, 9, 0xb, false, "pa9500_bus_00009");
+    Ok(())
+}
+
 /// Component constructor; acquisition loading validates identity separately.
 pub fn configure(
     fixed: &[u8],
@@ -823,6 +851,17 @@ pub fn from_bootstrap_bundle_with_observed_low_reads(
     Ok((rt, hw))
 }
 
+/// bootstrap-v3 adds four acquired native bytes for the optional NAPR format
+/// read. All older profiles and unknown low reads/writes retain their traps.
+pub fn from_bootstrap_bundle_with_observed_field_reads(
+    image: &[u8],
+    card: Option<card::Pa9c3Card>,
+) -> Result<(CoreRuntime, SharedHardware), String> {
+    let (mut rt, hw) = from_bootstrap_bundle_with_observed_low_reads(image, card)?;
+    install_observed_field_words(&mut rt, &hw, [0xe0; 4])?;
+    Ok((rt, hw))
+}
+
 /// Read-only cross-runner observation. Native counters exclude H boundaries;
 /// legacy time is uncalibrated and is not charged as fabricated CPU cycles.
 pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
@@ -832,7 +871,7 @@ pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
     let hw = c.hardware.borrow();
     let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
     Ok(serde_json::json!({
-        "schema": "pa9500-bootstrap-status-1", "profile": if hw.observed_low_triad.is_some() { "bootstrap-v2" } else { "bootstrap-v1" },
+        "schema": "pa9500-bootstrap-status-1", "profile": if hw.observed_field_words.is_some() { "bootstrap-v3" } else if hw.observed_low_triad.is_some() { "bootstrap-v2" } else { "bootstrap-v1" },
         "active_isa": if c.in_legacy { "esr-h" } else { "native" },
         "native_registers": crate::collect_registers(&rt.state),
         "native_instructions": rt.instruction_count(), "native_cycles": rt.cycle_count(),
