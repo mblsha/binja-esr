@@ -18,7 +18,7 @@ pub struct AudioChunk {
     pub samples: Vec<i16>,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct AudioCapture {
     enabled: bool,
     phase: u64,

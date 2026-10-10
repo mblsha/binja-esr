@@ -109,7 +109,7 @@ impl IsrSoftwareWritePolicy {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LlamaState {
     // Architectural registers are hot enough that hashing every access (and
     // cloning a hash table for fail-closed preflight) dominates ROM runs.
@@ -126,6 +126,7 @@ pub struct LlamaState {
     temps: [u32; FAST_TEMP_REGISTERS],
     // Retain the public RegName behavior for malformed/out-of-range helper
     // inputs without putting a HashMap on normal execution paths.
+    #[serde(with = "resume_extra_regs")]
     extra_regs: HashMap<RegName, u32>,
     power_state: PowerState,
     block_transfer_policy: BlockTransferPolicy,
@@ -141,6 +142,7 @@ pub struct LlamaState {
     /// Identifies the contents of `call_stack`: 0 while empty since
     /// construction/reset, otherwise a process-unique value renewed on every
     /// mutation. Lets observers skip re-snapshotting an unchanged stack.
+    #[serde(skip)]
     call_stack_stamp: u64,
 }
 
@@ -160,6 +162,39 @@ pub struct CallMetricsSnapshot {
 }
 
 impl LlamaState {
+    #[cfg(feature = "oz9600")]
+    pub(crate) fn renew_session_stamp(&mut self) {
+        self.call_stack_stamp = if self.call_stack.is_empty() {
+            0
+        } else {
+            fresh_call_stack_stamp()
+        };
+    }
+    #[cfg(feature = "oz9600")]
+    pub(crate) fn validate_session(&self) -> Result<(), String> {
+        if self.pc == 0
+            || self.pc > 0xfffff
+            || self.ba > 0xffff
+            || self.i > 0xffff
+            || [self.x, self.y, self.u, self.s]
+                .iter()
+                .any(|v| *v > 0xfffff)
+            || self.f & !MODELED_F_MASK != 0
+            || self.imr > 255
+            || self.temps.iter().any(|v| *v > 0xffffff)
+            || !self.extra_regs.is_empty()
+            || self.call_stack.len() > 4096
+            || self.call_page_stack.len() > 4096
+            || self
+                .call_return_widths
+                .iter()
+                .any(|v| ![16, 24].contains(v))
+        {
+            return Err("Invalid saved CPU state".into());
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             ba: 0,
@@ -632,5 +667,28 @@ mod tests {
         assert_eq!(state.pop_call_page(), Some(0xAB0000));
         assert_eq!(state.pop_call_page(), Some(0x120000));
         assert_eq!(state.pop_call_page(), None);
+    }
+}
+
+// A sequence represents TEMP(n) keys without JSON map-key restrictions.
+mod resume_extra_regs {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        value: &HashMap<RegName, u32>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut entries: Vec<_> = value.iter().map(|(k, v)| (*k, *v)).collect();
+        entries.sort_by_key(|(k, _)| format!("{k:?}"));
+        entries.serialize(s)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<HashMap<RegName, u32>, D::Error> {
+        let entries = Vec::<(RegName, u32)>::deserialize(d)?;
+        let map: HashMap<_, _> = entries.iter().copied().collect();
+        if entries.len() != map.len() {
+            return Err(serde::de::Error::custom("duplicate extra register"));
+        }
+        Ok(map)
     }
 }

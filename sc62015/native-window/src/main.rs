@@ -3,6 +3,7 @@
 //! Native host frontend for the ordinary public OZ machine factory.
 mod audio;
 mod retained_store;
+mod startup_error;
 mod ui;
 use clap::Parser;
 use retained_store::{atomic_write, RetainedStore};
@@ -30,6 +31,7 @@ use winit::{
     event::{ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{KeyCode as Key, PhysicalKey},
+    platform::run_on_demand::EventLoopExtRunOnDemand,
     window::{Window, WindowId},
 };
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -47,7 +49,8 @@ struct Args {
     retained: Option<PathBuf>,
     #[arg(long)]
     retained_out: Option<PathBuf>,
-    /// Load existing RAM/RTC and atomically save every five seconds and on exit.
+    /// Recover and atomically save a full session every five seconds and on exit.
+    /// Legacy RAM/RTC images load as fresh CPUs; unfinished edits need sessions.
     /// An invalid existing image rejects startup without overwriting it.
     #[arg(long, conflicts_with = "retained")]
     state: Option<PathBuf>,
@@ -97,14 +100,33 @@ fn machine(
     card: Option<(&[u8], &[u8])>,
 ) -> Result<CoreRuntime> {
     let mut rt = CoreRuntime::for_model(DeviceModel::Oz9600, rom)?;
-    if let Some(bytes) = retained {
-        rt.restore_oz9600_retained_state(bytes)?;
+    if retained.is_some_and(|b| b.starts_with(sc62015_core::oz9600::session::MAGIC)) {
+        rt.configure_oz9600_profile(profile)?;
+        rt.restore_oz9600_session(retained.expect("session"))?;
+        rt.release_oz9600_session_contacts()?;
+    } else {
+        if let Some(bytes) = retained {
+            rt.restore_oz9600_retained_state(bytes)?;
+        }
+        rt.configure_oz9600_profile(profile)?;
     }
-    rt.configure_oz9600_profile(profile)?;
     if let Some((rom, sram)) = card {
         rt.install_oz9600_oz707_card(rom, sram)?;
     }
     Ok(rt)
+}
+/// A fault cannot provide a trustworthy replacement for durable work.
+fn reset_recovery_image(
+    rt: &CoreRuntime,
+    store: Option<&RetainedStore>,
+    faulted: bool,
+) -> Result<Vec<u8>> {
+    if faulted {
+        if let Some(image) = store.and_then(RetainedStore::last_committed) {
+            return Ok(image.to_vec());
+        }
+    }
+    Ok(rt.oz9600_retained_state()?)
 }
 fn observation(rt: &CoreRuntime) -> Value {
     let frame = rt.lcd.as_deref().expect("factory LCD").matrix_frame();
@@ -308,7 +330,7 @@ fn apply(rt: &mut CoreRuntime, events: Vec<Event>, record: &mut Recorder, at: u6
     }
     Ok(())
 }
-fn run(args: Args) -> Result<()> {
+fn run(args: &Args, event_loop: Option<&mut EventLoop<()>>) -> Result<()> {
     let rom = fs::read(&args.rom)?;
     let (mut state_store, retained) = if let Some(path) = &args.state {
         let (store, saved) = RetainedStore::open(path)?;
@@ -356,20 +378,21 @@ fn run(args: Args) -> Result<()> {
     let mut contacts = Contacts::new(u64::from(args.minimum_contact_boundaries));
     if !args.headless {
         let result = live(
-            &args,
+            args,
             &rom,
             &mut rt,
             &mut contacts,
             boundaries,
             state_store.as_mut(),
+            event_loop.ok_or("native event loop unavailable")?,
         );
         // Also preserve backing when the window exits with a host error.
         if let Some(store) = &mut state_store {
-            store.save(&rt.oz9600_retained_state()?)?;
+            store.save(&rt.oz9600_session_state()?)?;
         }
         result?;
     } else if let Some(store) = &mut state_store {
-        store.save(&rt.oz9600_retained_state()?)?;
+        store.save(&rt.oz9600_session_state()?)?;
     }
     if let Some(path) = &args.capture_prefix {
         capture(&rt, path, &contacts, true, false)?;
@@ -421,7 +444,7 @@ impl NativeApp<'_> {
         if let Some(store) = &mut self.state_store {
             match self
                 .rt
-                .oz9600_retained_state()
+                .oz9600_session_state()
                 .map_err(|e| e.to_string())
                 .and_then(|bytes| store.save(&bytes).map_err(|e| e.to_string()))
             {
@@ -592,8 +615,17 @@ impl NativeApp<'_> {
                 }
                 self.audio_capture = false;
                 self.cancel()?;
-                self.save_state();
-                let saved = self.rt.oz9600_retained_state()?;
+                let failed = self.fault.is_some();
+                let recovering = failed
+                    && self
+                        .state_store
+                        .as_deref()
+                        .and_then(RetainedStore::last_committed)
+                        .is_some();
+                if !failed {
+                    self.save_state();
+                }
+                let saved = reset_recovery_image(self.rt, self.state_store.as_deref(), failed)?;
                 let card = self
                     .rt
                     .oz9600_hardware()
@@ -619,7 +651,12 @@ impl NativeApp<'_> {
                 self.paused = true;
                 self.fault = None;
                 self.pacer.rebase();
-                self.status = "Reset preserved logical retained memory; paused".into();
+                self.status = if recovering {
+                    "Recovered last committed image; paused"
+                } else {
+                    "Reset preserved logical retained memory; paused"
+                }
+                .into();
             }
             Action::Save => {
                 self.save_state();
@@ -940,6 +977,7 @@ fn live(
     contacts: &mut Contacts,
     boundaries: u64,
     state_store: Option<&mut RetainedStore>,
+    event_loop: &mut EventLoop<()>,
 ) -> Result<()> {
     let now = Instant::now();
     let mut app = NativeApp {
@@ -979,14 +1017,38 @@ fn live(
         audio_capture: false,
         audio_output: None,
     };
-    EventLoop::new()?.run_app(&mut app)?;
+    event_loop.run_app_on_demand(&mut app)?;
     if let Some(error) = app.fatal {
         return Err(error.into());
     }
     Ok(())
 }
+fn entry(args: Args) -> Result<()> {
+    if args.headless {
+        return run(&args, None);
+    }
+    // One OS event loop, separate window lifetimes for failure and retry.
+    let mut event_loop = EventLoop::new()?;
+    loop {
+        match run(&args, Some(&mut event_loop)) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                eprintln!("oz9600-window: {error}");
+                if !startup_error::show(
+                    &mut event_loop,
+                    &error.to_string(),
+                    args.state.as_deref().or(args.retained.as_deref()),
+                    args.scale,
+                    args.quit_after_ms,
+                )? {
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
 fn main() {
-    if let Err(error) = run(Args::parse()) {
+    if let Err(error) = entry(Args::parse()) {
         eprintln!("oz9600-window: {error}");
         std::process::exit(1);
     }
@@ -1001,6 +1063,31 @@ mod tests {
         fixed[0x1fffd..].copy_from_slice(&[0, 0, 14]);
         sc62015_core::oz9600::configure_hardware(&fixed, sc62015_core::oz9600::Hardware::default())
             .unwrap()
+    }
+    #[test]
+    fn fault_reset_selects_last_committed_checkpoint_over_changed_volatile_ram() {
+        let rt = component_runtime();
+        let good = rt.oz9600_session_state().unwrap();
+        let path =
+            std::env::temp_dir().join(format!("oz-fault-reset-{}.ozsession", std::process::id()));
+        let (mut store, _) = RetainedStore::open(&path).unwrap();
+        store.save(&good).unwrap();
+        rt.oz9600_hardware().unwrap().borrow_mut().ram[7] = 99;
+        assert_eq!(reset_recovery_image(&rt, Some(&store), true).unwrap(), good);
+        assert_eq!(
+            reset_recovery_image(&rt, Some(&store), false).unwrap(),
+            rt.oz9600_retained_state().unwrap()
+        );
+        let mut restored = component_runtime();
+        restored.restore_oz9600_session(&good).unwrap();
+        assert_eq!(restored.oz9600_hardware().unwrap().borrow().ram[7], 0);
+        drop(store);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_file_name(format!(
+            "oz-fault-reset-{}.ozsession.lock",
+            std::process::id()
+        )))
+        .unwrap();
     }
     fn component_app<'a>(
         args: &'a Args,

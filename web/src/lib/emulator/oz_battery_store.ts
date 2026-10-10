@@ -17,7 +17,7 @@ export function ozBatteryIdentity(create: () => IdentityMachine, bundle: Uint8Ar
 		candidate.free();
 	}
 }
-export type SavedBattery = { image: Uint8Array; savedAt: number };
+export type SavedBattery = { image: Uint8Array; session?: Uint8Array; savedAt: number };
 export interface BatteryStorage {
 	read(key: string): Promise<SavedBattery | null>;
 	write(key: string, record: SavedBattery): Promise<void>;
@@ -60,10 +60,25 @@ export const browserBatteryStorage: BatteryStorage = {
 		if (record === undefined) return null;
 		if (!(record?.image instanceof Uint8Array) || !Number.isFinite(record?.savedAt))
 			throw new Error('Saved records have an invalid storage format; the original was preserved');
-		return { image: record.image.slice(), savedAt: record.savedAt };
+		if (record.session !== undefined && !(record.session instanceof Uint8Array))
+			throw new Error('Saved session has an invalid storage format; the original was preserved');
+		return {
+			image: record.image.slice(),
+			...(record.session !== undefined ? { session: record.session.slice() } : {}),
+			savedAt: record.savedAt,
+		};
 	},
 	async write(key, record) {
-		await transaction('readwrite', (store) => store.put({ image: record.image.slice(), savedAt: record.savedAt }, key));
+		await transaction('readwrite', (store) =>
+			store.put(
+				{
+					image: record.image.slice(),
+					...(record.session !== undefined ? { session: record.session.slice() } : {}),
+					savedAt: record.savedAt,
+				},
+				key,
+			),
+		);
 	},
 };
 /** A held Web Lock protects one firmware identity between tabs and releases on
@@ -104,6 +119,7 @@ export class BatterySession {
 	private closing: Promise<void> | null = null;
 	private image: Uint8Array | null;
 	private savedAt: number | null;
+	private session: Uint8Array | null;
 	private constructor(
 		readonly key: string,
 		readonly loaded: SavedBattery | null,
@@ -112,6 +128,7 @@ export class BatterySession {
 	) {
 		this.image = loaded?.image.slice() ?? null;
 		this.savedAt = loaded?.savedAt ?? null;
+		this.session = loaded?.session?.slice() ?? null;
 	}
 	static async open(key: string, storage = browserBatteryStorage, lock = browserBatteryLock): Promise<BatterySession> {
 		const release = await lock(key);
@@ -124,14 +141,24 @@ export class BatterySession {
 	}
 	/** The caller supplies successfully exported core images. Failed writes retain
 	 * the last committed image and allow the same replacement to retry. */
-	save(image: Uint8Array): Promise<{ changed: boolean; savedAt: number }> {
+	save(image: Uint8Array, session?: Uint8Array): Promise<{ changed: boolean; savedAt: number }> {
 		if (this.closing) return Promise.reject(new Error('Saved-record session is closed'));
 		const owned = image.slice();
+		const ownedSession = session?.slice() ?? null;
 		const write = this.pending.then(async () => {
-			if (equalImage(this.image, owned)) return { changed: false, savedAt: this.savedAt! };
+			if (
+				equalImage(this.image, owned) &&
+				(ownedSession === null ? this.session === null : equalImage(this.session, ownedSession))
+			)
+				return { changed: false, savedAt: this.savedAt! };
 			const savedAt = Date.now();
-			await this.storage.write(this.key, { image: owned, savedAt });
+			await this.storage.write(this.key, {
+				image: owned,
+				...(ownedSession !== null ? { session: ownedSession } : {}),
+				savedAt,
+			});
 			this.image = owned;
+			this.session = ownedSession;
 			this.savedAt = savedAt;
 			return { changed: true, savedAt };
 		});

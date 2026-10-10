@@ -39,6 +39,7 @@ pub struct InterruptSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "oz9600", derive(serde::Serialize, serde::Deserialize))]
 pub struct TimerContext {
     pub enabled: bool,
     pub mti_period: u64,
@@ -114,7 +115,7 @@ fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PcHistory {
     pub(crate) pcs: [u32; 10],
     pub(crate) len: usize,
@@ -142,6 +143,20 @@ pub struct BitWatch {
 }
 
 impl TimerContext {
+    #[cfg(feature = "oz9600")]
+    pub(crate) fn validate_session(&self, cycles: u64) -> Result<(), String> {
+        if !self.timer_scale.is_finite()
+            || self.timer_scale <= 0.0
+            || self.interrupt_stack.len() > 4096
+        {
+            return Err("Invalid saved timer state".into());
+        }
+        let (timing, interrupts) = self.snapshot_info();
+        let mut check = self.clone();
+        check.apply_snapshot_info(&timing, &interrupts, cycles)?;
+        Ok(())
+    }
+
     /// Capture interrupt execution state without serialization or dynamic maps.
     pub fn interrupt_snapshot(&self) -> InterruptSnapshot {
         InterruptSnapshot {

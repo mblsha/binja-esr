@@ -11,8 +11,9 @@ use crate::{
     CoreError, Result,
 };
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct ExecutionState {
+    #[serde(skip)]
     mapped_selector: Option<u8>,
     /// Opt-in ONKI contact-edge hypothesis; SSR still reports the held level.
     pub diagnostic_on_irq_edge_only: bool,
@@ -32,6 +33,18 @@ pub struct ExecutionState {
 }
 
 impl ExecutionState {
+    pub(super) fn session_policy(&self) -> (bool, bool, bool, Option<u64>, Option<u64>) {
+        (
+            self.diagnostic_on_irq_edge_only,
+            self.diagnostic_irq_imr_only,
+            self.diagnostic_lcc7_halt_main_timer,
+            self.diagnostic_rtc_a2_period,
+            self.experimental_rtc_second_period,
+        )
+    }
+    pub(super) fn invalidate_bank_view(&mut self) {
+        self.mapped_selector = None;
+    }
     /// Read-only diagnostics for the opt-in profile; absent in historical
     /// profile reports so their observation contract stays unchanged.
     pub fn rtc_progression_report(&self) -> Option<serde_json::Value> {

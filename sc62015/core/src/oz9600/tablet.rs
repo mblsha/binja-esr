@@ -2,7 +2,7 @@
 //! Physical tablet samples. ADC routing is derived from the unmodified F0
 //! firmware; coordinate calibration and electrical timing remain provisional.
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct Tablet {
     pub x: u16,
     pub y: u16,
@@ -15,6 +15,13 @@ pub struct Tablet {
 }
 
 impl Tablet {
+    pub(super) fn validate_session(&self) -> Result<(), String> {
+        if self.x > 1023 || self.y > 1023 || self.latched_sample > 1023 {
+            return Err("Invalid saved tablet state".into());
+        }
+        Ok(())
+    }
+
     /// Raw ten-bit inputs, not LCD pixel coordinates or translated UI events.
     /// Returns a press edge for the provisional GA tablet interrupt latch.
     pub fn set_contact(&mut self, x: u16, y: u16, pressed: bool) -> Result<bool, String> {
