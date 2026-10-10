@@ -34,6 +34,20 @@ pub enum BootstrapProfile {
     ControllerBpD0,
 }
 
+/// Explicit PA ON-contact hypothesis: preserve physical SSR.ONK while held,
+/// but latch ISR.ONKI only on the initial contact edge. Physical assertion and
+/// re-latch timing remain unmeasured. The strict factory keeps level behavior.
+pub fn install_on_contact_edge_candidate(rt: &mut CoreRuntime) -> Result<(), String> {
+    if rt.device_model() != DeviceModel::Pa9500
+        || rt.instruction_count() != 0
+        || rt.elapsed_timing_units() != 0
+    {
+        return Err("PA ON contact candidate requires a fresh PA runtime".into());
+    }
+    rt.pa9500_on_contact_edge_candidate = true;
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SharedHardware(Arc<Mutex<Hardware>>);
 impl SharedHardware {

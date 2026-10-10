@@ -144,3 +144,12 @@ def test_scratch_candidate_is_separate_bounded_and_explicitly_command_gated():
     assert not any(hw.ram)
     hw.compatibility_command = 0
     assert hw.read(0xE000) is None
+
+
+def test_on_contact_candidate_preserves_default_level_contract():
+    from pce500.pa9500.bootstrap import on_irq_should_reassert
+
+    assert on_irq_should_reassert(True)
+    assert not on_irq_should_reassert(False)
+    assert not on_irq_should_reassert(True, contact_edge_candidate=True)
+    assert not on_irq_should_reassert(False, contact_edge_candidate=True)

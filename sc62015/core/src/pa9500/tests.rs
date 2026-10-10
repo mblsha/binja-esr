@@ -1,6 +1,37 @@
 // PY_SOURCE: pce500/pa9500/bootstrap.py
 use super::*;
 
+#[test]
+fn on_contact_edge_candidate_keeps_physical_level_without_irq_reassertion() {
+    for edge in [false, true] {
+        let (mut rt, _) = fixture();
+        if edge {
+            install_on_contact_edge_candidate(&mut rt).unwrap();
+        }
+        rt.timer.enabled = false;
+        // Ordinary guest acknowledgement, followed by another instruction.
+        rt.load_rom(&[0x30, 0x71, 0xfc, 0xf7, 0, 0x30, 0x80, 0xff], 0xe0000);
+        rt.set_reg("PC", 0xe0000);
+        rt.press_on_key();
+        rt.step(1).unwrap();
+        assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8, 0);
+        rt.press_on_key(); // A duplicate host notification is not a new edge.
+        rt.step(1).unwrap();
+        assert_eq!(
+            rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8,
+            if edge { 0 } else { 8 }
+        );
+        assert!(rt.physical_on_key_pressed());
+        rt.step(1).unwrap(); // MV A,(SSR) samples the normal physical input.
+        assert_eq!(rt.get_reg("A") & 8, 8);
+        rt.release_on_key();
+        rt.press_on_key();
+        assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8, 8);
+        assert!(install_on_contact_edge_candidate(&mut rt).is_err());
+    }
+    assert!(install_on_contact_edge_candidate(&mut CoreRuntime::new()).is_err());
+}
+
 fn fixture() -> (CoreRuntime, SharedHardware) {
     let mut fixed = vec![0; 0x20000];
     fixed[0x1fffd..].copy_from_slice(&[0, 0, 15]);

@@ -11,6 +11,15 @@ FIXED_ROM_HASH = "4e61da23861f8a007cd83116dd26b03db5843bdd6daa033aba36a68e52d6c1
 SELECTORS = (*range(8), *range(248, 256))
 
 
+def on_irq_should_reassert(held, *, contact_edge_candidate=False):
+    """Opt-in ON latch hypothesis; the physical SSR contact remains held.
+
+    Guest acknowledgement consumes the edge latch. A duplicate host press is
+    not an electrical edge. Assertion/re-latch timing is not hardware verified.
+    """
+    return held and not contact_edge_candidate
+
+
 class Hardware:
     def __init__(self, banks, controller_hypothesis=False):
         self.selector, self.cycle = 7, 0

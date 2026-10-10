@@ -672,6 +672,8 @@ pub struct CoreRuntime {
     poisoned: Option<String>,
     preflight_cache: preflight_cache::PreflightCache,
     boundary_device: Option<Box<dyn runtime_device::BoundaryDevice>>,
+    #[cfg(feature = "pa9500")]
+    pub(crate) pa9500_on_contact_edge_candidate: bool,
     #[cfg(feature = "oz9600")]
     pub(crate) oz9600_hardware: Option<oz9600::SharedHardware>,
 }
@@ -715,6 +717,8 @@ impl CoreRuntime {
             poisoned: None,
             preflight_cache: Default::default(),
             boundary_device: None,
+            #[cfg(feature = "pa9500")]
+            pa9500_on_contact_edge_candidate: false,
             #[cfg(feature = "oz9600")]
             oz9600_hardware: None,
         };
@@ -1001,7 +1005,12 @@ impl CoreRuntime {
         self.onk_level || self.iq7000_alarm_wake_level()
     }
 
-    fn oz9600_on_irq_edge_only(&self) -> bool {
+    // PY_SOURCE: pce500/pa9500/bootstrap.py:on_irq_should_reassert
+    fn on_irq_edge_only(&self) -> bool {
+        #[cfg(feature = "pa9500")]
+        if self.device_model() == DeviceModel::Pa9500 && self.pa9500_on_contact_edge_candidate {
+            return true;
+        }
         #[cfg(feature = "oz9600")]
         {
             self.oz9600_hardware
@@ -1032,7 +1041,7 @@ impl CoreRuntime {
 
     // PY_SOURCE: pce500/oz9600/profile.py:on_irq_should_reassert
     fn on_key_will_reassert(&self) -> bool {
-        self.effective_onk_level() && !self.oz9600_on_irq_edge_only()
+        self.effective_onk_level() && !self.on_irq_edge_only()
     }
 
     fn advance_iq7000_rtc_timing_units(&mut self, timing_units: u64) -> bool {
@@ -1413,9 +1422,9 @@ impl CoreRuntime {
     /// acknowledgement path; exact assertion/re-latch latency is not yet a
     /// real-device-derived scheduler fact.
     pub fn press_on_key(&mut self) {
-        // The opt-in OZ contact-edge experiment keeps SSR high while held,
+        // The opt-in board contact-edge experiment keeps SSR high while held,
         // but duplicate host press notifications are not new electrical edges.
-        if self.onk_level && self.oz9600_on_irq_edge_only() {
+        if self.onk_level && self.on_irq_edge_only() {
             return;
         }
         self.onk_level = true;
