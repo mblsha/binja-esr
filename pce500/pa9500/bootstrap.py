@@ -17,6 +17,7 @@ class Hardware:
         self.gate, self.ram = bytearray(64), bytearray(0x40000)
         self.banks = banks
         self.startup_latches = bytearray(2)
+        self.compatibility_command = None
         self.adc_control = 0 if controller_hypothesis else None
         self.lcd = LcdController(195, 145) if controller_hypothesis else None
         self.rtc = Rtc() if controller_hypothesis else None
@@ -53,6 +54,10 @@ class Hardware:
             self.gate[address - 0x4000] = value
         elif 0xF00D <= address <= 0xF00E:
             self.startup_latches[address - 0xF00D] = value
+        elif (
+            address == 0xF00C and self.compatibility_command is not None and value == 1
+        ):
+            self.compatibility_command = value
         elif 0x80000 <= address <= 0xBFFFF:
             self.ram[address - 0x80000] = value
         elif 0x8000 <= address <= 0x801F and self.rtc:

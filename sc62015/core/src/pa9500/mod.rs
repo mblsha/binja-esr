@@ -20,6 +20,7 @@ pub const SELECTORS: [u8; 16] = [
     0, 1, 2, 3, 4, 5, 6, 7, 248, 249, 250, 251, 252, 253, 254, 255,
 ];
 pub mod compat_probe;
+pub mod compat_runtime;
 const MAGIC: &[u8; 8] = b"PAROM01\0";
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -45,6 +46,8 @@ pub struct Hardware {
     pub gate: [u8; 64],
     pub ram: Vec<u8>,
     pub startup_latches: [u8; 2],
+    /// Explicit compatibility exploration only; ordinary profiles reject F00C.
+    pub compatibility_command: Option<u8>,
     /// Unwired PA ADC/contact inputs in the explicit peripheral hypothesis.
     pub adc_control: Option<u8>,
     pub banks: BTreeMap<u8, Vec<u8>>,
@@ -62,6 +65,7 @@ impl Hardware {
             selector: 7,
             gate: [0; 64],
             startup_latches: [0; 2],
+            compatibility_command: None,
             adc_control: peripherals.then_some(0),
             ram: vec![0; 0x40000],
             banks,
@@ -149,6 +153,10 @@ impl Hardware {
             0xf00d..=0xf00e => {
                 self.startup_latches[(address - 0xf00d) as usize] = value;
                 self.event("write", address, value, pc);
+            }
+            0xf00c if self.compatibility_command.is_some() && value == 1 => {
+                self.compatibility_command = Some(value);
+                self.event("compatibility_command", address, value, pc);
             }
             0x80000..=0xbffff => self.ram[(address - 0x80000) as usize] = value,
             0x8000..=0x801f if self.rtc.is_some() => {

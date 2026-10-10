@@ -55,3 +55,25 @@ def test_far_transfer_preserves_twenty_bits():
     state = StartupState(0)
     assert step(state, Bus(bytes.fromhex("7b 0f 3f c1"))) == 0xF3FC1
     assert state.pc == 4
+
+
+def test_call_return_stack_order():
+    state = StartupState(0, r=0x5C)
+    bus = Bus(bytes.fromhex("78 00 03 37"))
+    step(state, bus)
+    assert (state.pc, state.r, state.internal[0x5A:0x5C]) == (3, 0x5A, b"\x03\x00")
+    step(state, bus)
+    assert (state.pc, state.r) == (3, 0x5C)
+
+
+@pytest.mark.parametrize(
+    "a,target,zero", [(0x10, 0x20, True), (0x11, 0x30, True), (0x12, 0x40, False)]
+)
+def test_counted_table_cases_default_and_return(a, target, zero):
+    state = StartupState(0, r=0x5C, carry=True)
+    state.internal[2] = a
+    bus = Bus(bytes.fromhex("7a 02 12 34 69 10 00 20 11 00 30 00 40"))
+    step(state, bus)
+    assert state.internal[0x5A:0x5C] == b"\x34\x12"
+    step(state, bus)
+    assert (state.pc, state.r, state.zero, state.carry) == (target, 0x5A, zero, True)

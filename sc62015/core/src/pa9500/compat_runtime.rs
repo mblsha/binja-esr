@@ -1,0 +1,269 @@
+// PY_SOURCE: pce500/pa9500/compat_runtime.py
+//! Explicit mixed-ISA exploration coordinator over the shared native runtime.
+//! Gate-triggered far transfers, 16 KiB legacy pages, scalar WRIT and shared
+//! low IRAM/C/Z are hypotheses. Default PA factory profiles remain strict.
+use super::{
+    compat_probe::{self, StartupBus, StartupState, Transfer},
+    SharedHardware,
+};
+use crate::keyboard::KeyboardMatrix;
+use crate::CoreRuntime;
+use serde_json::{json, Value};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyDataPolicy {
+    TrapUnknown,
+    /// Only WRIT port04=1's 8000..BFFF aperture is treated as absent media.
+    AbsentLegacyMedia,
+}
+pub struct CompatibilityMachine {
+    pub native: CoreRuntime,
+    pub hardware: SharedHardware,
+    pub legacy: StartupState,
+    pub in_legacy: bool,
+    pub legacy_boundaries: u64,
+    pub transitions: Vec<Value>,
+    pub legacy_trace: Vec<Value>,
+    data_policy: LegacyDataPolicy,
+}
+impl CompatibilityMachine {
+    pub fn new(
+        mut native: CoreRuntime,
+        hardware: SharedHardware,
+        data_policy: LegacyDataPolicy,
+    ) -> Self {
+        hardware.borrow().compatibility_command = Some(0);
+        let mut keyboard = KeyboardMatrix::new();
+        keyboard.set_raw_kil(true);
+        keyboard.disable_fifo_mirroring();
+        keyboard.set_press_threshold(1);
+        native.keyboard = Some(keyboard);
+        Self {
+            native,
+            hardware,
+            legacy: StartupState::new(0),
+            in_legacy: false,
+            legacy_boundaries: 0,
+            transitions: Vec::new(),
+            legacy_trace: Vec::new(),
+            data_policy,
+        }
+    }
+    pub fn step(&mut self) -> Result<(), String> {
+        if !self.in_legacy {
+            let pc = self.native.get_reg("PC");
+            let opcode = self.native.memory.read_byte_for_preflight(pc, None);
+            self.native.step(1).map_err(|e| e.to_string())?;
+            let target = self.native.get_reg("PC");
+            let gate = self.hardware.borrow().gate[15];
+            if opcode == Some(3) && target < 0x10000 && gate & 2 != 0 {
+                self.legacy.pc = target as u16;
+                for i in 0..128 {
+                    self.legacy.internal[i] = self
+                        .native
+                        .memory
+                        .read_internal_byte_silent(i as u32)
+                        .unwrap();
+                }
+                self.legacy.carry = self.native.get_reg("F") & 1 != 0;
+                self.legacy.zero = self.native.get_reg("F") & 2 != 0;
+                self.in_legacy = true;
+                self.transitions.push(json!({"from":"native","to":"legacy","source_pc":pc,"target_pc":target,
+                    "native_instructions":self.native.instruction_count(),"gate":self.hardware.borrow().gate[15]}));
+            }
+            return Ok(());
+        }
+        let before = legacy_state(&self.legacy);
+        let mut bus = LegacyBus {
+            hardware: &self.hardware,
+            policy: self.data_policy,
+            pc: self.legacy.pc,
+        };
+        let transfer = compat_probe::step(&mut self.legacy, &mut bus)?;
+        self.legacy_boundaries += 1;
+        if self.legacy_trace.len() < 512 {
+            self.legacy_trace.push(json!({"before":before,"after":legacy_state(&self.legacy),
+                "native_target":match transfer {Transfer::Continue=>None,Transfer::Native(t)=>Some(t)}}));
+        }
+        for i in 0..128 {
+            self.native
+                .memory
+                .write_internal_byte(i as u32, self.legacy.internal[i]);
+        }
+        if let Transfer::Native(target) = transfer {
+            if self.hardware.borrow().gate[15] & 2 != 0 {
+                return Err("legacy far transfer did not clear gate bit1".into());
+            }
+            self.native.set_reg(
+                "F",
+                u32::from(self.legacy.carry) | (u32::from(self.legacy.zero) << 1),
+            );
+            self.native.set_reg("PC", target);
+            self.in_legacy = false;
+            self.transitions.push(
+                json!({"from":"legacy","to":"native","source_pc":bus.pc,"target_pc":target,
+                "legacy_boundaries":self.legacy_boundaries,"gate":self.hardware.borrow().gate[15]}),
+            );
+        }
+        Ok(())
+    }
+}
+pub fn legacy_state(s: &StartupState) -> Value {
+    json!({"pc":s.pc,"dp":s.dp,"p":s.p,"q":s.q,"r":s.r,"table_count":s.table_count,
+        "internal":s.internal.to_vec(),"carry":s.carry,"zero":s.zero})
+}
+pub struct LegacyBus<'a> {
+    pub hardware: &'a SharedHardware,
+    pub policy: LegacyDataPolicy,
+    pub pc: u16,
+}
+impl StartupBus for LegacyBus<'_> {
+    fn fetch(&self, address: u16) -> Result<u8, String> {
+        let hw = self.hardware.borrow();
+        let (selector, offset) = match address {
+            0..=0x1fff => (0, 0x10000 + address as usize),
+            0x2000..=0x3fff => (0, address as usize),
+            0xc000..=0xffff if hw.gate[6] <= 0x37 => {
+                let page = hw.gate[6];
+                (
+                    page >> 3,
+                    (page as usize & 7) * 0x4000 + (address as usize & 0x3fff),
+                )
+            }
+            _ => {
+                return Err(format!(
+                    "unqualified legacy fetch {address:04X}; mapping={:?}",
+                    &hw.gate[..16]
+                ))
+            }
+        };
+        hw.banks
+            .get(&selector)
+            .map(|b| b[offset])
+            .ok_or_else(|| format!("legacy ROM page selector {selector:02X} missing"))
+    }
+    fn read(&self, address: u16) -> Result<u8, String> {
+        let hw = self.hardware.borrow();
+        match address {
+            // Native and legacy graphics helpers independently refer to
+            // 80E20 and 4E20, respectively. The broader 16 KiB alias is a
+            // candidate contract; physical page selection remains unqualified.
+            0x4000..=0x7fff => Ok(hw.ram[(address - 0x4000) as usize]),
+            0x8000..=0xbfff
+                if hw.gate[4] == 1 && self.policy == LegacyDataPolicy::AbsentLegacyMedia =>
+            {
+                Ok(0xff)
+            }
+            _ => Err(format!(
+                "unqualified legacy data {address:04X}; port04={:02X} port05={:02X}",
+                hw.gate[4], hw.gate[5]
+            )),
+        }
+    }
+    fn write(&mut self, address: u16, value: u8) -> Result<(), String> {
+        let mut hw = self.hardware.borrow();
+        if !(0x4000..=0x7fff).contains(&address) {
+            return Err(format!("unqualified legacy data write {address:04X}"));
+        }
+        hw.ram[(address - 0x4000) as usize] = value;
+        hw.events.push(json!({"kind":"legacy_data_write","address":address,"native_alias":0x80000+u32::from(address-0x4000),"value":value,"pc":self.pc}));
+        Ok(())
+    }
+    fn writ(&mut self, dp: u16, p: u8, value: u8) -> Result<(), String> {
+        let register = dp as u8;
+        let allowed = match register {
+            0x0f => p == 2 && matches!(value, 0 | 2 | 3),
+            0x04 | 0x05 => matches!(p, 2 | 0x0c | 0x0d) && value <= 3,
+            0x06 => p == 2 && value <= 0x37,
+            0x00 => p == 2 && value <= 7,
+            0x07 => p == 2 && value == 1,
+            _ => false,
+        };
+        if !allowed {
+            return Err(format!(
+                "unqualified legacy WRIT dp={dp:04X} p={p:02X} value={value:02X}"
+            ));
+        }
+        let mut hw = self.hardware.borrow();
+        hw.gate[register as usize] = value;
+        hw.events.push(json!({"kind":"legacy_WRIT","dp":dp,"register":register,"p":p,"value":value,"pc":self.pc}));
+        Ok(())
+    }
+    fn outf(&mut self, value: u8) -> Result<(), String> {
+        if value != 0 {
+            return Err(format!("unqualified legacy OUTF {value:02X}"));
+        }
+        self.hardware
+            .borrow()
+            .events
+            .push(json!({"kind":"legacy_OUTF","value":value,"pc":self.pc}));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pa9500::{BootstrapProfile, Hardware};
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
+    };
+
+    #[test]
+    fn split_fetch_alias_and_page_selection_reject_unknown_space() {
+        let mut banks = BTreeMap::from([(0, vec![0; 0x20000]), (6, vec![0; 0x20000])]);
+        banks.get_mut(&0).unwrap()[0x10000] = 0x4d;
+        banks.get_mut(&0).unwrap()[0x2000] = 0x79;
+        banks.get_mut(&0).unwrap()[0xc000] = 0x7a;
+        banks.get_mut(&6).unwrap()[0x1c000] = 0x10;
+        let hardware = SharedHardware(Arc::new(Mutex::new(Hardware::new(
+            banks,
+            BootstrapProfile::TrapPeripherals,
+        ))));
+        hardware.borrow().gate[6] = 0x37;
+        let mut bus = LegacyBus {
+            hardware: &hardware,
+            policy: LegacyDataPolicy::TrapUnknown,
+            pc: 0,
+        };
+        assert_eq!(
+            [
+                bus.fetch(0).unwrap(),
+                bus.fetch(0x2000).unwrap(),
+                bus.fetch(0xc000).unwrap()
+            ],
+            [0x4d, 0x79, 0x10]
+        );
+        assert!(bus.read(0).is_err());
+        bus.write(0x4e20, 0xa5).unwrap();
+        assert_eq!(hardware.borrow().ram[0xe20], 0xa5);
+        bus.writ(0x4006, 2, 3).unwrap();
+        assert_eq!(bus.fetch(0xc000).unwrap(), 0x7a);
+        assert!(bus.fetch(0x4000).is_err());
+        assert!(bus.fetch(0x8000).is_err());
+    }
+
+    #[test]
+    fn absent_media_requires_declared_policy_and_port04_one() {
+        let hardware = SharedHardware(Arc::new(Mutex::new(Hardware::new(
+            BTreeMap::new(),
+            BootstrapProfile::TrapPeripherals,
+        ))));
+        let mut bus = LegacyBus {
+            hardware: &hardware,
+            policy: LegacyDataPolicy::AbsentLegacyMedia,
+            pc: 0,
+        };
+        assert!(bus.read(0x8000).is_err());
+        hardware.borrow().gate[4] = 1;
+        assert_eq!(bus.read(0x8000).unwrap(), 255);
+        assert_eq!(bus.read(0xbfff).unwrap(), 255);
+        assert!(bus.read(0xc000).is_err());
+        let before = hardware.borrow().gate;
+        assert!(bus.writ(0x4006, 2, 0x38).is_err());
+        assert_eq!(hardware.borrow().gate, before);
+        bus.policy = LegacyDataPolicy::TrapUnknown;
+        assert!(bus.read(0x8000).is_err());
+    }
+}

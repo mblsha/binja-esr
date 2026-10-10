@@ -7,9 +7,13 @@ ESR-H decoder, Binary Ninja architecture and CPU runtime remain to be built.
 PA-9500 analysis has now found paired native/legacy gateways. The shared
 `pa9500::compat_probe` module and Python reference execute a strict ESR-H
 startup signature component with explicit WRIT output and far-transfer
-hypotheses. They do not provide a complete ESR-H CPU, automatic machine ISA
-dispatch or a qualified legacy memory/I/O map. Full mode/state integration
-remains part of the PA-9500 emulator work.
+hypotheses. The optional `pa9500::compat_runtime` coordinator now executes a
+fresh reset through the cold legacy gateway and back to native LLAMA. Its
+gate-triggered dispatch, split fetch map, 16 KiB pages, shared low internal
+RAM/C/Z and scalar port outputs are explicit hypotheses. Ordinary model
+factories remain strict and do not enable this coordinator. Unsupported
+operations and unknown memory still trap; a complete ESR-H CPU, calibrated
+timing, physical map and PyO3/WASM integration remain pending.
 This page records available references and the work needed to add them.
 
 ## Existing references
