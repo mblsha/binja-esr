@@ -2,6 +2,24 @@
 use super::*;
 
 #[test]
+fn uart_candidate_is_explicit_and_cannot_replace_or_attach_to_running_runtime() {
+    let (mut rt, _) = fixture();
+    assert!(rt.sio.is_none());
+    install_uart_candidate(&mut rt).unwrap();
+    let uart = rt.sio.as_ref().unwrap().uart().unwrap();
+    assert_eq!(
+        (uart.timebase_hz, uart.baud_divisor, uart.control),
+        (1_024_000, 2, 0)
+    );
+    assert!(install_uart_candidate(&mut rt).is_err());
+    let (mut running, _) = fixture();
+    running.step(1).unwrap();
+    assert!(install_uart_candidate(&mut running).is_err());
+    assert!(running.sio.is_none());
+    assert!(install_uart_candidate(&mut CoreRuntime::new()).is_err());
+}
+
+#[test]
 fn on_contact_edge_candidate_keeps_physical_level_without_irq_reassertion() {
     for edge in [false, true] {
         let (mut rt, _) = fixture();

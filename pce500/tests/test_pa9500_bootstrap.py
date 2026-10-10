@@ -153,3 +153,12 @@ def test_on_contact_candidate_preserves_default_level_contract():
     assert not on_irq_should_reassert(False)
     assert not on_irq_should_reassert(True, contact_edge_candidate=True)
     assert not on_irq_should_reassert(False, contact_edge_candidate=True)
+
+
+def test_uart_candidate_is_a_register_only_peripheral_and_default_stays_absent():
+    from pce500.pa9500.bootstrap import register_uart_candidate
+
+    uart = register_uart_candidate()
+    assert (uart.timebase_hz, uart.baud_divisor, uart.control) == (1_024_000, 2, 0)
+    assert not uart.completed_tx
+    assert Hardware({}).read(0xF7) is None

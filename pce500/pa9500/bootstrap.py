@@ -6,6 +6,7 @@ OZ controller semantics are named hypotheses, not a physical board contract.
 
 from pce500.oz9600.lcd import LcdController
 from pce500.oz9600.rtc import Rtc
+from pce500.peripherals.uart import Uart
 
 FIXED_ROM_HASH = "4e61da23861f8a007cd83116dd26b03db5843bdd6daa033aba36a68e52d6c1aa"
 SELECTORS = (*range(8), *range(248, 256))
@@ -18,6 +19,15 @@ def on_irq_should_reassert(held, *, contact_edge_candidate=False):
     not an electrical edge. Assertion/re-latch timing is not hardware verified.
     """
     return held and not contact_edge_candidate
+
+
+def register_uart_candidate():
+    """Register-only transport with explicit nominal timing; firmware owns COM.
+
+    The PA hardware constructor leaves this opt-in peripheral unattached.
+    Physical clock/divisor, parity waveform and connector wiring are open.
+    """
+    return Uart(timebase_hz=1_024_000, baud_divisor=2)
 
 
 class Hardware:

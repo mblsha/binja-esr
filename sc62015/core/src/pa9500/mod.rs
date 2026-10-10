@@ -48,6 +48,23 @@ pub fn install_on_contact_edge_candidate(rt: &mut CoreRuntime) -> Result<(), Str
     Ok(())
 }
 
+/// Opt-in register-only COM transport. All OPEN/PRINT, conversion, buffering
+/// and flow control remain acquired firmware work. Nominal clock/divisor are
+/// functional hypotheses; the strict PA constructor leaves UART unavailable.
+// PY_SOURCE: pce500/pa9500/bootstrap.py:register_uart_candidate
+pub fn install_uart_candidate(rt: &mut CoreRuntime) -> Result<(), String> {
+    if rt.device_model() != DeviceModel::Pa9500
+        || rt.elapsed_timing_units() != 0
+        || rt.sio.is_some()
+    {
+        return Err("PA UART candidate requires a fresh PA runtime without UART".into());
+    }
+    let mut uart = crate::sio::SioStub::register_only(1_024_000, 2);
+    uart.init(&mut rt.memory);
+    rt.sio = Some(uart);
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SharedHardware(Arc<Mutex<Hardware>>);
 impl SharedHardware {
