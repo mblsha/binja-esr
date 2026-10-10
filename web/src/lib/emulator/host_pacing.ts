@@ -52,7 +52,9 @@ export function automaticHostSlice(
 			// timing: RTC/peripherals advance too. Rebase prevents a pacing debt
 			// after this explicitly faster-than-real-time burst.
 			const used = runHostSlice(emulator as SlicedEmulator, boost);
-			if (used === 0) throw new Error('Typing catch-up made no scheduler progress');
+			// A host deadline can expire before Rust's first batch. Yield and
+			// retry without consuming queued input or rebasing pacing credit.
+			if (used === 0) return 0;
 			inputs.advance(used);
 			emulator.rebase_pacing();
 			return 0; // Caller still yields to input/Stop before another slice.
@@ -76,7 +78,7 @@ export function automaticHostSlice(
 		waitMs > 4 ||
 		(result.plan.action === 'wait'
 			? planned !== 0 || result.slice != null
-			: result.plan.action !== 'run' || (planned > 0 && used === 0))
+			: result.plan.action !== 'run' || (planned > 0 && used === 0 && result.slice?.reason !== 'host_yield'))
 	) {
 		throw new Error('Invalid automatic pacing progress from Rust/WASM');
 	}

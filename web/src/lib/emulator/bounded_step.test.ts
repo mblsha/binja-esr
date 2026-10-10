@@ -60,6 +60,12 @@ describe('bounded Rust/WASM stepping', () => {
 		expect(yieldHost).toHaveBeenCalledTimes(2);
 	});
 
+	it('rejects zero progress claimed as a completed positive budget', () => {
+		expect(() => runHostSlice({ run_slice: () => ({ ...result(0), reason: 'boundary_budget' }) }, 2)).toThrow(
+			'Invalid boundary progress',
+		);
+	});
+
 	it('rejects bad budgets and stale WASM instead of falling back to unbounded execution', async () => {
 		const run_slice = vi.fn();
 		for (const bad of [-1, 1.5, Infinity, NaN, 0x100000000]) {

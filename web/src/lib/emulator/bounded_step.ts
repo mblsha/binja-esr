@@ -39,7 +39,12 @@ export function runHostSlice(emulator: SlicedEmulator, boundaries: number): numb
 	}
 	const result = emulator.run_slice(boundaries, HOST_SLICE_MS);
 	const used = result.progress.boundary_budget_used;
-	if (!Number.isSafeInteger(used) || used < 0 || used > boundaries) {
+	if (
+		!Number.isSafeInteger(used) ||
+		used < 0 ||
+		used > boundaries ||
+		(boundaries > 0 && used === 0 && result.reason !== 'host_yield')
+	) {
 		throw new Error('Invalid boundary progress from Rust/WASM');
 	}
 	return used;
