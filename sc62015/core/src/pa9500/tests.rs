@@ -2,6 +2,23 @@
 use super::*;
 
 #[test]
+fn lcd_coordinate_restore_candidate_requires_a_fresh_pa_controller() {
+    let (mut rt, hw) = fixture();
+    hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));
+    assert!(!hw.borrow().lcd_coordinate_restore_candidate);
+    install_lcd_coordinate_restore_candidate(&mut rt, &hw).unwrap();
+    assert!(install_lcd_coordinate_restore_candidate(&mut rt, &hw).is_err());
+    let (mut rt, hw) = fixture();
+    hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));
+    rt.step(1).unwrap();
+    assert!(install_lcd_coordinate_restore_candidate(&mut rt, &hw).is_err());
+    let (mut rt, hw) = fixture();
+    hw.borrow().lcd = None;
+    assert!(install_lcd_coordinate_restore_candidate(&mut rt, &hw).is_err());
+    assert!(install_lcd_coordinate_restore_candidate(&mut CoreRuntime::new(), &hw).is_err());
+}
+
+#[test]
 fn uart_candidate_is_explicit_and_cannot_replace_or_attach_to_running_runtime() {
     let (mut rt, _) = fixture();
     assert!(rt.sio.is_none());

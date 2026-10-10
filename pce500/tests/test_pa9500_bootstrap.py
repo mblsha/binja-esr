@@ -1,6 +1,32 @@
 """PA reset-bus component controls; these do not claim foreground boot."""
 
 from pce500.pa9500.bootstrap import Hardware
+import pytest
+
+
+def test_lcd_coordinate_restore_alias_is_narrow_and_preserves_pixels():
+    hw = Hardware({}, controller_hypothesis=True)
+    for offset, value in [(31, 2), (3, 255), (16, 24), (18, 48), (2, 0x80)]:
+        hw.write(0x8420 + offset, value)
+    with pytest.raises(ValueError, match="unqualified PA write 08412"):
+        hw.write(0x8412, 0x34)
+    hw.install_lcd_coordinate_restore_candidate()
+    for address, value in [(0x8412, 0x34), (0x8413, 0), (0x8416, 0x12), (0x8417, 0)]:
+        hw.write(address, value)
+    assert hw.read(0x8412) == 0x34 and hw.read(0x8416) == 0x12
+    for y in range(145):
+        for x in range(195):
+            assert hw.lcd.pixel(x, y) == (x == 24 and y == 48)
+    with pytest.raises(ValueError, match="unqualified PA write 08410"):
+        hw.write(0x8410, 255)
+    with pytest.raises(ValueError, match="fresh PA controller"):
+        hw.install_lcd_coordinate_restore_candidate()
+    late = Hardware({}, controller_hypothesis=True)
+    late.cycle = 1
+    with pytest.raises(ValueError, match="fresh PA controller"):
+        late.install_lcd_coordinate_restore_candidate()
+    with pytest.raises(ValueError, match="fresh PA controller"):
+        Hardware({}).install_lcd_coordinate_restore_candidate()
 
 
 def test_selector_aliases_keep_latch_identity_and_unacquired_banks_are_missing():

@@ -44,6 +44,7 @@ class Hardware:
         self.native_zero_data = None
         self.observed_low_pair = None
         self.scratch_candidate = None
+        self.lcd_coordinate_restore_candidate = False
         self.adc_control = 0 if controller_hypothesis else None
         # Explicit raw electrical candidate; no host coordinate hit testing.
         self.tablet = None
@@ -142,7 +143,19 @@ class Hardware:
                 self.card.write(target, value)
         elif 0x8000 <= address <= 0x801F and self.rtc:
             self.rtc.write(address & 31, value)
-        elif 0x8420 <= address <= 0x843F and self.lcd:
+        elif self.lcd and (
+            0x8420 <= address <= 0x843F
+            or self.lcd_coordinate_restore_candidate
+            and address in (0x8412, 0x8413, 0x8416, 0x8417)
+        ):
             self.lcd.write(address & 31, value)
         else:
             raise ValueError(f"unqualified PA write {address:05X}")
+
+    def install_lcd_coordinate_restore_candidate(self):
+        """Opt-in F2FAC/F2FB1 Y-coordinate aliases; physical decoding is open."""
+        if self.cycle or self.lcd is None or self.lcd_coordinate_restore_candidate:
+            raise ValueError(
+                "LCD coordinate restore candidate requires a fresh PA controller"
+            )
+        self.lcd_coordinate_restore_candidate = True

@@ -65,6 +65,24 @@ pub fn install_uart_candidate(rt: &mut CoreRuntime) -> Result<(), String> {
     Ok(())
 }
 
+/// F2FAC/F2FB1 restore Y words through the LCD read-side addresses. Accept only
+/// those four coordinate bytes as an explicit candidate, before execution.
+// PY_SOURCE: pce500/pa9500/bootstrap.py:Hardware.install_lcd_coordinate_restore_candidate
+pub fn install_lcd_coordinate_restore_candidate(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+) -> Result<(), String> {
+    if rt.device_model() != DeviceModel::Pa9500
+        || rt.elapsed_timing_units() != 0
+        || hw.borrow().lcd.is_none()
+        || hw.borrow().lcd_coordinate_restore_candidate
+    {
+        return Err("LCD coordinate restore candidate requires a fresh PA controller".into());
+    }
+    hw.borrow().lcd_coordinate_restore_candidate = true;
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SharedHardware(Arc<Mutex<Hardware>>);
 impl SharedHardware {
@@ -115,6 +133,7 @@ pub struct Hardware {
     pub cycle: u64,
     pub fault: Option<String>,
     pub lcd: Option<LcdController>,
+    pub lcd_coordinate_restore_candidate: bool,
     pub rtc: Option<Rtc>,
     mapped_selector: Option<u8>,
 }
@@ -146,6 +165,7 @@ impl Hardware {
             fault: None,
             mapped_selector: None,
             lcd: peripherals.then(|| LcdController::with_geometry(195, 145)),
+            lcd_coordinate_restore_candidate: false,
             rtc: peripherals.then(Rtc::default),
         }
     }
@@ -302,7 +322,10 @@ impl Hardware {
                     .write((address & 31) as usize, value);
                 self.event("write", address, value, pc);
             }
-            0x8420..=0x843f if self.lcd.is_some() => {
+            0x8420..=0x843f | 0x8412..=0x8413 | 0x8416..=0x8417
+                if self.lcd.is_some()
+                    && (address >= 0x8420 || self.lcd_coordinate_restore_candidate) =>
+            {
                 if let Err(error) = self
                     .lcd
                     .as_mut()
