@@ -20,6 +20,8 @@ class Hardware:
         self.compatibility_command = None
         self.external_media_enabled, self.card = False, None
         self.card_lower_write_alias = False
+        # Explicit F483B strobe/input candidate, not measured board wiring.
+        self.card_eil_presence_candidate = False
         self.native_zero_data = None
         self.observed_low_pair = None
         self.scratch_candidate = None
@@ -70,6 +72,11 @@ class Hardware:
         return {6: self.tablet[0], 7: self.tablet[1], 22: self.tablet[2] << 2}.get(
             self.adc_control, 0
         )
+
+    def card_presence_input(self, eol):
+        if not self.card_eil_presence_candidate or not self.external_media_enabled:
+            return None
+        return self.card is not None and bool(eol & 4)
 
     def architectural_read(self, address):
         value = self.read(address)

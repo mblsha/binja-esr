@@ -70,6 +70,9 @@ pub struct Hardware {
     pub card: Option<card::Pa9c3Card>,
     /// Opt-in candidate: native 30000 SRAM writes reach the same 32 KiB chip.
     pub card_lower_write_alias: bool,
+    /// Opt-in F483B consumer candidate: EOL bit2 strobes card presence on EIL
+    /// bit7. Physical pin level/timing and EIL bit6 remain unqualified.
+    pub card_eil_presence_candidate: bool,
     /// Unwired PA ADC/contact inputs in the explicit peripheral hypothesis.
     pub adc_control: Option<u8>,
     pub tablet: Option<TabletInput>,
@@ -99,6 +102,7 @@ impl Hardware {
             scratch_mapped_active: false,
             card: None,
             card_lower_write_alias: false,
+            card_eil_presence_candidate: false,
             adc_control: peripherals.then_some(0),
             tablet: None,
             adc_low_next: false,
@@ -154,6 +158,10 @@ impl Hardware {
                 .map(|l| l.peek((address & 31) as usize, self.cycle)),
             _ => None,
         }
+    }
+    pub fn card_presence_input(&self, eol: u8) -> Option<bool> {
+        (self.card_eil_presence_candidate && self.external_media_enabled)
+            .then_some(self.card.is_some() && eol & 4 != 0)
     }
     fn adc_sample(&self) -> u16 {
         self.tablet.map_or(0, |sample| {
@@ -320,6 +328,12 @@ impl BoundaryDevice for Boundary {
             let ssr = c.memory.read_internal_byte_silent(0xff).unwrap_or(0);
             c.memory
                 .write_internal_byte(0xff, if hw.card.is_some() { ssr | 2 } else { ssr & !2 });
+        }
+        let eol = c.memory.read_internal_byte_silent(0xf3).unwrap_or(0);
+        if let Some(present) = hw.card_presence_input(eol) {
+            let eil = c.memory.read_internal_byte_silent(0xf5).unwrap_or(0);
+            c.memory
+                .write_internal_byte(0xf5, if present { eil | 0x80 } else { eil & !0x80 });
         }
         if let Some(sample) = hw.tablet {
             let eil = c.memory.read_internal_byte_silent(0xf5).unwrap_or(0);

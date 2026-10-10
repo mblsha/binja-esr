@@ -99,6 +99,23 @@ def test_lower_card_write_alias_is_explicit_and_keeps_rom_immutable():
     assert hw.read(0x40000) == hw.read(0x60000) == 0x55
 
 
+def test_card_presence_input_is_opt_in_and_requires_media_and_eol_strobe():
+    hw = Hardware({})
+    assert hw.card_presence_input(4) is None
+    hw.card_eil_presence_candidate = True
+    assert hw.card_presence_input(4) is None
+    hw.external_media_enabled = True
+    assert hw.card_presence_input(4) is False
+    # Presence sampling does not depend on the header or SRAM contents.
+    hw.card = object()
+    for eol in (0, 1, 0xFB):
+        assert hw.card_presence_input(eol) is False
+    for eol in (4, 5, 0xFF):
+        assert hw.card_presence_input(eol) is True
+    hw.card_eil_presence_candidate = False
+    assert hw.card_presence_input(4) is None
+
+
 def test_tablet_conversion_holds_low_bits_and_peeks_do_not_advance():
     hw = Hardware({}, controller_hypothesis=True)
     hw.tablet = (403, 601, 255, True)
