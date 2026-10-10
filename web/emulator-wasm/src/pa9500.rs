@@ -16,9 +16,9 @@ impl Sc62015Emulator {
         profile: &str,
     ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
-        if profile != "bootstrap-v1" {
+        if !matches!(profile, "bootstrap-v1" | "bootstrap-v2") {
             return Err(JsValue::from_str(
-                "PA profile must be explicitly bootstrap-v1",
+                "PA profile must be explicitly bootstrap-v1 or bootstrap-v2",
             ));
         }
         let card = match (card_rom.is_empty(), card_sram.is_empty()) {
@@ -28,15 +28,19 @@ impl Sc62015Emulator {
             ),
             _ => return Err(JsValue::from_str("PA card requires both ROM and SRAM")),
         };
-        let (candidate, _) =
-            pa9500::from_bootstrap_bundle(bundle, card).map_err(|e| JsValue::from_str(&e))?;
+        let (candidate, _) = if profile == "bootstrap-v2" {
+            pa9500::from_bootstrap_bundle_with_observed_low_reads(bundle, card)
+        } else {
+            pa9500::from_bootstrap_bundle(bundle, card)
+        }
+        .map_err(|e| JsValue::from_str(&e))?;
         self.runtime = candidate;
         self.rom_image = bundle.to_vec();
         self.model = DeviceModel::Pa9500;
         self.text_decoder = None;
         self.iq7000_rtc_seed = None;
         self.oz9600_profile = Default::default();
-        self.pa9500_bootstrap = true;
+        self.pa9500_bootstrap = Some(profile.to_owned());
         self.pa9500_card_rom = card_rom.to_vec();
         self.last_lcd_source = None;
         self.pacer = Pacer::for_model(self.model, self.pacer.mode());

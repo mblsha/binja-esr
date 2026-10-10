@@ -246,6 +246,38 @@ fn observed_low_pair_does_not_fill_neighbors_or_allow_writes() {
 }
 
 #[test]
+fn observed_low_triad_requires_fresh_pair_and_preserves_other_low_reads() {
+    let (mut rt, hw) = fixture();
+    assert!(install_observed_low_triad(&mut rt, &hw, [0xe0; 3]).is_err());
+    install_zero_data(&mut rt, &hw, 0xe0).unwrap();
+    assert!(install_observed_low_triad(&mut rt, &hw, [0xe0; 3]).is_err());
+    install_observed_low_pair(&mut rt, &hw, [0xa5, 0x5a]).unwrap();
+    install_observed_low_triad(&mut rt, &hw, [0x12, 0x34, 0x05]).unwrap();
+    assert!(install_observed_low_triad(&mut rt, &hw, [0; 3]).is_err());
+    for (address, byte) in [
+        (0, 0xe0),
+        (1, 0x12),
+        (2, 0x34),
+        (3, 0x05),
+        (0xc, 0xa5),
+        (0xd, 0x5a),
+    ] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), Some(byte));
+    }
+    for address in [4, 0xb, 0xe] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), None);
+    }
+    rt.memory.store(2, 8, 0xff).unwrap();
+    assert!(hw.borrow().fault.is_some());
+    assert_eq!(hw.borrow().observed_low_triad, Some([0x12, 0x34, 0x05]));
+    let (mut running, running_hw) = fixture();
+    install_zero_data(&mut running, &running_hw, 0xe0).unwrap();
+    install_observed_low_pair(&mut running, &running_hw, [0xe0; 2]).unwrap();
+    running.step(1).unwrap();
+    assert!(install_observed_low_triad(&mut running, &running_hw, [0xe0; 3]).is_err());
+}
+
+#[test]
 fn scratch_candidate_is_bounded_distinct_and_hidden_until_the_explicit_command() {
     let (mut strict, strict_hw) = fixture();
     assert!(install_scratch_candidate(&mut strict, &strict_hw).is_err());

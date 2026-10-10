@@ -43,6 +43,7 @@ class Hardware:
         self.card_eil_presence_candidate = False
         self.native_zero_data = None
         self.observed_low_pair = None
+        self.observed_low_triad = None
         self.scratch_candidate = None
         self.lcd_coordinate_restore_candidate = False
         self.adc_control = 0 if controller_hypothesis else None
@@ -55,6 +56,8 @@ class Hardware:
     def read(self, address):
         if address == 0:
             return self.native_zero_data
+        if 1 <= address <= 3 and self.observed_low_triad is not None:
+            return self.observed_low_triad[address - 1]
         if 0xC <= address <= 0xD and self.observed_low_pair is not None:
             return self.observed_low_pair[address - 0xC]
         if address == 0x4012 and self.tablet is not None:

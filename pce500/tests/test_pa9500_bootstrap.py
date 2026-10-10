@@ -4,6 +4,17 @@ from pce500.pa9500.bootstrap import Hardware
 import pytest
 
 
+def test_observed_low_triad_keeps_neighbors_and_writes_strict():
+    hw = Hardware({})
+    assert all(hw.read(a) is None for a in range(1, 4))
+    hw.observed_low_triad = bytes([0x12, 0x34, 0x05])
+    assert [hw.read(a) for a in range(1, 4)] == [0x12, 0x34, 0x05]
+    assert hw.read(4) is None and hw.read(0xC) is None
+    with pytest.raises(ValueError, match="unqualified PA write 00002"):
+        hw.write(2, 0xFF)
+    assert hw.observed_low_triad == bytes([0x12, 0x34, 0x05])
+
+
 def test_lcd_coordinate_restore_alias_is_narrow_and_preserves_pixels():
     hw = Hardware({}, controller_hypothesis=True)
     for offset, value in [(31, 2), (3, 255), (16, 24), (18, 48), (2, 0x80)]:

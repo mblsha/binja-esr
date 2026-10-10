@@ -308,7 +308,7 @@ pub struct Sc62015Emulator {
     text_decoder: Option<DeviceTextDecoder>,
     iq7000_rtc_seed: Option<String>,
     oz9600_profile: sc62015_core::oz9600::ExecutionProfile,
-    pa9500_bootstrap: bool,
+    pa9500_bootstrap: Option<String>,
     pa9500_card_rom: Vec<u8>,
     call_session: Option<function_call::FunctionCallSession>,
     next_call_id: u32,
@@ -364,7 +364,7 @@ impl Sc62015Emulator {
             text_decoder: None,
             iq7000_rtc_seed: None,
             oz9600_profile: Default::default(),
-            pa9500_bootstrap: false,
+            pa9500_bootstrap: None,
             pa9500_card_rom: Vec::new(),
             call_session: None,
             next_call_id: 0,
@@ -556,13 +556,13 @@ impl Sc62015Emulator {
     /// Other models keep their existing ROM-reload reset behavior.
     pub fn reset(&mut self) -> Result<(), JsValue> {
         self.require_no_active_call()?;
-        if self.pa9500_bootstrap {
+        if let Some(profile) = self.pa9500_bootstrap.clone() {
             let sram = self.pa9500_card_sram()?;
             return self.load_pa9500(
                 &self.rom_image.clone(),
                 &self.pa9500_card_rom.clone(),
                 &sram,
-                "bootstrap-v1",
+                &profile,
             );
         }
         let retained = if self.model == DeviceModel::Oz9600 {

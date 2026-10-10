@@ -23,6 +23,17 @@ card files. `e.pa9500.status()` and `e.pa9500.cardSram()` observe state;
 `e.step`, `e.keyboard` and `e.onKey` keep their existing interfaces.
 The graphical browser loader is not yet qualified for this profile.
 
+`bootstrap-v2` adds exactly five native read-only bytes from the verified
+1 MiB acquisition: addresses1..3 and C/D returned E0. The original v1
+constructor remains available; other unknown reads and all writes at those
+addresses retain their traps. The v2 constructor is
+`from_bootstrap_bundle_with_observed_low_reads`. Physical decode under other
+modes remains unqualified. The WASM loader accepts either explicit version
+and preserves the selected version across fresh reset with retained card SRAM.
+Normal Phonebook, Memo and Business Cards entry/Calendar return have source-
+bound native/WASM proofs. Their text entry/conversion and persistence remain
+open; v2 is an explicit board candidate, not complete application support.
+
 Normal Clock popup/save/restore uses the shared controller's signed pixel
 coordinates. A stream beginning outside backing can cross zero within one
 byte; each off-screen bit is blank or discarded individually. The negative
