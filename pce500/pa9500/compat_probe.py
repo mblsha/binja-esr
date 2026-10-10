@@ -49,6 +49,16 @@ def step(state, bus):
         candidate.dp = (byte() << 8) | byte()
     elif opcode == 0x11:
         candidate.dp = (candidate.dp & 0xFF00) | byte()
+    elif opcode in (4, 5, 6, 7, 0x24, 0x25, 0x26, 0x27):
+        reg = 4 if opcode in (4, 5, 0x24, 0x25) else 6
+        old = candidate.internal[reg] | (candidate.internal[reg + 1] << 8)
+        value = (old + (1 if opcode & 1 == 0 else -1)) & 65535
+        candidate.internal[reg : reg + 2] = value.to_bytes(2, "little")
+        candidate.dp, candidate.q = value, reg + 1
+        if opcode in (0x24, 0x25):
+            candidate.internal[2] = bus.read(value)
+        if opcode in (0x26, 0x27):
+            data_output = value, candidate.internal[2]
     elif opcode in (0x12, 0x13):
         value = byte() & 127
         if opcode == 0x12:
@@ -75,11 +85,56 @@ def step(state, bus):
         count = candidate.internal[0] + 1
         fill_output = candidate.dp, count, candidate.internal[2]
         candidate.dp = (candidate.dp + count - 1) & 65535
-    elif opcode == 0xC3:
-        old = candidate.internal[3]
-        candidate.internal[3] = (old - 1) & 255
-        candidate.q = 3
-        candidate.zero, candidate.carry = candidate.internal[3] == 0, old == 0
+    elif 0x08 <= opcode <= 0x0B:
+        count = candidate.internal[0 if opcode < 0x0A else 1] + 1
+        if candidate.p + count > 127 or candidate.q + count > 127:
+            raise ValueError("unqualified legacy internal block pointer range")
+        for _ in range(count):
+            p, q = candidate.p, candidate.q
+            if opcode & 1:
+                candidate.internal[p], candidate.internal[q] = (
+                    candidate.internal[q],
+                    candidate.internal[p],
+                )
+            else:
+                candidate.internal[p] = candidate.internal[q]
+            candidate.p += 1
+            candidate.q += 1
+    elif 0x20 <= opcode <= 0x22:
+        candidate.internal[2] = (candidate.p, candidate.q, candidate.r)[opcode - 0x20]
+    elif opcode in (
+        0x40,
+        0x41,
+        0x42,
+        0x43,
+        0x48,
+        0x49,
+        0x4A,
+        0x4B,
+        0xC0,
+        0xC1,
+        0xC2,
+        0xC3,
+        0xC8,
+        0xC9,
+        0xCA,
+        0xCB,
+    ):
+        reg = {
+            0x40: 0,
+            0x42: 2,
+            0x48: 8,
+            0x4A: 10,
+            0xC0: 1,
+            0xC2: 3,
+            0xC8: 9,
+            0xCA: 11,
+        }[opcode & 0xFE]
+        old = candidate.internal[reg]
+        candidate.internal[reg] = (old + (1 if opcode & 1 == 0 else -1)) & 255
+        candidate.q = reg
+        candidate.zero = candidate.internal[reg] == 0
+        candidate.carry = old == (255 if opcode & 1 == 0 else 0)
     elif 0x30 <= opcode <= 0x32:
         value = candidate.internal[2] & 127
         if opcode == 0x30:
@@ -93,8 +148,26 @@ def step(state, bus):
     elif opcode == 0x37:
         low = pop()
         candidate.pc = (pop() << 8) | low
-    elif opcode == 0x4D:
+    elif opcode in (0x4D, 0xCE):
         pass
+    elif opcode == 0x55:
+        candidate.internal[candidate.p] = bus.read(candidate.dp)
+    elif opcode in (0x50, 0x51):
+        p = candidate.p + (1 if opcode == 0x50 else -1)
+        if not 0 <= p < 128:
+            raise ValueError("unqualified legacy internal pointer boundary")
+        candidate.p = p
+    elif opcode == 0x58:
+        a = candidate.internal[2]
+        candidate.internal[2] = ((a << 4) | (a >> 4)) & 255
+    elif opcode in (0x62, 0x66):
+        mask = byte()
+        candidate.zero = (
+            candidate.internal[candidate.p if opcode == 0x62 else 2] & mask == 0
+        )
+    elif opcode == 0x65:
+        candidate.internal[2] |= byte()
+        candidate.zero = candidate.internal[2] == 0
     elif opcode == 0x57:
         candidate.internal[2] = bus.read(candidate.dp)
     elif opcode in (0x52, 0x53):
@@ -160,11 +233,18 @@ def step(state, bus):
         candidate.p = opcode & 63
     elif opcode == 0xD3:
         output = candidate.dp, candidate.p, candidate.internal[candidate.p]
-    elif opcode == 0xD4:
+    elif opcode in (0xD4, 0xD5, 0xD6):
         mask = byte()
-        value = bus.read(candidate.dp) & mask
+        old = bus.read(candidate.dp)
+        value = old | mask if opcode == 0xD5 else old & mask
         candidate.zero = value == 0
-        data_output = candidate.dp, value
+        if opcode != 0xD6:
+            data_output = candidate.dp, value
+    elif opcode == 0xDA:
+        candidate.internal[2], candidate.internal[3] = (
+            candidate.internal[3],
+            candidate.internal[2],
+        )
     elif opcode == 0xDB:
         slot = candidate.p
         candidate.internal[2], candidate.internal[slot] = (

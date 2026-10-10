@@ -57,6 +57,26 @@ fn trap_profile_does_not_invent_lcd_registers_or_oz_workspace_alias() {
 }
 
 #[test]
+fn explicit_absence_and_one_observed_byte_do_not_fill_unknown_bus_space() {
+    let (mut rt, hw) = fixture();
+    assert_eq!(rt.memory.read_byte_for_preflight(0x40000, None), None);
+    install_media(&mut rt, &hw, None).unwrap();
+    for address in [0x20000, 0x30000, 0x40000, 0x7ffff] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), Some(0xff));
+        hw.borrow().write(address, 0x55, None);
+        assert_eq!(hw.borrow().read(address), Some(0xff));
+    }
+    assert!(install_media(&mut rt, &hw, None).is_err());
+    assert_eq!(rt.memory.read_byte_for_preflight(0, None), None);
+    install_zero_data(&mut rt, &hw, 0xe0).unwrap();
+    assert_eq!(rt.memory.read_byte_for_preflight(0, None), Some(0xe0));
+    assert_eq!(rt.memory.read_byte_for_preflight(1, None), None);
+    assert!(install_zero_data(&mut rt, &hw, 0).is_err());
+    hw.borrow().write(0, 0, None);
+    assert!(hw.borrow().fault.is_some());
+}
+
+#[test]
 fn controller_hypothesis_uses_pa_bounds_and_independently_expected_pixels() {
     let mut hw = Hardware::new(BTreeMap::new(), BootstrapProfile::ControllerHypothesis);
     // Full window, mask FF, SET mode, X=190 Y=144; 10101010 clips at X=194.

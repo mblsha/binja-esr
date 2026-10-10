@@ -18,13 +18,14 @@ def native_flags(carry, zero):
 
 
 class LegacyBus:
-    def __init__(self, hardware, absent_legacy_media=False, pc=0):
+    def __init__(self, hardware, absent_legacy_media=False, pc=0, paged_rom_data=False):
         self.hardware, self.absent_legacy_media, self.pc = (
             hardware,
             absent_legacy_media,
             pc,
         )
         self.events = []
+        self.paged_rom_data = paged_rom_data
 
     def fetch(self, address):
         hw = self.hardware
@@ -43,6 +44,8 @@ class LegacyBus:
 
     def read(self, address):
         hw = self.hardware
+        if 0xC000 <= address <= 0xFFFF and self.paged_rom_data:
+            return self.fetch(address)
         if 0x4000 <= address <= 0x7FFF:
             return hw.ram[address - 0x4000]
         if 0x8000 <= address <= 0xBFFF and hw.gate[4] == 1 and self.absent_legacy_media:

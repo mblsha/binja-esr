@@ -15,6 +15,8 @@ pub enum LegacyDataPolicy {
     TrapUnknown,
     /// Only WRIT port04=1's 8000..BFFF aperture is treated as absent media.
     AbsentLegacyMedia,
+    /// Additionally read the selected instruction C000 window as ordinary data.
+    AbsentMediaAndPagedRom,
 }
 pub struct CompatibilityMachine {
     pub native: CoreRuntime,
@@ -143,6 +145,9 @@ impl StartupBus for LegacyBus<'_> {
             .ok_or_else(|| format!("legacy ROM page selector {selector:02X} missing"))
     }
     fn read(&self, address: u16) -> Result<u8, String> {
+        if address >= 0xc000 && self.policy == LegacyDataPolicy::AbsentMediaAndPagedRom {
+            return self.fetch(address);
+        }
         let hw = self.hardware.borrow();
         match address {
             // Native and legacy graphics helpers independently refer to
@@ -150,7 +155,12 @@ impl StartupBus for LegacyBus<'_> {
             // candidate contract; physical page selection remains unqualified.
             0x4000..=0x7fff => Ok(hw.ram[(address - 0x4000) as usize]),
             0x8000..=0xbfff
-                if hw.gate[4] == 1 && self.policy == LegacyDataPolicy::AbsentLegacyMedia =>
+                if hw.gate[4] == 1
+                    && matches!(
+                        self.policy,
+                        LegacyDataPolicy::AbsentLegacyMedia
+                            | LegacyDataPolicy::AbsentMediaAndPagedRom
+                    ) =>
             {
                 Ok(0xff)
             }
@@ -328,5 +338,67 @@ mod tests {
         let before = state.clone();
         assert!(compat_probe::step(&mut state, &mut bus).is_err());
         assert_eq!(state, before);
+    }
+    #[test]
+    fn indexed_load_store_use_little_endian_pairs_and_failed_load_keeps_state() {
+        let mut bank = vec![0; 0x20000];
+        bank[0x10000..0x10002].copy_from_slice(&[0x24, 0x27]);
+        let hardware = SharedHardware(Arc::new(Mutex::new(Hardware::new(
+            BTreeMap::from([(0, bank)]),
+            BootstrapProfile::TrapPeripherals,
+        ))));
+        hardware.borrow().ram[0] = 0x6d;
+        let mut bus = LegacyBus {
+            hardware: &hardware,
+            policy: LegacyDataPolicy::TrapUnknown,
+            pc: 0,
+        };
+        let mut state = StartupState::new(0);
+        state.internal[4..6].copy_from_slice(&[0xff, 0x3f]);
+        state.carry = true;
+        state.zero = false;
+        compat_probe::step(&mut state, &mut bus).unwrap();
+        assert_eq!(
+            (
+                state.internal[2],
+                state.dp,
+                state.q,
+                state.carry,
+                state.zero
+            ),
+            (0x6d, 0x4000, 5, true, false)
+        );
+        assert_eq!(&state.internal[4..6], &[0, 0x40]);
+        state.internal[6..8].copy_from_slice(&[0, 0x80]);
+        compat_probe::step(&mut state, &mut bus).unwrap();
+        assert_eq!(
+            (state.dp, state.q, hardware.borrow().ram[0x3fff]),
+            (0x7fff, 7, 0x6d)
+        );
+        state.pc = 0;
+        state.internal[4..6].copy_from_slice(&[255, 255]);
+        let before = state.clone();
+        assert!(compat_probe::step(&mut state, &mut bus).is_err());
+        assert_eq!(state, before);
+    }
+    #[test]
+    fn code_window_as_data_requires_explicit_policy() {
+        let mut bank = vec![0; 0x20000];
+        bank[0xc3cd] = 0x61;
+        let hardware = SharedHardware(Arc::new(Mutex::new(Hardware::new(
+            BTreeMap::from([(0, bank)]),
+            BootstrapProfile::TrapPeripherals,
+        ))));
+        hardware.borrow().gate[6] = 3;
+        let mut bus = LegacyBus {
+            hardware: &hardware,
+            policy: LegacyDataPolicy::AbsentLegacyMedia,
+            pc: 0,
+        };
+        assert!(bus.read(0xc3cd).is_err());
+        bus.policy = LegacyDataPolicy::AbsentMediaAndPagedRom;
+        assert_eq!(bus.read(0xc3cd).unwrap(), 0x61);
+        hardware.borrow().gate[6] = 0x38;
+        assert!(bus.read(0xc3cd).is_err());
     }
 }

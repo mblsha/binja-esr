@@ -100,6 +100,29 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
             next.dp = (next.dp & 0xff00) | byte(&mut next)? as u16;
             Transfer::Continue
         }
+        0x04..=0x07 | 0x24..=0x27 => {
+            let reg = if matches!(opcode, 0x04 | 0x05 | 0x24 | 0x25) {
+                4
+            } else {
+                6
+            };
+            let old = u16::from_le_bytes([next.internal[reg], next.internal[reg + 1]]);
+            let value = if opcode & 1 == 0 {
+                old.wrapping_add(1)
+            } else {
+                old.wrapping_sub(1)
+            };
+            next.internal[reg..reg + 2].copy_from_slice(&value.to_le_bytes());
+            next.dp = value;
+            next.q = (reg + 1) as u8;
+            if matches!(opcode, 0x24 | 0x25) {
+                next.internal[2] = bus.read(value)?;
+            }
+            if matches!(opcode, 0x26 | 0x27) {
+                data_output = Some((value, next.internal[2]));
+            }
+            Transfer::Continue
+        }
         0x12 | 0x13 => {
             let value = byte(&mut next)? & 0x7f;
             if opcode == 0x12 {
@@ -134,12 +157,56 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
             next.dp = next.dp.wrapping_add(count - 1);
             Transfer::Continue
         }
-        0xc3 => {
-            let old = next.internal[3];
-            next.internal[3] = old.wrapping_sub(1);
-            next.q = 3;
-            next.zero = next.internal[3] == 0;
-            next.carry = old == 0;
+        0x08..=0x0b => {
+            let count = usize::from(next.internal[if opcode < 0x0a { 0 } else { 1 }]) + 1;
+            if usize::from(next.p) + count > 127 || usize::from(next.q) + count > 127 {
+                return Err("unqualified legacy internal block pointer range".into());
+            }
+            for _ in 0..count {
+                let p = next.p as usize;
+                let q = next.q as usize;
+                if opcode & 1 == 0 {
+                    next.internal[p] = next.internal[q];
+                } else {
+                    next.internal.swap(p, q);
+                }
+                next.p += 1;
+                next.q += 1;
+            }
+            Transfer::Continue
+        }
+        0x20..=0x22 => {
+            next.internal[2] = match opcode {
+                0x20 => next.p,
+                0x21 => next.q,
+                _ => next.r,
+            };
+            Transfer::Continue
+        }
+        0x40..=0x43 | 0x48..=0x4b | 0xc0..=0xc3 | 0xc8..=0xcb => {
+            let reg = match opcode & 0xfe {
+                0x40 => 0,
+                0x42 => 2,
+                0x48 => 8,
+                0x4a => 10,
+                0xc0 => 1,
+                0xc2 => 3,
+                0xc8 => 9,
+                _ => 11,
+            };
+            let old = next.internal[reg];
+            next.internal[reg] = if opcode & 1 == 0 {
+                old.wrapping_add(1)
+            } else {
+                old.wrapping_sub(1)
+            };
+            next.q = reg as u8;
+            next.zero = next.internal[reg] == 0;
+            next.carry = if opcode & 1 == 0 {
+                old == 255
+            } else {
+                old == 0
+            };
             Transfer::Continue
         }
         0x30..=0x32 => {
@@ -161,7 +228,7 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
             next.pc = ((pop(&mut next) as u16) << 8) | low as u16;
             Transfer::Continue
         }
-        0x4d => Transfer::Continue,
+        0x4d | 0xce => Transfer::Continue,
         0x52 | 0x53 => {
             data_output = Some((
                 next.dp,
@@ -171,6 +238,33 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
         }
         0x59 => {
             next.internal[2] = next.internal[next.p as usize];
+            Transfer::Continue
+        }
+        0x55 => {
+            next.internal[next.p as usize] = bus.read(next.dp)?;
+            Transfer::Continue
+        }
+        0x50 | 0x51 => {
+            next.p = if opcode == 0x50 {
+                next.p.checked_add(1).filter(|p| *p < 128)
+            } else {
+                next.p.checked_sub(1)
+            }
+            .ok_or("unqualified legacy internal pointer boundary")?;
+            Transfer::Continue
+        }
+        0x58 => {
+            next.internal[2] = next.internal[2].rotate_left(4);
+            Transfer::Continue
+        }
+        0x62 | 0x66 => {
+            let mask = byte(&mut next)?;
+            next.zero = next.internal[if opcode == 0x62 { next.p as usize } else { 2 }] & mask == 0;
+            Transfer::Continue
+        }
+        0x65 => {
+            next.internal[2] |= byte(&mut next)?;
+            next.zero = next.internal[2] == 0;
             Transfer::Continue
         }
         0x5b => {
@@ -270,11 +364,22 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
             output = Some((next.dp, next.p, next.internal[next.p as usize]));
             Transfer::Continue
         }
-        0xd4 => {
+        0xd4..=0xd6 => {
             let mask = byte(&mut next)?;
-            let value = bus.read(next.dp)? & mask;
+            let old = bus.read(next.dp)?;
+            let value = if opcode == 0xd5 {
+                old | mask
+            } else {
+                old & mask
+            };
             next.zero = value == 0;
-            data_output = Some((next.dp, value));
+            if opcode != 0xd6 {
+                data_output = Some((next.dp, value));
+            }
+            Transfer::Continue
+        }
+        0xda => {
+            next.internal.swap(2, 3);
             Transfer::Continue
         }
         0xdb => {
@@ -390,6 +495,75 @@ mod tests {
             Transfer::Native(0xf3fc1)
         );
         assert_eq!(state.pc, 4);
+    }
+    #[test]
+    fn counted_copy_is_sequential_preserves_flags_and_rejects_unknown_pointers() {
+        let mut bus = Bus {
+            bytes: vec![0x0a, 0x0b],
+        };
+        let mut state = StartupState::new(0);
+        state.p = 8;
+        state.q = 2;
+        state.internal[1] = 1;
+        state.internal[2] = 0xcc;
+        state.internal[3] = 0xc3;
+        state.carry = true;
+        state.zero = false;
+        step(&mut state, &mut bus).unwrap();
+        assert_eq!(&state.internal[8..10], &[0xcc, 0xc3]);
+        assert_eq!(
+            (state.p, state.q, state.carry, state.zero),
+            (10, 4, true, false)
+        );
+        state.pc = 0;
+        state.p = 3;
+        state.q = 2;
+        state.internal[1] = 2;
+        state.internal[2..6].copy_from_slice(&[1, 2, 3, 4]);
+        step(&mut state, &mut bus).unwrap();
+        assert_eq!(&state.internal[2..6], &[1, 1, 1, 1]);
+        state.pc = 1;
+        state.p = 3;
+        state.q = 2;
+        state.internal[1] = 2;
+        state.internal[2..6].copy_from_slice(&[1, 2, 3, 4]);
+        step(&mut state, &mut bus).unwrap();
+        assert_eq!(&state.internal[2..6], &[2, 3, 4, 1]);
+        state.pc = 0;
+        state.p = 127;
+        state.q = 2;
+        let before = state.clone();
+        assert!(step(&mut state, &mut bus).is_err());
+        assert_eq!(state, before);
+    }
+    #[test]
+    fn register_increment_decrement_set_q_and_zero_borrow_without_changing_p() {
+        for (opcode, reg) in [
+            (0x40, 0),
+            (0x42, 2),
+            (0x48, 8),
+            (0x4a, 10),
+            (0xc0, 1),
+            (0xc2, 3),
+            (0xc8, 9),
+            (0xca, 11),
+        ] {
+            for (op, old, result, zero, carry) in [
+                (opcode, 255, 0, true, true),
+                (opcode, 0, 1, false, false),
+                (opcode + 1, 0, 255, false, true),
+                (opcode + 1, 1, 0, true, false),
+            ] {
+                let mut s = StartupState::new(0);
+                s.p = 39;
+                s.internal[reg] = old;
+                step(&mut s, &mut Bus { bytes: vec![op] }).unwrap();
+                assert_eq!(
+                    (s.internal[reg], s.q, s.p, s.zero, s.carry),
+                    (result, reg as u8, 39, zero, carry)
+                );
+            }
+        }
     }
     #[test]
     fn call_return_and_counted_dispatch_keep_stack_order() {

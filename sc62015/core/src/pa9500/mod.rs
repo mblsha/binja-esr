@@ -19,6 +19,7 @@ pub const FIXED_ROM_HASH: &str = "4e61da23861f8a007cd83116dd26b03db5843bdd6daa03
 pub const SELECTORS: [u8; 16] = [
     0, 1, 2, 3, 4, 5, 6, 7, 248, 249, 250, 251, 252, 253, 254, 255,
 ];
+pub mod card;
 pub mod compat_probe;
 pub mod compat_runtime;
 const MAGIC: &[u8; 8] = b"PAROM01\0";
@@ -48,6 +49,9 @@ pub struct Hardware {
     pub startup_latches: [u8; 2],
     /// Explicit compatibility exploration only; ordinary profiles reject F00C.
     pub compatibility_command: Option<u8>,
+    pub external_media_enabled: bool,
+    pub native_zero_data: Option<u8>,
+    pub card: Option<card::Pa9c3Card>,
     /// Unwired PA ADC/contact inputs in the explicit peripheral hypothesis.
     pub adc_control: Option<u8>,
     pub banks: BTreeMap<u8, Vec<u8>>,
@@ -66,6 +70,9 @@ impl Hardware {
             gate: [0; 64],
             startup_latches: [0; 2],
             compatibility_command: None,
+            external_media_enabled: false,
+            native_zero_data: None,
+            card: None,
             adc_control: peripherals.then_some(0),
             ram: vec![0; 0x40000],
             banks,
@@ -79,11 +86,18 @@ impl Hardware {
     }
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
+            0 if self.native_zero_data.is_some() => self.native_zero_data,
             0x4021 => Some(self.selector),
             0x4000..=0x403f => Some(self.gate[(address - 0x4000) as usize]),
             0x8800 => self.adc_control,
             0x8c00 if self.adc_control.is_some() => Some(0),
             0x80000..=0xbffff => Some(self.ram[(address - 0x80000) as usize]),
+            0x20000..=0x7ffff if self.external_media_enabled => Some(
+                self.card
+                    .as_ref()
+                    .and_then(|card| card.read(address))
+                    .unwrap_or(0xff),
+            ),
             0xc0000..=0xdffff => self
                 .banks
                 .get(&self.selector)
@@ -159,6 +173,11 @@ impl Hardware {
                 self.event("compatibility_command", address, value, pc);
             }
             0x80000..=0xbffff => self.ram[(address - 0x80000) as usize] = value,
+            0x20000..=0x7ffff if self.external_media_enabled => {
+                if let Some(card) = self.card.as_mut() {
+                    card.write(address, value);
+                }
+            }
             0x8000..=0x801f if self.rtc.is_some() => {
                 self.rtc
                     .as_mut()
@@ -201,6 +220,12 @@ impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
         self.0.borrow().cycle = c.cycles;
+        let hw = self.0.borrow();
+        if hw.external_media_enabled {
+            let ssr = c.memory.read_internal_byte_silent(0xff).unwrap_or(0);
+            c.memory
+                .write_internal_byte(0xff, if hw.card.is_some() { ssr | 2 } else { ssr & !2 });
+        }
         Ok(Some(false))
     }
     fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, _: u64) -> crate::Result<()> {
@@ -213,7 +238,116 @@ impl BoundaryDevice for Boundary {
     }
 }
 
-/// Component constructor; normal acquisition loading validates identity below.
+/// Explicit external-media profile, installed before any guest boundary.
+pub fn install_media(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    card: Option<card::Pa9c3Card>,
+) -> Result<(), String> {
+    if rt.instruction_count() != 0 || rt.cycle_count() != 0 || hw.borrow().external_media_enabled {
+        return Err("configure PA media exactly once before execution".into());
+    }
+    let rom = card.as_ref().map(|card| card.rom().repeat(2));
+    hw.borrow().card = card;
+    hw.borrow().external_media_enabled = true;
+    let reader = hw.clone();
+    let peeker = hw.clone();
+    let writer = hw.clone();
+    rt.memory.remove_overlay("pa9500_bus_0F00F");
+    add_bus_view(rt, hw, 0xf00f, 0x1ffff, false, "pa9500_bus_0F00F");
+    rt.memory.add_overlay(MemoryOverlay {
+        start: 0x20000,
+        end: if rom.is_some() { 0x3ffff } else { 0x7ffff },
+        name: "pa9500_external_media".into(),
+        data: None,
+        read_only: false,
+        read_handler: Some(Box::new(move |address, pc| {
+            Some(reader.borrow().architectural_read(address, pc))
+        })),
+        preflight_read_handler: Some(Box::new(move |address, _| peeker.borrow().read(address))),
+        write_handler: Some(Box::new(move |address, value, pc| {
+            writer.borrow().write(address, value, pc);
+            true
+        })),
+        perfetto_thread: None,
+    });
+    if let Some(rom) = rom {
+        rt.memory.add_rom_overlay(0x40000, &rom, "pa9500_card_rom");
+    }
+    Ok(())
+}
+
+fn add_bus_view(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    start: u32,
+    end: u32,
+    safe: bool,
+    name: &str,
+) {
+    let reader = hw.clone();
+    let peeker = hw.clone();
+    let writer = hw.clone();
+    rt.memory.add_overlay(MemoryOverlay {
+        start,
+        end,
+        name: name.into(),
+        data: None,
+        read_only: false,
+        read_handler: Some(Box::new(move |address, pc| {
+            Some(reader.borrow().architectural_read(address, pc))
+        })),
+        preflight_read_handler: if safe {
+            Some(Box::new(move |address, _| peeker.borrow().read(address)))
+        } else {
+            None
+        },
+        write_handler: Some(Box::new(move |address, value, pc| {
+            writer.borrow().write(address, value, pc);
+            true
+        })),
+        perfetto_thread: None,
+    });
+}
+
+/// Single observed data-bus byte; no instruction alias or wider fallback.
+pub fn install_zero_data(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    value: u8,
+) -> Result<(), String> {
+    if rt.instruction_count() != 0
+        || rt.cycle_count() != 0
+        || hw.borrow().native_zero_data.is_some()
+    {
+        return Err("configure the observed zero-address byte before execution".into());
+    }
+    hw.borrow().native_zero_data = Some(value);
+    rt.memory.remove_overlay("pa9500_bus_00000");
+    add_bus_view(rt, hw, 1, 0x3fff, false, "pa9500_bus_00001");
+    let reader = hw.clone();
+    let peeker = hw.clone();
+    let writer = hw.clone();
+    rt.memory.add_overlay(MemoryOverlay {
+        start: 0,
+        end: 0,
+        name: "pa9500_zero_data".into(),
+        data: None,
+        read_only: false,
+        read_handler: Some(Box::new(move |address, pc| {
+            Some(reader.borrow().architectural_read(address, pc))
+        })),
+        preflight_read_handler: Some(Box::new(move |address, _| peeker.borrow().read(address))),
+        write_handler: Some(Box::new(move |address, value, pc| {
+            writer.borrow().write(address, value, pc);
+            true
+        })),
+        perfetto_thread: None,
+    });
+    Ok(())
+}
+
+/// Component constructor; acquisition loading validates identity separately.
 pub fn configure(
     fixed: &[u8],
     banks: BTreeMap<u8, Vec<u8>>,

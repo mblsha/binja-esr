@@ -66,6 +66,57 @@ def test_call_return_stack_order():
     assert (state.pc, state.r) == (3, 0x5C)
 
 
+def test_counted_copy_overlap_exchange_and_strict_pointer_boundary():
+    state = StartupState(0, p=8, q=2, carry=True, zero=False)
+    state.internal[1:4] = bytes([1, 0xCC, 0xC3])
+    bus = Bus(bytes([0x0A, 0x0B]))
+    step(state, bus)
+    assert state.internal[8:10] == bytes([0xCC, 0xC3])
+    assert (state.p, state.q, state.carry, state.zero) == (10, 4, True, False)
+    for pc, expected in [(0, [1, 1, 1, 1]), (1, [2, 3, 4, 1])]:
+        state.pc, state.p, state.q, state.internal[1] = pc, 3, 2, 2
+        state.internal[2:6] = bytes([1, 2, 3, 4])
+        step(state, bus)
+        assert state.internal[2:6] == bytes(expected)
+    state.pc, state.p, state.q = 0, 127, 2
+    before = deepcopy(state)
+    with pytest.raises(ValueError):
+        step(state, bus)
+    assert state == before
+
+
+@pytest.mark.parametrize(
+    "opcode,reg",
+    [
+        (0x40, 0),
+        (0x42, 2),
+        (0x48, 8),
+        (0x4A, 10),
+        (0xC0, 1),
+        (0xC2, 3),
+        (0xC8, 9),
+        (0xCA, 11),
+    ],
+)
+def test_count_register_flags_and_q_side_effect(opcode, reg):
+    for op, old, result, zero, carry in [
+        (opcode, 255, 0, True, True),
+        (opcode, 0, 1, False, False),
+        (opcode + 1, 0, 255, False, True),
+        (opcode + 1, 1, 0, True, False),
+    ]:
+        state = StartupState(0, p=39)
+        state.internal[reg] = old
+        step(state, Bus(bytes([op])))
+        assert (state.internal[reg], state.q, state.p, state.zero, state.carry) == (
+            result,
+            reg,
+            39,
+            zero,
+            carry,
+        )
+
+
 @pytest.mark.parametrize(
     "a,target,zero", [(0x10, 0x20, True), (0x11, 0x30, True), (0x12, 0x40, False)]
 )

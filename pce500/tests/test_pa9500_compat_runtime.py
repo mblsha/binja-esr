@@ -89,3 +89,44 @@ def test_rom_fill_loop_exact_span_and_atomic_rejection():
     with pytest.raises(ValueError):
         step(state, bus)
     assert state == before
+
+
+def test_indexed_load_store_pair_order_and_atomic_failed_load():
+    bank = bytearray(0x20000)
+    bank[0x10000:0x10002] = bytes([0x24, 0x27])
+    hw = Hardware({0: bank})
+    hw.ram[0] = 0x6D
+    bus, state = LegacyBus(hw), StartupState(0, carry=True, zero=False)
+    state.internal[4:6] = bytes([0xFF, 0x3F])
+    step(state, bus)
+    assert (state.internal[2], state.dp, state.q, state.carry, state.zero) == (
+        0x6D,
+        0x4000,
+        5,
+        True,
+        False,
+    )
+    assert state.internal[4:6] == bytes([0, 0x40])
+    state.internal[6:8] = bytes([0, 0x80])
+    step(state, bus)
+    assert (state.dp, state.q, hw.ram[0x3FFF]) == (0x7FFF, 7, 0x6D)
+    state.pc = 0
+    state.internal[4:6] = bytes([255, 255])
+    before = deepcopy(state)
+    with pytest.raises(ValueError):
+        step(state, bus)
+    assert state == before
+
+
+def test_code_window_data_is_explicit():
+    bank = bytearray(0x20000)
+    bank[0xC3CD] = 0x61
+    hw = Hardware({0: bank})
+    hw.gate[6] = 3
+    with pytest.raises(ValueError):
+        LegacyBus(hw).read(0xC3CD)
+    bus = LegacyBus(hw, paged_rom_data=True)
+    assert bus.read(0xC3CD) == 0x61
+    hw.gate[6] = 0x38
+    with pytest.raises(ValueError):
+        bus.read(0xC3CD)

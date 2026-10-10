@@ -42,3 +42,17 @@ def test_pa_geometry_clips_set_pattern_at_independently_expected_last_pixels():
             assert hw.lcd.pixel(x, y) == (y == 144 and x in (190, 192, 194))
     assert not hw.lcd.pixel(195, 144)
     assert not hw.lcd.pixel(194, 145)
+
+
+def test_explicit_absence_and_single_zero_byte_keep_unknown_space():
+    from pce500.pa9500.bootstrap import Hardware
+
+    hw = Hardware({})
+    assert hw.read(0x40000) is None and hw.read(0) is None
+    hw.external_media_enabled = True
+    for address in (0x20000, 0x30000, 0x40000, 0x7FFFF):
+        assert hw.read(address) == 0xFF
+        hw.write(address, 0x55)
+        assert hw.read(address) == 0xFF
+    hw.native_zero_data = 0xE0
+    assert hw.read(0) == 0xE0 and hw.read(1) is None
