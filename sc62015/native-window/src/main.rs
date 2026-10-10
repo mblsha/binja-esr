@@ -530,17 +530,23 @@ impl NativeApp<'_> {
         } else {
             None
         };
-        apply(
-            self.rt,
-            self.contacts.sync(
+        let on = host_on(&self.host_keys, self.pointer);
+        let events = if let Some(hw) = self.rt.oz9600_hardware() {
+            self.contacts.sync_tablet_state(
                 &keys,
                 tablet,
                 self.boundaries,
-                host_on(&self.host_keys, self.pointer),
-            ),
-            &mut self.record,
-            self.boundaries,
-        )
+                on,
+                hw.borrow().tablet.contact_release_ready(),
+                self.rt.oz9600_tablet_mailbox_busy().expect("OZ factory"),
+            )
+        } else {
+            self.contacts.sync(&keys, tablet, self.boundaries, on)
+        };
+        if self.contacts.tablet_queue_overflow {
+            return Err("Tap buffer full (16 taps); pending input cancelled".into());
+        }
+        apply(self.rt, events, &mut self.record, self.boundaries)
     }
     fn cancel(&mut self) -> Result<()> {
         self.host_keys.down.clear();
@@ -702,7 +708,11 @@ impl NativeApp<'_> {
         let deadline = Instant::now() + Duration::from_millis(4);
         let result = if self.pending > 0 && self.fault.is_none() {
             self.rt
-                .run_slice(self.pending.min(4096), |_| Instant::now() >= deadline)
+                .run_slice(
+                    self.contacts
+                        .limit_budget(self.pending.min(4096), self.boundaries),
+                    |_| Instant::now() >= deadline,
+                )
                 .map(|slice| {
                     self.pending -= slice.progress.boundary_budget_used;
                     self.boundaries += slice.progress.boundary_budget_used as u64;
@@ -712,7 +722,7 @@ impl NativeApp<'_> {
                 .run_automatic_slice(
                     &mut self.pacer,
                     self.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-                    4096,
+                    self.contacts.limit_budget(4096, self.boundaries),
                     |_| Instant::now() >= deadline,
                 )
                 .map(|result| {

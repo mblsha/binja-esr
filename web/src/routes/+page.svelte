@@ -238,7 +238,11 @@
 	let lcdOnly = false;
 	const pendingVirtualRelease = new Map<number, number>();
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
-	const fallbackTablet = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+	const fallbackTablet = new TabletInputs(
+		(c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+		() => emulator.oz9600_tablet_contact_release_ready(),
+		() => emulator.oz9600_tablet_mailbox_busy(),
+	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
 		advance: (n: number) => {

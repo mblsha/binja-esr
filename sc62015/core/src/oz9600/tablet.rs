@@ -12,6 +12,11 @@ pub struct Tablet {
     pub data_reads: u64,
     low_part_next: bool,
     latched_sample: u16,
+    // Observation only: assistance can wait for a complete ROM X/Y sample.
+    #[serde(default)]
+    sample_x_seen: bool,
+    #[serde(default)]
+    contact_sampled: bool,
 }
 
 impl Tablet {
@@ -29,10 +34,22 @@ impl Tablet {
             return Err("tablet ADC samples must be ten-bit values (0..1023)".into());
         }
         let edge = pressed && !self.pressed;
+        if edge || !pressed {
+            self.sample_x_seen = false;
+            self.contact_sampled = false;
+        }
         self.x = x;
         self.y = y;
         self.pressed = pressed;
         Ok(edge)
+    }
+
+    /// Host-assistance observation: both coordinates have been read and the ROM
+    /// has returned the panel drive to 10. A later acquisition makes this false
+    /// again; a previous X/Y pair cannot make an in-flight release safe.
+    /// This does not acknowledge guest input or qualify physical ADC timing.
+    pub fn contact_release_ready(&self) -> bool {
+        self.pressed && self.contact_sampled && self.drive_control == 0x10
     }
 
     pub fn write_conversion_control(&mut self, value: u8) -> Result<(), String> {
@@ -83,6 +100,13 @@ impl Tablet {
         if !self.low_part_next {
             self.latched_sample = self.analog_sample();
         }
+        if self.low_part_next && self.pressed {
+            match (self.drive_control, self.conversion_control & 1) {
+                (0xa8, 0) => self.sample_x_seen = true,
+                (0x8a, 1) if self.sample_x_seen => self.contact_sampled = true,
+                _ => {}
+            }
+        }
         self.low_part_next = !self.low_part_next;
         self.data_reads += 1;
         Ok(value)
@@ -115,6 +139,40 @@ mod tests {
         assert_eq!(tablet.read_data().unwrap(), 150);
         assert_eq!(tablet.read_data().unwrap(), 2);
         assert_eq!(tablet.data_reads, 4);
+    }
+
+    #[test]
+    fn contact_acknowledgement_requires_both_axes_and_is_observation_only() {
+        let mut t = Tablet::default();
+        t.set_contact(403, 601, true).unwrap();
+        for (drive, control, high, low) in [
+            (0xa8, 1, 255, 3),
+            (0x8a, 1, 150, 1),
+            (0xa8, 0, 100, 3),
+            (0x8a, 1, 150, 1),
+        ] {
+            t.drive_control = drive;
+            t.write_conversion_control(6 | control).unwrap();
+            assert!(!t.contact_release_ready());
+            for _ in 0..3 {
+                assert_eq!(t.peek_data(), high);
+            }
+            assert_eq!(t.read_data().unwrap(), high);
+            assert!(!t.contact_release_ready());
+            assert_eq!(t.read_data().unwrap(), low);
+        }
+        assert!(!t.contact_release_ready()); // Y acquisition is still active.
+        t.drive_control = 0x10;
+        assert!(t.contact_release_ready());
+        t.drive_control = 0x8a;
+        assert!(!t.contact_release_ready()); // Another acquisition after a full pair.
+        t.drive_control = 0x10;
+        t.set_contact(404, 602, true).unwrap();
+        assert!(t.contact_release_ready()); // Dragging is the same electrical press.
+        t.set_contact(404, 602, false).unwrap();
+        assert!(!t.contact_release_ready());
+        t.set_contact(404, 602, true).unwrap();
+        assert!(!t.contact_release_ready());
     }
 
     #[test]

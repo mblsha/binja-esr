@@ -101,3 +101,138 @@ describe('one pen with assisted release', () => {
 		expect(apply).toHaveBeenCalledTimes(3);
 	});
 });
+
+describe('acquisition-aware assisted pen release', () => {
+	it('waits for both the minimum hold and a sample, with a bounded unconsumed timeout', () => {
+		const apply = vi.fn();
+		let sampled = false;
+		const pen = new TabletInputs(apply, () => sampled);
+		const contact = { raw_x: 61, raw_y: 141, pressed: true };
+		pen.set('p', contact);
+		pen.set('p', { ...contact, pressed: false });
+		pen.advance(40_000);
+		expect(apply).toHaveBeenCalledTimes(1);
+		expect(pen.limitBudget(500_000)).toBe(256);
+		pen.advance(20_000);
+		expect(apply).toHaveBeenCalledTimes(1);
+		sampled = true;
+		pen.advance(1);
+		expect(apply).toHaveBeenLastCalledWith({ ...contact, pressed: false });
+		sampled = false;
+		pen.advance(40_000); // Complete the release gap before the next tap.
+		pen.set('p', contact);
+		pen.set('p', { ...contact, pressed: false });
+		pen.advance(40_000);
+		pen.advance(399_999);
+		expect(apply).toHaveBeenCalledTimes(3);
+		pen.advance(1);
+		expect(apply).toHaveBeenCalledTimes(4);
+	});
+	it('does not execute while paused and cancellation always bypasses assistance', () => {
+		const apply = vi.fn();
+		const pen = new TabletInputs(apply, () => false);
+		const contact = { raw_x: 61, raw_y: 141, pressed: true };
+		pen.set('p', contact);
+		pen.set('p', { ...contact, pressed: false });
+		for (let i = 0; i < 10; i++) pen.advance(0);
+		expect(apply).toHaveBeenCalledTimes(1);
+		pen.set('p', { ...contact, pressed: false }, true);
+		expect(apply).toHaveBeenLastCalledWith({ ...contact, pressed: false });
+		expect(pen.limitBudget(500_000)).toBe(500_000);
+	});
+});
+
+describe('long pen holds and a later acquisition', () => {
+	it('starts the grace at host release, polls readiness and avoids splitting a later coordinate pair', () => {
+		const apply = vi.fn();
+		let ready = true;
+		const pen = new TabletInputs(apply, () => ready);
+		const contact = { raw_x: 61, raw_y: 141, pressed: true };
+		pen.set('p', contact);
+		pen.advance(1_000_000);
+		ready = false; // A previous pair completed; the next acquisition is active.
+		pen.set('p', { ...contact, pressed: false });
+		expect(apply).toHaveBeenCalledTimes(1);
+		expect(pen.limitBudget(500_000)).toBe(256);
+		pen.advance(256);
+		expect(apply).toHaveBeenCalledTimes(1);
+		ready = true;
+		pen.advance(1);
+		expect(apply).toHaveBeenLastCalledWith({ ...contact, pressed: false });
+	});
+});
+
+describe('ROM mailbox serialization', () => {
+	it('retains a complete quick tap while an older ROM event is pending', () => {
+		const apply = vi.fn();
+		let busy = true;
+		const pen = new TabletInputs(
+			apply,
+			() => true,
+			() => busy,
+		);
+		const c = { raw_x: 627, raw_y: 130, pressed: true };
+		pen.set('p', c);
+		pen.set('p', { ...c, pressed: false });
+		expect(apply).not.toHaveBeenCalled();
+		pen.advance(4096);
+		expect(apply).not.toHaveBeenCalled();
+		busy = false;
+		pen.advance(256);
+		expect(apply).toHaveBeenLastCalledWith(c);
+		pen.advance(39999);
+		expect(apply).toHaveBeenCalledTimes(1);
+		pen.advance(1);
+		expect(apply).toHaveBeenLastCalledWith({ ...c, pressed: false });
+	});
+	it('leaves a real release gap between rapid clicks and cancels queued input', () => {
+		const apply = vi.fn();
+		let busy = false;
+		const pen = new TabletInputs(
+			apply,
+			() => true,
+			() => busy,
+		);
+		const a = { raw_x: 466, raw_y: 226, pressed: true },
+			b = { raw_x: 627, raw_y: 130, pressed: true };
+		pen.set('p', a);
+		pen.set('p', { ...a, pressed: false });
+		pen.set('p', b);
+		pen.set('p', { ...b, pressed: false });
+		pen.advance(40000);
+		expect(apply).toHaveBeenCalledTimes(2);
+		busy = true;
+		pen.advance(40000);
+		expect(apply).toHaveBeenCalledTimes(2);
+		busy = false;
+		pen.advance(256);
+		expect(apply).toHaveBeenLastCalledWith(b);
+		pen.clear();
+		expect(apply).toHaveBeenLastCalledWith({ ...b, pressed: false });
+		busy = true;
+		pen.set('p', a);
+		pen.set('p', { ...a, pressed: false });
+		pen.clear();
+		busy = false;
+		pen.advance(100000);
+		expect(apply).toHaveBeenCalledTimes(4);
+	});
+	it('rejects a seventeenth pending click and cancellation discards the complete queue', () => {
+		const apply = vi.fn();
+		const pen = new TabletInputs(
+			apply,
+			() => true,
+			() => true,
+		);
+		const c = { raw_x: 627, raw_y: 130, pressed: true };
+		for (let i = 0; i < 16; i++) {
+			pen.set('p', c);
+			pen.set('p', { ...c, pressed: false });
+		}
+		expect(() => pen.set('p', c)).toThrow('Tap buffer full');
+		expect(apply).not.toHaveBeenCalled();
+		pen.set('p', c, true);
+		pen.advance(1_000_000);
+		expect(apply).not.toHaveBeenCalled();
+	});
+});

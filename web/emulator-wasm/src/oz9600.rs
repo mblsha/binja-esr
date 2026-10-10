@@ -219,6 +219,27 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Read-only sampling acknowledgment used only by host click assistance.
+    pub fn oz9600_tablet_contact_release_ready(&self) -> Result<bool, JsValue> {
+        self.require_oz9600()?;
+        Ok(self
+            .runtime
+            .oz9600_hardware()
+            .expect("OZ factory")
+            .borrow()
+            .tablet
+            .contact_release_ready())
+    }
+
+    /// Firmware mailbox observation used solely to serialize host clicks.
+    pub fn oz9600_tablet_mailbox_busy(&self) -> Result<bool, JsValue> {
+        self.require_oz9600()?;
+        Ok(self
+            .runtime
+            .oz9600_tablet_mailbox_busy()
+            .expect("OZ factory"))
+    }
+
     /// Whole-document validation precedes cooperative host replay. The host must
     /// use physical contacts and the shared boundary runner for the validated steps.
     pub fn validate_oz9600_replay(&self, document: &str) -> Result<(), JsValue> {

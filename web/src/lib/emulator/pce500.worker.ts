@@ -160,7 +160,11 @@ let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
 const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
-const tabletInputs = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+const tabletInputs = new TabletInputs(
+	(c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+	() => emulator.oz9600_tablet_contact_release_ready(),
+	() => emulator.oz9600_tablet_mailbox_busy(),
+);
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
 	advance: (n: number) => {

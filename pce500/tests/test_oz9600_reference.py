@@ -321,3 +321,77 @@ def test_external_off_wake_is_explicit_and_cpu_external_masked():
     assert off_wake_mask(external_enabled=True, external_experiment=True) == 0x48
     assert off_wake_mask(external_enabled=False, external_experiment=True) == 0x08
     assert off_wake_mask(external_enabled=True, external_experiment=False) == 0x08
+
+
+def test_tablet_release_readiness_requires_completed_pair_and_idle_drive():
+    from pce500.oz9600.tablet import Tablet
+
+    t = Tablet()
+    t.set_contact(403, 601, True)
+    for drive, control, result in [(0xA8, 6, [100, 3]), (0x8A, 7, [150, 1])]:
+        t.drive_control = drive
+        t.write_conversion_control(control)
+        assert not t.contact_release_ready()
+        assert [t.read_data(), t.read_data()] == result
+        assert not t.contact_release_ready()
+    t.drive_control = 0x10
+    assert t.contact_release_ready()
+    t.drive_control = 0x8A
+    assert (
+        not t.contact_release_ready()
+    )  # An earlier pair cannot authorize this release.
+    t.drive_control = 0x10
+    t.set_contact(403, 601, False)
+    t.set_contact(403, 601, True)
+    assert not t.contact_release_ready()
+
+
+def test_native_pen_release_grace_starts_after_the_actual_host_release():
+    from pce500.oz9600.ui import Contacts
+
+    c = Contacts(minimum_hold=40000)
+    assert c.sync(set(), (61, 141), 0, ready=False) == [("tablet", 61, 141, True)]
+    assert c.sync(set(), (61, 141), 1000000, ready=False) == []
+    assert c.sync(set(), None, 1000000, ready=False) == []
+    assert c.sync(set(), None, 1399999, ready=False) == []
+    assert c.sync(set(), None, 1400000, ready=False) == [("tablet", 61, 141, False)]
+    c.sync(set(), (61, 141), 1500000, ready=False)
+    assert c.cancel() == [("tablet", 61, 141, False)]
+    raw = Contacts(minimum_hold=0)
+    raw.sync(set(), (61, 141), 0, ready=False)
+    assert raw.sync(set(), None, 1, ready=False) == [("tablet", 61, 141, False)]
+
+
+def test_native_short_pen_click_waits_for_rom_mailbox_and_raw_mode_bypasses_it():
+    from pce500.oz9600.ui import Contacts
+
+    c = Contacts(minimum_hold=40000)
+    assert c.sync(set(), (627, 130), 0, busy=True) == []
+    assert c.sync(set(), None, 1, busy=True) == []
+    assert c.sync(set(), None, 40960, busy=False) == [("tablet", 627, 130, True)]
+    assert c.sync(set(), None, 80959, busy=False) == []
+    assert c.sync(set(), None, 80960, busy=False) == [("tablet", 627, 130, False)]
+    raw = Contacts()
+    assert raw.sync(set(), (627, 130), 0, ready=False, busy=True) == [
+        ("tablet", 627, 130, True)
+    ]
+    assert raw.sync(set(), None, 1, ready=False, busy=True) == [
+        ("tablet", 627, 130, False)
+    ]
+
+
+def test_rom_tablet_mailbox_observer_is_read_only_and_pointer_bounded():
+    from types import SimpleNamespace
+    from pce500.oz9600.host_input import tablet_mailbox_busy
+
+    h = SimpleNamespace(ram=bytearray(0x40000))
+    h.ram[0x3FF47:0x3FF4A] = bytes.fromhex("49 E5 01")
+    for offset, code in [(0, 0xC8), (0x0B, 0xC9), (0x1A, 0xCA)]:
+        h.ram[0x3E549 + offset] = code
+        before = bytes(h.ram)
+        assert tablet_mailbox_busy(h)
+        assert bytes(h.ram) == before
+        h.ram[0x3E549 + offset] = 0
+        assert not tablet_mailbox_busy(h)
+    h.ram[0x3FF47:0x3FF4A] = bytes.fromhex("FF FF 01")
+    assert not tablet_mailbox_busy(h)

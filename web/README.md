@@ -305,6 +305,15 @@ await e.call(0x00F1234, undefined, { maxInstructions: 5_000 });
   solely to complete a tap while paused. Focus loss, hidden documents and
   cancellation force releases. Keyboard/mouse/script owners cannot release
   each other's contacts. An input acknowledgement is not ROM-consumption proof.
+- OZ tablet click assistance serializes complete taps through the verified
+  ROM's C8/C9/CA input mailboxes. A later click waits while the preceding ROM
+  event is pending. Short clicks keep the existing 40,000-boundary minimum;
+  release waits for a complete coordinate pair and idle panel drive, with a
+  bounded 400,000-boundary grace. Consecutive taps have a 40,000-boundary release
+  gap and at most 16 queued taps. Focus loss, Stop and cancellation clear pending
+  taps immediately; paused input runs no CPU. These are host input policies,
+  not physical ADC or interrupt timing. Raw physical replay uses its supplied
+  contacts; native minimum-contact budget zero bypasses the assistance.
 - Use `e.keys.phys` for physical-contact experiments. Legacy `keys.event` and
   `keyboard.injectEvent` still perturb debounce/FIFO state and are diagnostic
   compatibility helpers, not normal-UI or hardware input evidence.

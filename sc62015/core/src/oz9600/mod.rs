@@ -10,6 +10,7 @@ pub mod audio;
 mod boundary;
 pub mod bundle;
 pub mod card;
+mod host_input;
 pub mod input;
 pub mod lcd;
 #[cfg(test)]
