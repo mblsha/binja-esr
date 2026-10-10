@@ -60,7 +60,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Audio build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev xvfb
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libxkbcommon-x11-0 xvfb
       - name: Native window unit tests
         run: cargo test --locked --manifest-path sc62015/native-window/Cargo.toml
       - name: Native window lint and format
