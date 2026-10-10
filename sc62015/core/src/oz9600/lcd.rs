@@ -23,6 +23,7 @@ pub const SAMPLE_SYNC: u8 = 4;
 pub const FRAME_PHASE: u8 = 8;
 pub const FRAME_HALF_PERIOD: u64 = 32768;
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct LcdController {
     pub registers: [u8; 32],
     windows: [[u8; 8]; 16],
@@ -54,6 +55,13 @@ impl Default for LcdController {
 }
 
 impl LcdController {
+    pub(super) fn validate_session(&self) -> Result<(), String> {
+        if self.pixels.len() != STORAGE_WIDTH * HEIGHT || self.pixels.iter().any(|v| *v > 1) {
+            return Err("Invalid saved LCD state".into());
+        }
+        Ok(())
+    }
+
     /// Readback bytes, including the descriptor's fixed high bits.
     pub fn window_descriptor(&self, index: usize) -> [u8; 8] {
         self.windows[index]

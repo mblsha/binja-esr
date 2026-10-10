@@ -34,8 +34,11 @@ type WorkerRequest =
 			generation?: number;
 			ozProfile?: OzProfile;
 			retained?: Uint8Array;
+			session?: Uint8Array;
 	  }
 	| { id: number; type: 'oz_retained_export'; generation?: number }
+	| { id: number; type: 'oz_checkpoint_export'; generation?: number }
+	| { id: number; type: 'oz_session_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'oz_state' }
 	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
@@ -712,9 +715,16 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				const emu = await ensureEmulator();
 				if (signal?.aborted) throw new ExecutionCancelled(0);
 				const model = msg.model ?? romModel;
-				if (model === 'oz-9600')
-					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
-				else {
+				if (model === 'oz-9600') {
+					if (msg.session)
+						emu.load_oz9600_checkpoint(
+							msg.bytes,
+							msg.retained ?? new Uint8Array(),
+							msg.session,
+							msg.ozProfile ?? 'strict',
+						);
+					else emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
+				} else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
 					emu.load_rom_with_model(msg.bytes, model);
 				}
@@ -743,6 +753,16 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					msg.id,
 					ozBatteryIdentity(() => new wasm.Sc62015Emulator(), msg.bytes),
 				);
+				return;
+			}
+			case 'oz_checkpoint_export':
+			case 'oz_session_export': {
+				await ensureEmulator();
+				if (msg.generation !== undefined && msg.generation !== machineGeneration)
+					throw new Error('Stale saved-session generation');
+				const session = emulator.export_oz9600_session();
+				if (msg.type === 'oz_session_export') replyOk(msg.id, session);
+				else replyOk(msg.id, { image: emulator.export_oz9600_retained(), session });
 				return;
 			}
 			case 'oz_retained_export': {

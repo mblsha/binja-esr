@@ -17,6 +17,7 @@ mod parity;
 mod profile;
 pub mod retained;
 pub mod rtc;
+pub mod session;
 pub mod tablet;
 #[cfg(test)]
 mod tests;

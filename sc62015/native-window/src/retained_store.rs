@@ -74,6 +74,7 @@ pub struct RetainedStore {
     // exit/crash. Keep the sidecar inode, rather than unlinking another owner.
     _lock: File,
     last_hash: Option<[u8; 32]>,
+    last_image: Option<Vec<u8>>,
 }
 impl Drop for RetainedStore {
     fn drop(&mut self) {
@@ -112,6 +113,7 @@ impl RetainedStore {
                 path: path.to_path_buf(),
                 _lock: lock,
                 last_hash,
+                last_image: saved.clone(),
             },
             saved,
         ))
@@ -125,7 +127,11 @@ impl RetainedStore {
         }
         atomic_write(&self.path, image)?;
         self.last_hash = Some(hash);
+        self.last_image = Some(image.to_vec());
         Ok(true)
+    }
+    pub fn last_committed(&self) -> Option<&[u8]> {
+        self.last_image.as_deref()
     }
     pub fn path(&self) -> &Path {
         &self.path
@@ -177,6 +183,7 @@ mod tests {
         let (mut store, loaded) = RetainedStore::open(&path).unwrap();
         assert!(loaded.is_none());
         assert!(store.save(b"first").unwrap());
+        assert_eq!(store.last_committed(), Some(b"first".as_slice()));
         assert!(store.save(b"second complete image").unwrap());
         assert!(!store.save(b"second complete image").unwrap());
         drop(store);

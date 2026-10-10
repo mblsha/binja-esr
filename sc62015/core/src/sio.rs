@@ -27,7 +27,7 @@ const SIO_CMD42_DIRECT_INPUT_ADDR: u32 = 0x00EB030;
 const SIO_TX_WAIT_READY_ADDR: u32 = 0x00EB31C;
 const SIO_CMD41_DIRECT_OUTPUT_ADDR: u32 = 0x00EB33D;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioQueuedByte {
     pub value: u8,
     pub parity_error: bool,
@@ -79,13 +79,13 @@ pub struct SioSnapshot {
     pub timing: SioTimingSnapshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioInputLines {
     pub cs: bool,
     pub cd: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioTimingConfig {
     pub rx_ready_delay_cycles: u32,
     pub tx_complete_cycles: u32,
@@ -130,7 +130,7 @@ pub enum SioTimedEvent {
     Xon,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SioStub {
     register_uart: Option<Uart>,
     rx_queue: VecDeque<SioQueuedByte>,
@@ -151,6 +151,24 @@ pub struct SioStub {
 }
 
 impl SioStub {
+    #[cfg(feature = "oz9600")]
+    pub(crate) fn validate_session(&self) -> Result<(), String> {
+        if self.rx_queue.len() > 4096
+            || self.pending_rx_queue.len() > 4096
+            || self.tx_queue.len() > 4096
+            || self.completed_tx_queue.len() > 4096
+            || self.register_uart.as_ref().is_some_and(|u| {
+                u.timebase_hz == 0
+                    || u.baud_divisor == 0
+                    || u.pending_rx.len() > 4096
+                    || u.completed_tx.len() > 4096
+            })
+        {
+            return Err("Invalid saved UART state".into());
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             register_uart: None,

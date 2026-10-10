@@ -234,7 +234,7 @@ fn fill(buffer: &mut [u32], rect: Rect, color: u32) {
         }
     }
 }
-fn text(buffer: &mut [u32], x: usize, y: usize, label: &str, color: u32) {
+pub(crate) fn text(buffer: &mut [u32], x: usize, y: usize, label: &str, color: u32) {
     for (index, ch) in label.chars().enumerate() {
         if let Some(glyph) = BASIC_FONTS.get(ch) {
             for (dy, bits) in glyph.into_iter().enumerate() {

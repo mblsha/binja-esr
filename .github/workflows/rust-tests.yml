@@ -60,10 +60,14 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Audio build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev xvfb
       - name: Native window unit tests
         run: cargo test --locked --manifest-path sc62015/native-window/Cargo.toml
       - name: Native window lint and format
         run: |
           cargo clippy --locked --manifest-path sc62015/native-window/Cargo.toml --all-targets -- -D warnings
           cargo fmt --manifest-path sc62015/native-window/Cargo.toml --all -- --check
+      - name: Visible startup failure preserves the original file
+        run: |
+          cargo build --locked --manifest-path sc62015/native-window/Cargo.toml
+          xvfb-run -a python3 sc62015/native-window/test_startup_failure.py --binary sc62015/native-window/target/debug/oz9600-window

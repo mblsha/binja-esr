@@ -11,7 +11,7 @@ function fixture() {
 	const storage: BatteryStorage = {
 		read: vi.fn(async (key) => records.get(key) ?? null),
 		write: vi.fn(async (key, record) => {
-			records.set(key, { image: record.image.slice(), savedAt: record.savedAt });
+			records.set(key, { image: record.image.slice(), session: record.session?.slice(), savedAt: record.savedAt });
 		}),
 	};
 	const locks = new Set<string>();
@@ -101,4 +101,25 @@ describe('OZ battery session ownership and persistence', () => {
 		expect(() => ozBatteryIdentity(() => machine, new Uint8Array())).toThrow('bad ROM');
 		expect(machine.free).toHaveBeenCalledTimes(3);
 	});
+});
+
+it('commits RAM and running state atomically; quota failures retain both and allow retry', async () => {
+	const f = fixture();
+	const a = await BatterySession.open('paired', f.storage, f.lock);
+	const ram = new Uint8Array([1]),
+		draft = new Uint8Array([2]);
+	await a.save(ram, draft);
+	ram[0] = 9;
+	draft[0] = 9;
+	expect(f.records.get('paired')?.session).toEqual(new Uint8Array([2]));
+	await expect(a.save(new Uint8Array([1]), new Uint8Array([2]))).resolves.toMatchObject({ changed: false });
+	vi.mocked(f.storage.write).mockRejectedValueOnce(new Error('quota'));
+	await expect(a.save(new Uint8Array([3]), new Uint8Array([4]))).rejects.toThrow('quota');
+	expect(f.records.get('paired')?.image).toEqual(new Uint8Array([1]));
+	expect(f.records.get('paired')?.session).toEqual(new Uint8Array([2]));
+	await a.save(new Uint8Array([3]), new Uint8Array([4]));
+	await a.close();
+	const b = await BatterySession.open('paired', f.storage, f.lock);
+	expect(b.loaded?.session).toEqual(new Uint8Array([4]));
+	await b.close();
 });
