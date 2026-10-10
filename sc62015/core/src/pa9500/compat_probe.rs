@@ -46,6 +46,13 @@ pub trait StartupBus {
     fn outf(&mut self, value: u8) -> Result<(), String> {
         Err(format!("unqualified legacy OUTF {value:02X}"))
     }
+    /// Validate the complete wrapping destination span before any write.
+    /// Implementations must reject unsupported spans without bus side effects.
+    fn fill(&mut self, start: u16, count: u16, value: u8) -> Result<(), String> {
+        Err(format!(
+            "unqualified legacy fill {start:04X} count={count} value={value:02X}"
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +76,7 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
     let mut output = None;
     let mut data_output = None;
     let mut f_output = None;
+    let mut fill_output = None;
     let push = |cpu: &mut StartupState, value: u8| {
         cpu.r = cpu.r.wrapping_sub(1) & 0x7f;
         cpu.internal[cpu.r as usize] = value;
@@ -118,6 +126,20 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
                     base.wrapping_sub(displacement)
                 };
             }
+            Transfer::Continue
+        }
+        0x1f => {
+            let count = u16::from(next.internal[0]) + 1;
+            fill_output = Some((next.dp, count, next.internal[2]));
+            next.dp = next.dp.wrapping_add(count - 1);
+            Transfer::Continue
+        }
+        0xc3 => {
+            let old = next.internal[3];
+            next.internal[3] = old.wrapping_sub(1);
+            next.q = 3;
+            next.zero = next.internal[3] == 0;
+            next.carry = old == 0;
             Transfer::Continue
         }
         0x30..=0x32 => {
@@ -295,6 +317,9 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
     }
     if let Some(value) = f_output {
         bus.outf(value)?;
+    }
+    if let Some((start, count, value)) = fill_output {
+        bus.fill(start, count, value)?;
     }
     *state = next;
     Ok(transfer)

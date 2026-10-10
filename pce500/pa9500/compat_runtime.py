@@ -86,6 +86,23 @@ class LegacyBus:
             }
         )
 
+    def fill(self, start, count, value):
+        if count <= 0 or any(
+            not 0x4000 <= ((start + i) & 65535) <= 0x7FFF for i in range(count)
+        ):
+            raise ValueError("unqualified legacy fill")
+        for i in range(count):
+            self.hardware.ram[((start + i) & 65535) - 0x4000] = value
+        self.events.append(
+            {
+                "kind": "legacy_fill",
+                "start": start,
+                "count": count,
+                "value": value,
+                "pc": self.pc,
+            }
+        )
+
     def outf(self, value):
         if value != 0:
             raise ValueError("unqualified legacy OUTF")

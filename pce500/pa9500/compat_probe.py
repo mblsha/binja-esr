@@ -42,7 +42,7 @@ def step(state, bus):
         return value
 
     opcode = byte()
-    transfer, output, data_output, f_output = None, None, None, None
+    transfer, output, data_output, f_output, fill_output = None, None, None, None, None
     if 0 <= opcode <= 3:
         candidate.internal[opcode] = byte()
     elif opcode == 0x10:
@@ -71,6 +71,15 @@ def step(state, bus):
             candidate.pc = (
                 state.pc + 1 + (displacement if opcode & 1 == 0 else -displacement)
             ) & 65535
+    elif opcode == 0x1F:
+        count = candidate.internal[0] + 1
+        fill_output = candidate.dp, count, candidate.internal[2]
+        candidate.dp = (candidate.dp + count - 1) & 65535
+    elif opcode == 0xC3:
+        old = candidate.internal[3]
+        candidate.internal[3] = (old - 1) & 255
+        candidate.q = 3
+        candidate.zero, candidate.carry = candidate.internal[3] == 0, old == 0
     elif 0x30 <= opcode <= 0x32:
         value = candidate.internal[2] & 127
         if opcode == 0x30:
@@ -184,5 +193,7 @@ def step(state, bus):
         bus.write(*data_output)
     if f_output is not None:
         bus.outf(f_output)
+    if fill_output is not None:
+        bus.fill(*fill_output)
     state.__dict__.update(candidate.__dict__)
     return transfer

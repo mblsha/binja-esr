@@ -169,6 +169,19 @@ impl StartupBus for LegacyBus<'_> {
         hw.events.push(json!({"kind":"legacy_data_write","address":address,"native_alias":0x80000+u32::from(address-0x4000),"value":value,"pc":self.pc}));
         Ok(())
     }
+    fn fill(&mut self, start: u16, count: u16, value: u8) -> Result<(), String> {
+        if count == 0 || (0..count).any(|i| !(0x4000..=0x7fff).contains(&start.wrapping_add(i))) {
+            return Err(format!("unqualified legacy fill {start:04X} count={count}"));
+        }
+        let mut hw = self.hardware.borrow();
+        for i in 0..count {
+            hw.ram[(start.wrapping_add(i) - 0x4000) as usize] = value;
+        }
+        hw.events.push(
+            json!({"kind":"legacy_fill","start":start,"count":count,"value":value,"pc":self.pc}),
+        );
+        Ok(())
+    }
     fn writ(&mut self, dp: u16, p: u8, value: u8) -> Result<(), String> {
         let register = dp as u8;
         let allowed = match register {
@@ -265,5 +278,55 @@ mod tests {
         assert_eq!(hardware.borrow().gate, before);
         bus.policy = LegacyDataPolicy::TrapUnknown;
         assert!(bus.read(0x8000).is_err());
+    }
+
+    #[test]
+    fn rom_fill_loop_exact_span_and_atomic_rejection() {
+        let mut bank = vec![0; 0x20000];
+        bank[0x10000..0x10010].copy_from_slice(&[
+            0x10, 0x40, 0, 0, 0xff, 2, 0, 3, 0x10, 0x1f, 0xc3, 0x29, 3, 0, 0x0f, 0x1f,
+        ]);
+        let hardware = SharedHardware(Arc::new(Mutex::new(Hardware::new(
+            BTreeMap::from([(0, bank)]),
+            BootstrapProfile::TrapPeripherals,
+        ))));
+        hardware.borrow().ram.fill(0xa5);
+        let mut bus = LegacyBus {
+            hardware: &hardware,
+            policy: LegacyDataPolicy::TrapUnknown,
+            pc: 0,
+        };
+        let mut state = StartupState::new(0);
+        for _ in 0..54 {
+            compat_probe::step(&mut state, &mut bus).unwrap();
+        }
+        assert_eq!(
+            (state.pc, state.dp, state.q, state.p, state.internal[3]),
+            (16, 0x4fff, 3, 0, 0)
+        );
+        assert!(hardware.borrow().ram[..0x1000].iter().all(|b| *b == 0));
+        assert!(hardware.borrow().ram[0x1000..].iter().all(|b| *b == 0xa5));
+        state.pc = 9;
+        state.dp = 0x7fff;
+        state.internal[0] = 1;
+        let before = state.clone();
+        let ram = hardware.borrow().ram.clone();
+        let events = hardware.borrow().events.len();
+        assert!(compat_probe::step(&mut state, &mut bus).is_err());
+        assert_eq!(state, before);
+        assert_eq!(hardware.borrow().ram, ram);
+        assert_eq!(hardware.borrow().events.len(), events);
+        state.internal[0] = 0;
+        state.carry = true;
+        state.zero = false;
+        compat_probe::step(&mut state, &mut bus).unwrap();
+        assert_eq!(state.dp, 0x7fff);
+        assert!(state.carry && !state.zero);
+        state.pc = 9;
+        state.dp = 0xffff;
+        state.internal[0] = 1;
+        let before = state.clone();
+        assert!(compat_probe::step(&mut state, &mut bus).is_err());
+        assert_eq!(state, before);
     }
 }

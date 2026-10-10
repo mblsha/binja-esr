@@ -1,8 +1,10 @@
 """Explicit legacy mapping hypotheses retain strict failures outside their scope."""
 
 import pytest
+from copy import deepcopy
 
 from pce500.pa9500.bootstrap import Hardware
+from pce500.pa9500.compat_probe import StartupState, step
 from pce500.pa9500.compat_runtime import (
     LegacyBus,
     entered_legacy,
@@ -53,3 +55,37 @@ def test_entry_requires_instruction_gate_and_low_target():
     assert not entered_legacy(3, 0x10000, 3)
     for f in range(4):
         assert native_flags(*legacy_flags(f)) == f
+
+
+def test_rom_fill_loop_exact_span_and_atomic_rejection():
+    bank = bytearray(0x20000)
+    bank[0x10000:0x10010] = bytes.fromhex(
+        "10 40 00 00 ff 02 00 03 10 1f c3 29 03 00 0f 1f"
+    )
+    hw = Hardware({0: bank})
+    hw.ram[:] = b"\xa5" * len(hw.ram)
+    bus, state = LegacyBus(hw), StartupState(0)
+    for _ in range(54):
+        step(state, bus)
+    assert (state.pc, state.dp, state.q, state.p, state.internal[3]) == (
+        16,
+        0x4FFF,
+        3,
+        0,
+        0,
+    )
+    assert hw.ram[:0x1000] == b"\0" * 0x1000
+    assert hw.ram[0x1000:] == b"\xa5" * (len(hw.ram) - 0x1000)
+    state.pc, state.dp, state.internal[0] = 9, 0x7FFF, 1
+    before, ram, events = deepcopy(state), bytes(hw.ram), deepcopy(bus.events)
+    with pytest.raises(ValueError):
+        step(state, bus)
+    assert state == before and bytes(hw.ram) == ram and bus.events == events
+    state.internal[0], state.carry, state.zero = 0, True, False
+    step(state, bus)
+    assert state.dp == 0x7FFF and state.carry and not state.zero
+    state.pc, state.dp, state.internal[0] = 9, 0xFFFF, 1
+    before = deepcopy(state)
+    with pytest.raises(ValueError):
+        step(state, bus)
+    assert state == before
