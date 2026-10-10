@@ -62,11 +62,14 @@ pub struct Hardware {
     pub compatibility_command: Option<u8>,
     pub external_media_enabled: bool,
     pub native_zero_data: Option<u8>,
+    pub observed_low_pair: Option<[u8; 2]>,
     /// Separate optional 4 KiB candidate inferred from F28CA/F4146. No alias
     /// wiring is established by the captured open-bus low-address data.
     pub scratch_candidate: Option<Vec<u8>>,
     scratch_mapped_active: bool,
     pub card: Option<card::Pa9c3Card>,
+    /// Opt-in candidate: native 30000 SRAM writes reach the same 32 KiB chip.
+    pub card_lower_write_alias: bool,
     /// Unwired PA ADC/contact inputs in the explicit peripheral hypothesis.
     pub adc_control: Option<u8>,
     pub tablet: Option<TabletInput>,
@@ -91,9 +94,11 @@ impl Hardware {
             compatibility_command: None,
             external_media_enabled: false,
             native_zero_data: None,
+            observed_low_pair: None,
             scratch_candidate: None,
             scratch_mapped_active: false,
             card: None,
+            card_lower_write_alias: false,
             adc_control: peripherals.then_some(0),
             tablet: None,
             adc_low_next: false,
@@ -112,6 +117,9 @@ impl Hardware {
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0 if self.native_zero_data.is_some() => self.native_zero_data,
+            0xc..=0xd if self.observed_low_pair.is_some() => {
+                Some(self.observed_low_pair.unwrap()[(address - 0xc) as usize])
+            }
             0x4012 if self.tablet.is_some() => {
                 let status = self.gate[18] & !2;
                 Some(status | if self.tablet.unwrap().contact { 2 } else { 0 })
@@ -239,7 +247,13 @@ impl Hardware {
             }
             0x20000..=0x7ffff if self.external_media_enabled => {
                 if let Some(card) = self.card.as_mut() {
-                    card.write(address, value);
+                    let target =
+                        if self.card_lower_write_alias && (0x30000..=0x37fff).contains(&address) {
+                            address + 0x8000
+                        } else {
+                            address
+                        };
+                    card.write(target, value);
                 }
             }
             0x8000..=0x801f if self.rtc.is_some() => {
@@ -474,6 +488,32 @@ pub fn install_zero_data(
         })),
         perfetto_thread: None,
     });
+    Ok(())
+}
+
+/// Opt-in observed data pair. The physical dump returned E0 at C/D, but the
+/// electrical source, writable behavior and mapping under other modes are
+/// unknown. No adjacent low-address fallback is installed.
+pub fn install_observed_low_pair(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    bytes: [u8; 2],
+) -> Result<(), String> {
+    if rt.instruction_count() != 0
+        || rt.cycle_count() != 0
+        || hw.borrow().native_zero_data.is_none()
+        || hw.borrow().observed_low_pair.is_some()
+    {
+        return Err(
+            "configure the bounded observed low pair once after the zero byte, before execution"
+                .into(),
+        );
+    }
+    hw.borrow().observed_low_pair = Some(bytes);
+    rt.memory.remove_overlay("pa9500_bus_00001");
+    add_bus_view(rt, hw, 1, 0xb, false, "pa9500_bus_00001");
+    add_bus_view(rt, hw, 0xc, 0xd, true, "pa9500_observed_low_pair");
+    add_bus_view(rt, hw, 0xe, 0x3fff, false, "pa9500_bus_0000E");
     Ok(())
 }
 

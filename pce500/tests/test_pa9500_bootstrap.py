@@ -69,6 +69,36 @@ def test_raw_tablet_requires_contact_and_does_not_invent_other_adc_channels():
     assert hw.read(0x8C00) == 0
 
 
+def test_observed_low_pair_keeps_neighbors_and_writes_strict():
+    import pytest
+
+    hw = Hardware({})
+    assert hw.read(0xC) is None
+    hw.observed_low_pair = bytes([0xE0, 0xE0])
+    assert hw.read(0xC) == hw.read(0xD) == 0xE0
+    assert hw.read(0xB) is None and hw.read(0xE) is None
+    with pytest.raises(ValueError):
+        hw.write(0xC, 0x42)
+
+
+def test_lower_card_write_alias_is_explicit_and_keeps_rom_immutable():
+    from pce500.pa9500.card import Pa9c3Card
+
+    # Synthetic media exercises bus routing, separately from acquisition guards.
+    card = Pa9c3Card.__new__(Pa9c3Card)
+    card.rom, card.sram = bytes([0x55]) * 0x20000, bytearray(0x8000)
+    hw = Hardware({})
+    hw.external_media_enabled, hw.card = True, card
+    hw.write(0x30000, 0x42)
+    assert hw.read(0x30000) == hw.read(0x38000) == 0
+    hw.card_lower_write_alias = True
+    for lower, upper, value in [(0x30000, 0x38000, 0x42), (0x37FFF, 0x3FFFF, 0xA5)]:
+        hw.write(lower, value)
+        assert hw.read(lower) == hw.read(upper) == value
+    hw.write(0x40000, 0xAA)
+    assert hw.read(0x40000) == hw.read(0x60000) == 0x55
+
+
 def test_tablet_conversion_holds_low_bits_and_peeks_do_not_advance():
     hw = Hardware({}, controller_hypothesis=True)
     hw.tablet = (403, 601, 255, True)

@@ -137,6 +137,26 @@ fn explicit_absence_and_one_observed_byte_do_not_fill_unknown_bus_space() {
 }
 
 #[test]
+fn observed_low_pair_does_not_fill_neighbors_or_allow_writes() {
+    let (mut rt, hw) = fixture();
+    assert!(install_observed_low_pair(&mut rt, &hw, [0xe0; 2]).is_err());
+    install_zero_data(&mut rt, &hw, 0xe0).unwrap();
+    for address in [0xb, 0xc, 0xd, 0xe] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), None);
+    }
+    install_observed_low_pair(&mut rt, &hw, [0xe0; 2]).unwrap();
+    assert!(install_observed_low_pair(&mut rt, &hw, [0; 2]).is_err());
+    assert_eq!(rt.memory.read_byte_for_preflight(0, None), Some(0xe0));
+    assert_eq!(rt.memory.read_byte_for_preflight(0xc, None), Some(0xe0));
+    assert_eq!(rt.memory.read_byte_for_preflight(0xd, None), Some(0xe0));
+    assert_eq!(rt.memory.read_byte_for_preflight(0xb, None), None);
+    assert_eq!(rt.memory.read_byte_for_preflight(0xe, None), None);
+    rt.memory.store(0xc, 8, 0x42).unwrap();
+    assert!(hw.borrow().fault.is_some());
+    assert_eq!(hw.borrow().read(0xc), Some(0xe0));
+}
+
+#[test]
 fn scratch_candidate_is_bounded_distinct_and_hidden_until_the_explicit_command() {
     let (mut strict, strict_hw) = fixture();
     assert!(install_scratch_candidate(&mut strict, &strict_hw).is_err());

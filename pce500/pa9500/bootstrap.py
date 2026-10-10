@@ -19,7 +19,9 @@ class Hardware:
         self.startup_latches = bytearray(2)
         self.compatibility_command = None
         self.external_media_enabled, self.card = False, None
+        self.card_lower_write_alias = False
         self.native_zero_data = None
+        self.observed_low_pair = None
         self.scratch_candidate = None
         self.adc_control = 0 if controller_hypothesis else None
         # Explicit raw electrical candidate; no host coordinate hit testing.
@@ -31,6 +33,8 @@ class Hardware:
     def read(self, address):
         if address == 0:
             return self.native_zero_data
+        if 0xC <= address <= 0xD and self.observed_low_pair is not None:
+            return self.observed_low_pair[address - 0xC]
         if address == 0x4012 and self.tablet is not None:
             return (self.gate[18] & ~2) | (2 if self.tablet[3] else 0)
         if address == 0x4021:
@@ -104,7 +108,12 @@ class Hardware:
             self.scratch_candidate[address - 0xE000] = value
         elif 0x20000 <= address <= 0x7FFFF and self.external_media_enabled:
             if self.card:
-                self.card.write(address, value)
+                target = (
+                    address + 0x8000
+                    if self.card_lower_write_alias and 0x30000 <= address <= 0x37FFF
+                    else address
+                )
+                self.card.write(target, value)
         elif 0x8000 <= address <= 0x801F and self.rtc:
             self.rtc.write(address & 31, value)
         elif 0x8420 <= address <= 0x843F and self.lcd:
