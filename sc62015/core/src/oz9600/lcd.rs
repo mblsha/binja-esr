@@ -25,6 +25,8 @@ pub const FRAME_HALF_PERIOD: u64 = 32768;
 
 pub struct LcdController {
     pub registers: [u8; 32],
+    width: usize,
+    height: usize,
     windows: [[u8; 8]; 16],
     pixels: Vec<u8>,
     read_latch: u8,
@@ -35,6 +37,14 @@ pub struct LcdController {
 
 impl Default for LcdController {
     fn default() -> Self {
+        Self::with_geometry(STORAGE_WIDTH, HEIGHT)
+    }
+}
+
+impl LcdController {
+    /// Explicit controller storage for related boards; panel cropping is separate.
+    pub fn with_geometry(width: usize, height: usize) -> Self {
+        assert!(width > 0 && height > 0 && width <= 1024 && height <= 512);
         // Diagnostic C62C0/C62DE require these unimplemented high bits to
         // read as ones. This is a zero descriptor, not a full-screen reset
         // window; the physical reset geometry has not been qualified.
@@ -44,7 +54,9 @@ impl Default for LcdController {
         Self {
             registers,
             windows: [descriptor; 16],
-            pixels: vec![0; STORAGE_WIDTH * HEIGHT],
+            pixels: vec![0; width * height],
+            width,
+            height,
             read_latch: 0,
             data_writes: 0,
             data_reads: 0,
@@ -83,7 +95,7 @@ impl LcdController {
     }
 
     pub fn pixel(&self, x: usize, y: usize) -> bool {
-        x < STORAGE_WIDTH && y < HEIGHT && self.pixels[y * STORAGE_WIDTH + x] != 0
+        x < self.width && y < self.height && self.pixels[y * self.width + x] != 0
     }
 
     fn bit_location(&self, x: u16, y: u16, bit: usize) -> (usize, usize) {
@@ -118,7 +130,7 @@ impl LcdController {
     }
 
     fn permits_write(&self, x: usize, y: usize) -> bool {
-        if x >= STORAGE_WIDTH || y >= HEIGHT {
+        if x >= self.width || y >= self.height {
             return false;
         }
         let window = self.window_descriptor(usize::from(self.registers[9]));
@@ -140,7 +152,7 @@ impl LcdController {
             let mask = 0x80 >> bit;
             let (px, py) = self.bit_location(x, y, bit);
             if self.registers[3] & mask != 0 && self.permits_write(px, py) {
-                let destination = &mut self.pixels[py * STORAGE_WIDTH + px];
+                let destination = &mut self.pixels[py * self.width + px];
                 let source = u8::from(value & mask != 0);
                 let combined = match self.registers[8] & 3 {
                     0 => source,
@@ -212,7 +224,8 @@ impl LcdController {
                 // supplies one square-wave sampling phase per scan line;
                 // neither phase depends on read count. Silicon qualification
                 // of the association, duty cycle, and timebase is pending.
-                let sample_phase = (cycle % FRAME_HALF_PERIOD * HEIGHT as u64) % FRAME_HALF_PERIOD;
+                let sample_phase =
+                    (cycle % FRAME_HALF_PERIOD * self.height as u64) % FRAME_HALF_PERIOD;
                 ready
                     | if sample_phase < FRAME_HALF_PERIOD / 2 {
                         SAMPLE_SYNC
@@ -302,7 +315,7 @@ impl LcdController {
     /// The same owned geometry/pixel contract used by shared native and WASM
     /// display exporters. It observes controller RAM without bus side effects.
     pub fn matrix_frame(&self) -> crate::lcd_frame::LcdFrame {
-        crate::lcd_frame::LcdFrame::new(STORAGE_WIDTH, HEIGHT, self.pixels.clone())
+        crate::lcd_frame::LcdFrame::new(self.width, self.height, self.pixels.clone())
             .expect("OZ-9600 controller geometry and logical pixel invariants")
     }
 

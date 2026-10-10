@@ -35,6 +35,7 @@ optional = true
 [features]
 default = ["cli", "perfetto", "snapshot", "oz9600"]
 oz9600 = ["json-compat", "dep:sha2"]
+pa9500 = ["oz9600"]
 json-compat = ["dep:serde_json"]
 llama-tests = ["json-compat", "perfetto"]
 cli = ["json-compat", "oz9600", "dep:chrono", "dep:clap", "dep:crossterm", "dep:sha2"]

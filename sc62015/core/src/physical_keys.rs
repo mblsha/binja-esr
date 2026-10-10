@@ -11,6 +11,7 @@ pub fn matrix_key(model: DeviceModel, name: &str) -> Option<u8> {
     let keys = match model {
         DeviceModel::Iq7000 => IQ_7000_KEYS,
         DeviceModel::Oz9600 => OZ_9600_KEYS,
+        DeviceModel::Pa9500 => &[], // PA matrix legends are not yet recovered.
         DeviceModel::PcE500 | DeviceModel::PcE500Jp => PC_E500_KEYS,
     };
     keys.binary_search_by_key(&name, |(key, _)| *key)

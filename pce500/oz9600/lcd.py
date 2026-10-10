@@ -8,12 +8,15 @@ FRAME_HALF_PERIOD = 32768
 
 
 class LcdController:
-    def __init__(self):
+    def __init__(self, width=STORAGE_WIDTH, height=HEIGHT):
+        if not 0 < width <= 1024 or not 0 < height <= 512:
+            raise ValueError("invalid controller geometry")
+        self.width, self.height = width, height
         descriptor = bytes([0, 0x7C, 0, 0x7E, 0, 0x7C, 0, 0x7C])
         self.registers = bytearray(32)
         self.registers[24:] = descriptor
         self.windows = [bytearray(descriptor) for _ in range(16)]
-        self.pixels = bytearray(STORAGE_WIDTH * HEIGHT)
+        self.pixels = bytearray(width * height)
         self.read_latch = 0
         self.data_writes = self.data_reads = self.block_operations = 0
 
@@ -37,9 +40,9 @@ class LcdController:
 
     def pixel(self, x, y):
         return (
-            0 <= x < STORAGE_WIDTH
-            and 0 <= y < HEIGHT
-            and bool(self.pixels[y * STORAGE_WIDTH + x])
+            0 <= x < self.width
+            and 0 <= y < self.height
+            and bool(self.pixels[y * self.width + x])
         )
 
     def bit_location(self, x, y, bit):
@@ -60,7 +63,7 @@ class LcdController:
         return word - 65536 if word & 32768 else word
 
     def permits_write(self, x, y):
-        if not 0 <= x < STORAGE_WIDTH or not 0 <= y < HEIGHT:
+        if not 0 <= x < self.width or not 0 <= y < self.height:
             return False
         window = self.windows[self.registers[9]]
         if window[7] & 2:
@@ -77,7 +80,7 @@ class LcdController:
             px, py = self.bit_location(x, y, bit)
             if not self.registers[3] & mask or not self.permits_write(px, py):
                 continue
-            index = py * STORAGE_WIDTH + px
+            index = py * self.width + px
             destination, source = self.pixels[index], int(bool(value & mask))
             combined = (
                 source,
@@ -114,7 +117,7 @@ class LcdController:
 
     def peek(self, offset, cycle):
         if offset == 1:
-            phase = (cycle % FRAME_HALF_PERIOD * HEIGHT) % FRAME_HALF_PERIOD
+            phase = (cycle % FRAME_HALF_PERIOD * self.height) % FRAME_HALF_PERIOD
             return (
                 (ACCESS_READY if self.registers[14] & ACCESS_REQUEST else 0)
                 | (SAMPLE_SYNC if phase < FRAME_HALF_PERIOD // 2 else 0)
@@ -172,7 +175,7 @@ class LcdController:
             self.registers[offset] = value
 
     def matrix_frame(self):
-        return LcdFrame(STORAGE_WIDTH, HEIGHT, bytes(self.pixels))
+        return LcdFrame(self.width, self.height, bytes(self.pixels))
 
     def pbm(self):
         return self.matrix_frame().pbm()

@@ -56,6 +56,8 @@ pub use device::{
 pub use keyboard::KeyboardMatrix;
 #[cfg(feature = "oz9600")]
 pub mod oz9600;
+#[cfg(feature = "pa9500")]
+pub mod pa9500;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,

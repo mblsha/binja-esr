@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/emulator.py:PCE500Emulator
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/oz9600/profile.py
+// PY_SOURCE: pce500/pa9500/bootstrap.py
 
 use crate::iq7000;
 use crate::keyboard::KeyboardMatrix;
@@ -80,6 +81,7 @@ pub enum TimerProfileProvenance {
     PcE500UncalibratedCompatibility,
     Iq7000PcCompatibilityFallback,
     Oz9600UncalibratedExperiment,
+    Pa9500UncalibratedExperiment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,11 +120,15 @@ impl DeviceTimerProfile {
             TimerProfileProvenance::PcE500UncalibratedCompatibility
                 | TimerProfileProvenance::Iq7000PcCompatibilityFallback
                 | TimerProfileProvenance::Oz9600UncalibratedExperiment
+                | TimerProfileProvenance::Pa9500UncalibratedExperiment
         )
     }
 
     pub fn provenance_label(self) -> &'static str {
         match self.provenance {
+            TimerProfileProvenance::Pa9500UncalibratedExperiment => {
+                "provisional PA-9500 scheduler; disabled in bootstrap profile"
+            }
             TimerProfileProvenance::Oz9600UncalibratedExperiment => {
                 "provisional OZ-9600 experiment using shared compatibility timing; disabled in strict profile"
             }
@@ -177,6 +183,9 @@ pub enum DeviceModel {
     #[cfg_attr(feature = "cli", value(name = "oz-9600"))]
     #[serde(rename = "oz-9600")]
     Oz9600,
+    #[cfg_attr(feature = "cli", value(name = "pa-9500", alias = "db-z"))]
+    #[serde(rename = "pa-9500")]
+    Pa9500,
 }
 
 /// Configure device-specific LCD character matching for Perfetto tracing.
@@ -186,7 +195,7 @@ pub enum DeviceModel {
 /// device's font tables (either the raw ROM image or a snapshot's external memory dump).
 pub fn configure_lcd_char_tracing(lcd: &mut dyn LcdHal, model: DeviceModel, rom: &[u8]) {
     match model {
-        DeviceModel::Oz9600 => {} // No host character matcher for this controller.
+        DeviceModel::Oz9600 | DeviceModel::Pa9500 => {} // No host character matcher for this controller.
         DeviceModel::PcE500 | DeviceModel::PcE500Jp => {
             let matcher = pce500::pce500_font_map_from_rom(rom)
                 .and_then(|font| LcdCharMatcher::from_pce500_font_map(&font));
@@ -210,6 +219,32 @@ impl DeviceModel {
 
     pub fn spec(self) -> DeviceSpec {
         match self {
+            Self::Pa9500 => DeviceSpec {
+                label: "pa-9500",
+                rom_basename: "pa-9500.parom",
+                // Firmware LCD is a matrix controller; no host font decoder.
+                lcd_kind: LcdKind::Unknown,
+                rom_window_start: 0xe0000,
+                rom_window_len: 0x20000,
+                font_base_addr: None,
+                text_decoder: None,
+                timer: DeviceTimerProfile {
+                    provenance: TimerProfileProvenance::Pa9500UncalibratedExperiment,
+                    ..Self::Oz9600.timer_profile()
+                },
+                internal_ram_mirror: false,
+                // F38CF/F38D9 sample SSR.3 for the held ON input.
+                on_key_ssr_mask: 8,
+                keyboard: DeviceKeyboardProfile {
+                    columns_active_high: true,
+                    fifo_mirroring: false,
+                    keyi_on_any_press: false,
+                    raw_kil: true,
+                    press_threshold: 1,
+                },
+                sio_stub: false,
+                default_memory_card: DeviceMemoryCardProfile::Absent,
+            },
             Self::Oz9600 => DeviceSpec {
                 label: "oz-9600",
                 rom_basename: "oz-9600.ozrom",
@@ -339,6 +374,7 @@ impl DeviceModel {
             "pc-e500" | "pce500" | "pc_e500" => Some(Self::PcE500),
             "pc-e500-jp" | "pce500-jp" | "pc_e500_jp" | "pce500jp" => Some(Self::PcE500Jp),
             "oz-9600" | "oz9600" | "oz_9600" => Some(Self::Oz9600),
+            "pa-9500" | "pa9500" | "db-z" | "dbz" => Some(Self::Pa9500),
             _ => None,
         }
     }
@@ -399,6 +435,19 @@ impl DeviceModel {
     }
 
     pub(crate) fn configure_fresh_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
+        if *self == Self::Pa9500 {
+            #[cfg(feature = "pa9500")]
+            {
+                *rt = crate::pa9500::from_rom_bundle(rom)
+                    .map_err(crate::CoreError::Other)?
+                    .0;
+                return Ok(());
+            }
+            #[cfg(not(feature = "pa9500"))]
+            return Err(crate::CoreError::Other(
+                "PA-9500 requires the pa9500 feature".into(),
+            ));
+        }
         if *self == Self::Oz9600 {
             #[cfg(feature = "oz9600")]
             {
@@ -425,7 +474,7 @@ impl DeviceModel {
             Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
             Self::PcE500 => pce500::load_pce500_rom_window(rt, rom),
             Self::PcE500Jp => pce500::load_pce500_system_image(rt, rom),
-            Self::Oz9600 => unreachable!("OZ construction handled above"),
+            Self::Oz9600 | Self::Pa9500 => unreachable!("banked construction handled above"),
         };
         result?;
         if self.spec().sio_stub {
