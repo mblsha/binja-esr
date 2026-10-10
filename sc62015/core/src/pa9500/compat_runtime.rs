@@ -336,7 +336,10 @@ mod tests {
             assert_eq!(hw.borrow().ram, wrapper.hardware.borrow().ram);
             let status = legacy_state(&c.legacy);
             assert!(rt.power_on_reset().is_err());
-            assert_eq!(legacy_state(&rt.pa9500_compatibility().unwrap().legacy), status);
+            assert_eq!(
+                legacy_state(&rt.pa9500_compatibility().unwrap().legacy),
+                status
+            );
             assert_eq!(rt.get_reg("PC"), 0xf0012);
         }
         assert!(CoreRuntime::new()

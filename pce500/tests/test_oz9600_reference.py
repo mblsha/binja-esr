@@ -11,6 +11,8 @@ from pce500.oz9600.profile import (
 )
 from pce500.oz9600.input import KEYS, parse_replay
 from pce500.oz9600.lcd import LcdController
+
+
 from pce500.oz9600.hardware import guest_internal_write_is_allowed
 from pce500.oz9600.hardware import ON_KEY_SSR_MASK
 from pce500.oz9600.rtc import Clock, Rtc
@@ -22,6 +24,28 @@ from pce500.oz9600.retained import (
     PAYLOAD_SIZE,
 )
 from pce500.oz9600.boundary import ExecutionState
+
+
+@pytest.mark.parametrize("vertical", [0, 128])
+@pytest.mark.parametrize("missing", [1, 2])
+def test_signed_pixel_stream_crosses_zero_on_both_axes(vertical, missing):
+    lcd = LcdController()
+    lcd.write(31, 2)
+    lcd.write(3, 255)
+    lcd.write(8, vertical)
+    axis, other = (16, 18) if vertical == 0 else (18, 16)
+    lcd.set_word(axis, 0)
+    lcd.set_word(other, 10)
+    lcd.write(2, 0xA5)
+    lcd.set_word(axis + 4, -missing)
+    lcd.set_word(other + 4, 10)
+    lcd.read(2, 0)  # prefetch dummy
+    assert lcd.read(2, 0) == 0xA5 >> missing
+    lcd.set_word(axis, -missing)
+    lcd.write(2, 0x53)
+    lcd.set_word(axis + 4, 0)
+    lcd.read(2, 0)
+    assert lcd.read(2, 0) == ((0x53 << missing) & 255) | (0xA5 & ((1 << missing) - 1))
 
 
 def test_on_input_ssr_reference_matches_the_rom_mask():

@@ -46,6 +46,9 @@ class LcdController:
         )
 
     def bit_location(self, x, y, bit):
+        # Signed origins can cross zero within one pixel byte.
+        x = x - 65536 if x & 32768 else x
+        y = y - 65536 if y & 32768 else y
         return (x, y + bit) if self.registers[8] & 0x80 else (x + bit, y)
 
     def read_pixels(self, x, y):

@@ -23,6 +23,13 @@ card files. `e.pa9500.status()` and `e.pa9500.cardSram()` observe state;
 `e.step`, `e.keyboard` and `e.onKey` keep their existing interfaces.
 The graphical browser loader is not yet qualified for this profile.
 
+Normal Clock popup/save/restore uses the shared controller's signed pixel
+coordinates. A stream beginning outside backing can cross zero within one
+byte; each off-screen bit is blank or discarded individually. The negative
+origin used by firmware picture save/restore must preserve the remaining bits.
+This contract is mirrored in Rust and Python and covers both orientations;
+physical-controller timing and clipping behavior remain provisional.
+
 The private companion repository contains source-bound native/WASM reset and
 normal BASIC animation replays, independent pixel checks and proof images.
 These qualify firmware behavior under an explicit candidate; they do not

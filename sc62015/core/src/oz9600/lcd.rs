@@ -98,19 +98,25 @@ impl LcdController {
         x < self.width && y < self.height && self.pixels[y * self.width + x] != 0
     }
 
-    fn bit_location(&self, x: u16, y: u16, bit: usize) -> (usize, usize) {
-        if self.registers[8] & 0x80 != 0 {
-            (usize::from(x), usize::from(y) + bit)
+    fn bit_location(&self, x: u16, y: u16, bit: usize) -> Option<(usize, usize)> {
+        // Coordinate words are signed, including spans which begin outside
+        // backing and cross zero. Do not discard their entire first byte.
+        let (x, y) = (i32::from(x as i16), i32::from(y as i16));
+        let (x, y) = if self.registers[8] & 0x80 != 0 {
+            (x, y + bit as i32)
         } else {
-            (usize::from(x) + bit, usize::from(y))
-        }
+            (x + bit as i32, y)
+        };
+        Some((usize::try_from(x).ok()?, usize::try_from(y).ok()?))
     }
 
     fn read_pixels(&self, x: u16, y: u16) -> u8 {
         let mut value = 0;
         for bit in 0..8 {
-            let (px, py) = self.bit_location(x, y, bit);
-            if self.pixel(px, py) {
+            if self
+                .bit_location(x, y, bit)
+                .is_some_and(|(px, py)| self.pixel(px, py))
+            {
                 value |= 0x80 >> bit;
             }
         }
@@ -150,7 +156,9 @@ impl LcdController {
     fn write_pixels(&mut self, x: u16, y: u16, value: u8) {
         for bit in 0..8 {
             let mask = 0x80 >> bit;
-            let (px, py) = self.bit_location(x, y, bit);
+            let Some((px, py)) = self.bit_location(x, y, bit) else {
+                continue;
+            };
             if self.registers[3] & mask != 0 && self.permits_write(px, py) {
                 let destination = &mut self.pixels[py * self.width + px];
                 let source = u8::from(value & mask != 0);
@@ -329,6 +337,34 @@ impl LcdController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_pixel_stream_crosses_zero_on_both_axes() {
+        // Clock's picture save/restore starts at (-1,-1). Pixels outside
+        // backing are blank; each remaining bit still has its own position.
+        for vertical in [0, 128] {
+            for missing in [1_u16, 2] {
+                let mut lcd = LcdController::default();
+                lcd.write(31, 2).unwrap();
+                lcd.write(3, 255).unwrap();
+                lcd.write(8, vertical).unwrap();
+                let (axis, other) = if vertical == 0 { (16, 18) } else { (18, 16) };
+                lcd.set_word(axis, 0);
+                lcd.set_word(other, 10);
+                lcd.write(2, 0xa5).unwrap();
+                lcd.set_word(axis + 4, 0_u16.wrapping_sub(missing));
+                lcd.set_word(other + 4, 10);
+                lcd.read(2, 0).unwrap(); // documented prefetch dummy
+                assert_eq!(lcd.read(2, 0).unwrap(), 0xa5 >> missing);
+                lcd.set_word(axis, 0_u16.wrapping_sub(missing));
+                lcd.write(2, 0x53).unwrap();
+                lcd.set_word(axis + 4, 0);
+                lcd.read(2, 0).unwrap();
+                let expected = (0x53_u8 << missing) | (0xa5 & ((1 << missing) - 1));
+                assert_eq!(lcd.read(2, 0).unwrap(), expected);
+            }
+        }
+    }
 
     #[test]
     fn scrapbook_mode_three_adds_stroke_without_erasing_existing_ink() {
