@@ -152,6 +152,7 @@ impl Sc62015Emulator {
             ExecutionProfile::ExperimentalRtc => "experimental-rtc",
             ExecutionProfile::ExperimentalRtcIrqImr => "experimental-rtc-irq-imr",
             ExecutionProfile::ProvisionalV1 => "provisional-v1",
+            ExecutionProfile::ExperimentalExternalWake => "experimental-external-wake",
         }
         .into())
     }
@@ -270,6 +271,7 @@ fn parse_profile(profile: &str) -> Result<ExecutionProfile, JsValue> {
         "experimental-rtc" => ExecutionProfile::ExperimentalRtc,
         "experimental-rtc-irq-imr" => ExecutionProfile::ExperimentalRtcIrqImr,
         "provisional-v1" => ExecutionProfile::ProvisionalV1,
+        "experimental-external-wake" => ExecutionProfile::ExperimentalExternalWake,
         _ => return Err(JsValue::from_str("Unknown OZ execution profile")),
     };
     Ok(profile)

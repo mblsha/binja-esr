@@ -28,6 +28,9 @@ pub enum ExecutionProfile {
     /// advancing RTC and the existing ON/IMR/ISR policies. Configuration is
     /// established before execution; no guest state is repaired during boot.
     ProvisionalV1,
+    /// V1 basis plus opt-in EXI wake from OFF, inferred from ROM masks/wake code.
+    /// Physical ESR-P OFF and gate-array signal behavior remain unqualified.
+    ExperimentalExternalWake,
 }
 
 impl CoreRuntime {
@@ -55,6 +58,7 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalRtc
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
         );
         let mut hw = hardware.borrow_mut();
         self.state.set_block_transfer_policy(if experimental {
@@ -77,6 +81,7 @@ impl CoreRuntime {
                     | ExecutionProfile::ExperimentalRtc
                     | ExecutionProfile::ExperimentalRtcIrqImr
                     | ExecutionProfile::ProvisionalV1
+                    | ExecutionProfile::ExperimentalExternalWake
             ) {
                 IsrSoftwareWritePolicy::ClearOnlyExceptMti
             } else if clear_only {
@@ -96,18 +101,23 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalIrqImr
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
         );
         hw.execution.diagnostic_irq_imr_only = matches!(
             profile,
             ExecutionProfile::ExperimentalIrqImr
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
         );
+        hw.execution.diagnostic_external_off_wake =
+            profile == ExecutionProfile::ExperimentalExternalWake;
         let calendar = matches!(
             profile,
             ExecutionProfile::ExperimentalRtc
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
         );
         let second_period = self.device_model().timer_profile().timebase_hz;
         hw.execution.diagnostic_rtc_a2_period = if calendar {
@@ -125,7 +135,10 @@ impl CoreRuntime {
         hw.execution.rtc_off_elapsed_units = 0;
         self.memory.write_internal_byte(
             0xec,
-            if (profile == ExecutionProfile::ProvisionalV1 && hw.ram.iter().all(|b| *b == 0))
+            if (matches!(
+                profile,
+                ExecutionProfile::ProvisionalV1 | ExecutionProfile::ExperimentalExternalWake
+            ) && hw.ram.iter().all(|b| *b == 0))
                 || (profile == ExecutionProfile::Experimental && !hw.retained_loaded)
             {
                 0xd0

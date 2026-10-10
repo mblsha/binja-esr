@@ -19,6 +19,9 @@ pub struct ExecutionState {
     pub diagnostic_on_irq_edge_only: bool,
     /// Opt-in IRQ acceptance by architectural IMR rather than handler metadata.
     pub diagnostic_irq_imr_only: bool,
+    /// Opt-in ESR-P OFF hypothesis: enabled EXI wakes through normal fall-through.
+    #[serde(default)]
+    pub diagnostic_external_off_wake: bool,
     pub diagnostic_lcc7_halt_main_timer: bool,
     pub halt_main_timer_units: u64,
     pub diagnostic_rtc_a2_period: Option<u64>,
@@ -33,13 +36,14 @@ pub struct ExecutionState {
 }
 
 impl ExecutionState {
-    pub(super) fn session_policy(&self) -> (bool, bool, bool, Option<u64>, Option<u64>) {
+    pub(super) fn session_policy(&self) -> (bool, bool, bool, Option<u64>, Option<u64>, bool) {
         (
             self.diagnostic_on_irq_edge_only,
             self.diagnostic_irq_imr_only,
             self.diagnostic_lcc7_halt_main_timer,
             self.diagnostic_rtc_a2_period,
             self.experimental_rtc_second_period,
+            self.diagnostic_external_off_wake,
         )
     }
     pub(super) fn invalidate_bank_view(&mut self) {
@@ -144,7 +148,8 @@ impl BoundaryDevice for PeripheralBoundary {
         let mut hw = self.hardware.borrow_mut();
         // The crystal is independent of CPU execution. Only the explicit RTC
         // profile consumes scheduler OFF time; historical A2 experiments retain
-        // their CPU-cycle-only policy. This is not an alarm-to-power-wake model.
+        // their CPU-cycle-only policy. The optional EXI/OFF policy is owned
+        // by CoreRuntime; this callback never fabricates an ON input.
         let rtc_elapsed = if hw.execution.experimental_rtc_second_period.is_some() {
             context
                 .elapsed_timing_units

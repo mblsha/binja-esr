@@ -1012,6 +1012,25 @@ impl CoreRuntime {
         }
     }
 
+    // PY_SOURCE: pce500/oz9600/profile.py:off_wake_mask
+    fn off_wake_mask(&self) -> u8 {
+        #[cfg(feature = "oz9600")]
+        if self
+            .oz9600_hardware
+            .as_ref()
+            .is_some_and(|h| h.borrow().execution.diagnostic_external_off_wake)
+            && self
+                .memory
+                .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                .unwrap_or(0)
+                & IMR_EX
+                != 0
+        {
+            return ISR_ONKI | ISR_EXI;
+        }
+        ISR_ONKI
+    }
+
     // PY_SOURCE: pce500/oz9600/profile.py:handler_blocks_irq
     fn irq_handler_suppresses_delivery(&self) -> bool {
         #[cfg(feature = "oz9600")]
@@ -2572,10 +2591,9 @@ impl CoreRuntime {
                     .read_internal_byte_silent(IMEM_ISR_OFFSET)
                     .unwrap_or(0);
                 let should_preflight = if self.state.is_off() {
-                    // OFF ignores every status source except ONKI.  In
-                    // particular, do not perform an architectural opcode fetch
-                    // merely because an unrelated ISR bit is set.
-                    (asserted_isr & ISR_ONKI) != 0
+                    // OFF uses ONKI by default; the explicit OZ experiment
+                    // also permits enabled EXI. Other sources never cause a fetch.
+                    (asserted_isr & self.off_wake_mask()) != 0
                 } else {
                     !self.state.is_halted()
                         || asserted_isr != 0
@@ -2791,6 +2809,7 @@ impl CoreRuntime {
                 }
                 if self.state.is_off() {
                     let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    let wake_mask = self.off_wake_mask();
                     let mut woke_after_rtc_idle = false;
                     if (isr & ISR_ONKI) == 0 && self.effective_onk_level() {
                         // A held physical/RTC level may outlive a firmware clear
@@ -2800,7 +2819,7 @@ impl CoreRuntime {
                         isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
                         woke_after_rtc_idle = (isr & ISR_ONKI) != 0;
                     }
-                    if (isr & ISR_ONKI) == 0 {
+                    if (isr & wake_mask) == 0 {
                         if self.iq7000_rtc.is_none() {
                             self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(
                                 u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX),
@@ -2827,7 +2846,7 @@ impl CoreRuntime {
                     }
                     // Hardware wake filtering is not evidence that ignored
                     // status bits are destroyed. Preserve the complete ISR image
-                    // and only gate the OFF wake decision on ONKI.
+                    // and gate wake on the selected model/profile input mask.
                     self.timer.irq_isr = isr;
                     self.state.set_power_state(PowerState::Running);
                     self.timer.irq_pending = true;
@@ -2835,7 +2854,8 @@ impl CoreRuntime {
                         .memory
                         .read_internal_byte(IMEM_IMR_OFFSET)
                         .unwrap_or(self.timer.irq_imr);
-                    self.timer.irq_source = Some("ONK".to_string());
+                    self.timer.irq_source =
+                        Some(if isr & ISR_ONKI != 0 { "ONK" } else { "EX" }.to_string());
                     self.timer.last_fired.clone_from(&self.timer.irq_source);
                     if woke_after_rtc_idle {
                         // Alarm assertion and power wake consume an idle

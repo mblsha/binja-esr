@@ -15,6 +15,7 @@ class ExecutionProfile:
     initial_bp: int
     on_irq_edge_only: bool
     irq_imr_only: bool
+    external_off_wake: bool
 
     @classmethod
     def configure(
@@ -32,6 +33,7 @@ class ExecutionProfile:
             "experimental-rtc",
             "experimental-rtc-irq-imr",
             "provisional-v1",
+            "experimental-external-wake",
         ):
             raise ValueError("Unknown execution profile")
         experiment = name != "strict"
@@ -43,6 +45,7 @@ class ExecutionProfile:
             "experimental-rtc",
             "experimental-rtc-irq-imr",
             "provisional-v1",
+            "experimental-external-wake",
         }
         return cls(
             "coupled_predecrement" if experiment else "independent",
@@ -56,6 +59,7 @@ class ExecutionProfile:
                 "experimental-rtc",
                 "experimental-rtc-irq-imr",
                 "provisional-v1",
+                "experimental-external-wake",
             }
             else "clear_only"
             if clear_only
@@ -64,17 +68,27 @@ class ExecutionProfile:
             experiment,
             512_000
             if name
-            in {"experimental-rtc", "experimental-rtc-irq-imr", "provisional-v1"}
+            in {
+                "experimental-rtc",
+                "experimental-rtc-irq-imr",
+                "provisional-v1",
+                "experimental-external-wake",
+            }
             else 1_000_000
             if experiment
             else None,
             1_024_000
             if name
-            in {"experimental-rtc", "experimental-rtc-irq-imr", "provisional-v1"}
+            in {
+                "experimental-rtc",
+                "experimental-rtc-irq-imr",
+                "provisional-v1",
+                "experimental-external-wake",
+            }
             else None,
             0xD0
             if (
-                name == "provisional-v1"
+                name in {"provisional-v1", "experimental-external-wake"}
                 and (not retained_loaded if empty_sram is None else empty_sram)
             )
             or (name == "experimental" and not retained_loaded)
@@ -85,9 +99,16 @@ class ExecutionProfile:
                 "experimental-irq-imr",
                 "experimental-rtc-irq-imr",
                 "provisional-v1",
+                "experimental-external-wake",
             },
             name
-            in {"experimental-irq-imr", "experimental-rtc-irq-imr", "provisional-v1"},
+            in {
+                "experimental-irq-imr",
+                "experimental-rtc-irq-imr",
+                "provisional-v1",
+                "experimental-external-wake",
+            },
+            name == "experimental-external-wake",
         )
 
 
@@ -104,3 +125,8 @@ def on_irq_should_reassert(held: bool, *, edge_only: bool) -> bool:
 def handler_blocks_irq(in_handler: bool, *, imr_only: bool) -> bool:
     """Optional metadata guard; architectural IMR/source/ISR checks still apply."""
     return in_handler and not imr_only
+
+
+def off_wake_mask(*, external_enabled: bool, external_experiment: bool) -> int:
+    """OFF wake-source reference. EXI extension is an explicit ESR-P hypothesis."""
+    return 0x08 | (0x40 if external_enabled and external_experiment else 0)

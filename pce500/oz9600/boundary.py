@@ -8,6 +8,7 @@ class ExecutionState:
     mapped_selector: int | None = None
     diagnostic_on_irq_edge_only: bool = False
     diagnostic_irq_imr_only: bool = False
+    diagnostic_external_off_wake: bool = False
     diagnostic_lcc7_halt_main_timer: bool = False
     halt_main_timer_units: int = 0
     diagnostic_rtc_a2_period: int | None = None

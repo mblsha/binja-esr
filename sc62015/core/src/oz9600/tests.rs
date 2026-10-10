@@ -732,3 +732,98 @@ fn irq_imr_experiment_is_never_inferred_and_profile_reconfiguration_removes_it()
         );
     }
 }
+
+#[test]
+fn experimental_external_off_wake_requires_rtc_gate_and_cpu_masks_without_on_contact() {
+    use crate::llama::state::PowerState;
+    for sliced in [false, true] {
+        for (profile, rtc_mask, gate_mask, imr, expected_wake) in [
+            (ExecutionProfile::ExperimentalExternalWake, 1, 1, 0xc8, true),
+            (ExecutionProfile::ProvisionalV1, 1, 1, 0xc8, false),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                0,
+                1,
+                0xc8,
+                false,
+            ),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                1,
+                0,
+                0xc8,
+                false,
+            ),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                1,
+                1,
+                0x88,
+                false,
+            ),
+        ] {
+            let mut rt = synthetic_runtime();
+            rt.configure_oz9600_profile(profile).unwrap();
+            rt.load_rom(&[0, 1, 14], crate::INTERRUPT_VECTOR_ADDR as usize);
+            rt.set_reg("S", 0x3000);
+            rt.set_reg("U", 0x3800);
+            rt.memory.write_internal_byte(0xfb, imr); // IRM | EXM | ONKM, or IRM | ONKM
+            {
+                let mut hw = rt.oz9600_hardware().unwrap().borrow_mut();
+                hw.execution.experimental_rtc_second_period = Some(10);
+                hw.execution.diagnostic_rtc_a2_period = None;
+                let start = rtc::Clock {
+                    year: 1993,
+                    month: 1,
+                    day: 1,
+                    hour: 23,
+                    minute: 59,
+                    second: 58,
+                    weekday: 0,
+                };
+                let due = rtc::Clock {
+                    year: 1993,
+                    month: 1,
+                    day: 2,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    weekday: 1,
+                };
+                for (n, b) in start.encode([0; 5]).unwrap().into_iter().enumerate() {
+                    hw.rtc.write(n, b);
+                }
+                for (n, b) in due.encode([0; 5]).unwrap().into_iter().enumerate() {
+                    hw.rtc.write(16 + n, b);
+                }
+                hw.rtc.write(21, 7);
+                hw.rtc.write(rtc::MASK_A, rtc_mask);
+                hw.gate[0x10] = gate_mask;
+            }
+            rt.state.set_power_state(PowerState::Off);
+            let run = |rt: &mut CoreRuntime, n| {
+                if sliced {
+                    rt.run_slice(n, |_| false).map(|_| ())
+                } else {
+                    rt.step_scheduler_boundaries(n).map(|_| ())
+                }
+            };
+            run(&mut rt, 20).unwrap();
+            assert!(rt.state.is_off());
+            assert_eq!(rt.instruction_count(), 0);
+            run(&mut rt, 1).unwrap();
+            assert_eq!(!rt.state.is_off(), expected_wake);
+            assert!(!rt.physical_on_key_pressed());
+            assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8, 0);
+            // Wake is its own idle boundary; the next boundary delivers EXI.
+            assert_eq!(rt.timer.irq_total, 0);
+            assert_eq!(rt.instruction_count(), 0);
+            run(&mut rt, 1).unwrap();
+            assert_eq!(rt.timer.irq_total, u32::from(expected_wake));
+            if expected_wake {
+                assert_eq!(rt.get_reg("PC"), 0xe0101);
+                assert_eq!(rt.timer.irq_source.as_deref(), Some("EX"));
+            }
+        }
+    }
+}

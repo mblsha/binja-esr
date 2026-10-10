@@ -25,6 +25,7 @@ if (
 		'experimental-rtc',
 		'experimental-rtc-irq-imr',
 		'provisional-v1',
+		'experimental-external-wake',
 	].includes(profile)
 )
 	throw new Error('Expected BUNDLE RETAINED|- INPUT NEW_OUTPUT and a known OZ profile');

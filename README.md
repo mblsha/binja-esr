@@ -316,3 +316,5 @@ Commands are relative to the repository root.
   - `cargo run --manifest-path sc62015/core/Cargo.toml --bin sc62015-lcd -- --model pc-e500`
   - Keyboard: Ctrl+1..5 or F1..F5 map to PF1..PF5, Enter maps to `=`, Backspace maps to `BS`, Ctrl+C exits.
   - Use `--no-alt-screen` for tmux capture panes, `--force-tty` when running detached, `--input-steps` to reduce input latency, `--pf-numbers` to map digits 1–5 to PF1–PF5, `--bnida PATH` to show function names in the status line, `--force-key-irq` to force KEY interrupts if the ROM stays halted, and `--card present|absent` to control the memory card slot state.
+
+The OZ-9600 [external alarm wake experiment](docs/oz9600_alarm_wake.md) provides an opt-in wake policy, launch commands and its current qualification limits.

@@ -392,3 +392,33 @@ mod tests {
         assert_eq!(before, live.oz9600_session_state().unwrap());
     }
 }
+
+#[cfg(test)]
+#[test]
+fn saved_external_wake_policy_cannot_silently_change_on_reload() {
+    let mut fixed = vec![0; 0x20000];
+    fixed[0x1fffd..].copy_from_slice(&[0, 0, 14]);
+    let make = |profile| {
+        let mut rt = super::configure_hardware(&fixed, super::Hardware::default()).unwrap();
+        rt.configure_oz9600_profile(profile).unwrap();
+        rt
+    };
+    let original = make(super::ExecutionProfile::ProvisionalV1)
+        .oz9600_session_state()
+        .unwrap();
+    let mut experimental = make(super::ExecutionProfile::ExperimentalExternalWake);
+    let before = experimental.oz9600_retained_state().unwrap();
+    assert!(experimental
+        .restore_oz9600_session(&original)
+        .unwrap_err()
+        .to_string()
+        .contains("different OZ execution profile"));
+    assert_eq!(experimental.oz9600_retained_state().unwrap(), before);
+    let image = experimental.oz9600_session_state().unwrap();
+    make(super::ExecutionProfile::ExperimentalExternalWake)
+        .restore_oz9600_session(&image)
+        .unwrap();
+    assert!(make(super::ExecutionProfile::ProvisionalV1)
+        .restore_oz9600_session(&image)
+        .is_err());
+}

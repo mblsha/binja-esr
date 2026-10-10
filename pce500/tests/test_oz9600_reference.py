@@ -309,3 +309,15 @@ def test_scrapbook_mode_three_adds_stroke_without_erasing_existing_ink(vertical)
         lcd.pixel(48 + (0 if vertical else bit), 88 + (bit if vertical else 0))
         for bit in range(8)
     ] == [bool(0xE7 & (128 >> bit)) for bit in range(8)]
+
+
+def test_external_off_wake_is_explicit_and_cpu_external_masked():
+    from pce500.oz9600.profile import off_wake_mask
+
+    ordinary = ExecutionProfile.configure("provisional-v1")
+    candidate = ExecutionProfile.configure("experimental-external-wake")
+    assert not ordinary.external_off_wake and candidate.external_off_wake
+    assert candidate.initial_bp == 0xD0 and candidate.irq_imr_only
+    assert off_wake_mask(external_enabled=True, external_experiment=True) == 0x48
+    assert off_wake_mask(external_enabled=False, external_experiment=True) == 0x08
+    assert off_wake_mask(external_enabled=True, external_experiment=False) == 0x08

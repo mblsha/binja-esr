@@ -2434,6 +2434,7 @@
 						<option value="experimental-on-edge">ON experiment: one interrupt per press</option>
 						<option value="experimental-irq-imr">IRQ experiment: IMR controls acceptance</option>
 						<option value="experimental-rtc">RTC experiment: clock and ordinary alarms</option>
+						<option value="experimental-external-wake">OZ-9600 v1 + alarm wake experiment</option>
 						<option value="experimental-rtc-irq-imr">RTC and IRQ experiment: clock with resumable input</option></select
 					>
 				</label>
