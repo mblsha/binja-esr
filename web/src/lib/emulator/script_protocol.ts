@@ -18,6 +18,8 @@ export const SYNC_SCRIPT_METHODS = [
 	'stub',
 	'clearStubs',
 	'stub.read8',
+	'pa9500.status',
+	'pa9500.cardSram',
 ] as const;
 export const ASYNC_SCRIPT_METHODS = [
 	'reset',

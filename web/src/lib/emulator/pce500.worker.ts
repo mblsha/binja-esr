@@ -14,6 +14,7 @@ import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from '
 import { TabletInputs } from './tablet_inputs';
 import { AudioDelivery } from './oz_audio';
 import { SerialDelivery, queueSerialInput } from './oz_serial';
+import { loadPa9500, resetPa9500, type PaProfile, type PaInputMode } from './pa9500_loader';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -34,6 +35,9 @@ type WorkerRequest =
 			generation?: number;
 			ozProfile?: OzProfile;
 			retained?: Uint8Array;
+			paProfile?: PaProfile;
+			paCardRom?: Uint8Array;
+			paCardSram?: Uint8Array;
 	  }
 	| { id: number; type: 'oz_retained_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
@@ -45,6 +49,9 @@ type WorkerRequest =
 	| { id: number; type: 'serial_consumed'; generation: number; epoch: number; sequence: number }
 	| { id: number; type: 'serial_status' }
 	| { id: number; type: 'oz_reset' }
+	| { id: number; type: 'pa_reset' }
+	| { id: number; type: 'pa_card_export'; generation: number }
+	| { id: number; type: 'pa_observe'; generation: number }
 	| { id: number; type: 'oz_retained_restore'; bytes: Uint8Array }
 	| { id: number; type: 'oz_tablet'; contact: TabletContact; owner: string; cancel?: boolean; generation: number }
 	| { id: number; type: 'oz_replay'; document: string }
@@ -71,7 +78,7 @@ type WorkerRequest =
 	  }
 	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
 	| { id: number; type: 'input_state' }
-	| { id: number; type: 'paste_text'; text: string; generation: number }
+	| { id: number; type: 'paste_text'; text: string; generation: number; paInput?: PaInputMode }
 	| { id: number; type: 'frame_consumed'; sequence: number }
 	| { id: number; type: 'frame_delivery_state' };
 
@@ -294,6 +301,8 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 					}
 				};
 				return createEvalApi({
+					pa9500Status: () => runWithError('pa9500.status()', () => emulator.pa9500_status()),
+					pa9500CardSram: () => runWithError('pa9500.cardSram()', () => emulator.pa9500_card_sram()),
 					callFunction: async (
 						address: number,
 						maxInstructions: number,
@@ -714,6 +723,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				const model = msg.model ?? romModel;
 				if (model === 'oz-9600')
 					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
+				else if (model === 'pa-9500')
+					loadPa9500(emu, msg.bytes, msg.paProfile ?? 'bootstrap-v3', msg.paCardRom, msg.paCardSram);
 				else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
 					emu.load_rom_with_model(msg.bytes, model);
@@ -755,6 +766,32 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'oz_state': {
 				await ensureEmulator();
 				replyOk(msg.id, emulator.oz9600_state());
+				return;
+			}
+			case 'pa_observe': {
+				if (romModel !== 'pa-9500' || operations.busy) throw new Error('Requires paused PA model');
+				if (msg.generation !== machineGeneration) throw new Error('Stale PA observation generation');
+				replyOk(msg.id, {
+					status: emulator.pa9500_status(),
+					capture: emulator.lcd_capture(1),
+					card_sram: Array.from(emulator.pa9500_card_sram()),
+				});
+				return;
+			}
+			case 'pa_card_export': {
+				if (romModel !== 'pa-9500' || operations.busy) throw new Error('Requires paused PA model');
+				if (msg.generation !== machineGeneration) throw new Error('Stale PA card generation');
+				replyOk(msg.id, emulator.pa9500_card_sram());
+				return;
+			}
+			case 'pa_reset': {
+				if (romModel !== 'pa-9500') throw new Error('PA reset requires PA model');
+				inputs.clear();
+				resetPa9500(emulator);
+				tabletInputs.discard();
+				resetSerial();
+				requestFrame(true, true);
+				replyOk(msg.id);
 				return;
 			}
 			case 'oz_reset':
@@ -974,7 +1011,9 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (operations.busy) throw new Error('Wait for the active machine operation before pasting.');
 				if (msg.generation !== machineGeneration) throw new Error('Stale paste generation');
 				if (!emulator || typeof msg.text !== 'string') throw new Error('Paste requires a loaded machine and text');
-				const plan = planPaste(msg.text, romModel);
+				if (msg.paInput !== undefined && !['native', 'basic'].includes(msg.paInput))
+					throw new Error('Invalid PA input mode');
+				const plan = planPaste(msg.text, romModel, msg.paInput);
 				if (plan.error || plan.unsupported.length)
 					throw new Error(plan.error ?? 'Paste contains unqualified characters');
 				inputs.startPaste(plan.contacts);
@@ -1011,6 +1050,7 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'set_execution_mode',
 			'oz_retained_restore',
 			'oz_reset',
+			'pa_reset',
 			'oz_replay',
 		].includes(msg.type)
 	) {

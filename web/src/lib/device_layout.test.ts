@@ -3,6 +3,19 @@ import { deviceLayout, rectStyle } from './device_layout';
 import { physicalKey, virtualKeysForModel } from './keymap';
 
 describe('reference-based device layouts', () => {
+	it('PA exposes functional ROM controls without inheriting a physical PC case', () => {
+		for (const mode of ['native', 'basic'] as const) {
+			const layout = deviceLayout('pa-9500', mode);
+			expect(layout.provenance).toBe('functional-input-layout');
+			expect(layout.keys.map((k) => [k.testId, k.code])).toEqual(
+				virtualKeysForModel('pa-9500', mode).map((k) => [k.testId, k.code]),
+			);
+			for (const key of layout.keys) {
+				expect(key.x + key.w).toBeLessThanOrEqual(layout.width);
+				expect(key.y + key.h).toBeLessThanOrEqual(layout.height);
+			}
+		}
+	});
 	for (const model of ['pc-e500', 'iq-7000', 'oz-9600'] as const) {
 		it(`${model}: preserves every supported key exactly once and never guesses an unmapped contact`, () => {
 			const layout = deviceLayout(model);

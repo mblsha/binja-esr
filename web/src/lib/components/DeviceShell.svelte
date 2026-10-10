@@ -7,17 +7,19 @@
 	import type { TabletContact } from '../emulator/oz9600_replay';
 	import VirtualKeyboard from './VirtualKeyboard.svelte';
 	import type { HostKeyboardMode } from '../keymap';
+	import type { PaInputMode } from '../emulator/pa9500_loader';
 
 	export let model: RomModel;
 	export let disabled = false;
 	export let hostKeyboardMode: HostKeyboardMode = 'symbols';
+	export let paInput: PaInputMode = 'native';
 	export let physicalHighlights = new Set<InputContact>();
 	export let deliveredContacts = new Set<InputContact>();
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
 	export let onTablet: (contact: TabletContact, owner: string, cancel: boolean) => void = () => {};
 	export let onCancelAll: () => void;
-	$: layout = deviceLayout(model);
+	$: layout = deviceLayout(model, paInput);
 </script>
 
 <section class="bench" aria-label={`${model.toUpperCase()} device view`}>
@@ -35,7 +37,9 @@
 			data-layout-version={layout.version}
 			style={`aspect-ratio:${layout.width}/${layout.height};`}
 		>
-			{#if model === 'oz-9600'}
+			{#if model === 'pa-9500'}
+				<div class="pa-brand">SHARP PA-9500 / DB-Z <small>ROM input layout · physical geometry unqualified</small></div>
+			{:else if model === 'oz-9600'}
 				<div class="oz-brand" aria-hidden="true">SHARP <small>OZ-9600 · WIZARD 256KB</small></div>
 				<div class="oz-panel" aria-label="Fixed printed tablet panel; artwork outside LCD">
 					{#each OZ_PANEL as [name, x, y]}
@@ -81,6 +85,7 @@
 				{layout}
 				{disabled}
 				{hostKeyboardMode}
+				{paInput}
 				{physicalHighlights}
 				{deliveredContacts}
 				{onPress}
@@ -92,6 +97,26 @@
 </section>
 
 <style>
+	.pa-9500 {
+		width: 100%;
+		min-width: 640px;
+		max-width: 920px;
+		background: #dedfcf;
+		border: 3px solid #4c5145;
+		border-radius: 12px;
+	}
+	.pa-brand {
+		position: absolute;
+		top: 54%;
+		left: 4%;
+		font-weight: 600;
+		color: #344038;
+	}
+	.pa-brand small {
+		display: block;
+		font-size: 0.7em;
+		font-weight: normal;
+	}
 	.oz-9600 {
 		width: 100%;
 		min-width: 720px;

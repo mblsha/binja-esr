@@ -1,10 +1,11 @@
 import { physicalKey } from '../keymap';
 import type { RomModel } from '../rom_model';
+import type { PaInputMode } from './pa9500_loader';
 
 export const MAX_PASTE_CHARACTERS = 4096;
 
 /** Keycap composition only. CAPS/app state determines the resulting text. */
-export function planPaste(text: string, model: RomModel) {
+export function planPaste(text: string, model: RomModel, paInput: PaInputMode = 'native') {
 	const contacts: number[] = [];
 	const unsupported: { character: string; position: number }[] = [];
 	if (text.length > MAX_PASTE_CHARACTERS)
@@ -16,7 +17,7 @@ export function planPaste(text: string, model: RomModel) {
 		else if (character === ' ') names = ['SPACE'];
 		else if (model === 'iq-7000' && character === ',') names = ['SHIFT', 'K'];
 		else if (/^[A-Za-z0-9+\-*/=.,;()]$/.test(character)) names = [character.toUpperCase()];
-		const mapped = names.map((name) => physicalKey(model, name));
+		const mapped = names.map((name) => physicalKey(model, name, paInput));
 		if (!mapped.length || mapped.some((contact) => contact === null))
 			unsupported.push({ character, position: index + 1 });
 		else contacts.push(...(mapped as number[]));

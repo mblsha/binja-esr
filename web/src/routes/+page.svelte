@@ -6,6 +6,7 @@
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
 	import { lcdPng, downloadBlob } from '$lib/lcd_export';
 	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
+	import { loadPa9500, resetPa9500, type PaProfile, type PaInputMode } from '$lib/emulator/pa9500_loader';
 	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import FunctionRunnerExamplesPanel from '$lib/components/FunctionRunnerExamplesPanel.svelte';
@@ -99,6 +100,13 @@
 	let requestedRom: { bytes: Uint8Array; model: RomModel; source: string | null } | null = null;
 	let ozProfile: OzProfile = 'provisional-v1';
 	let ozLoadedProfile: OzProfile = 'strict';
+	let paProfile: PaProfile = 'bootstrap-v3';
+	let paLoadedProfile: PaProfile | null = null;
+	let paInput: PaInputMode = 'native';
+	let paCardRom = new Uint8Array();
+	let paCardSram = new Uint8Array();
+	let paCardNames = { rom: '', sram: '' };
+	let paCardError = '';
 	let ozReplayReport: any = null;
 	let ozReplayStatus = '';
 	let running = false;
@@ -229,7 +237,7 @@
 	let pasteText = '';
 	let pasteSubmitting = false;
 	let pasteEditor: HTMLTextAreaElement;
-	$: pastePlan = planPaste(pasteText, romModel);
+	$: pastePlan = planPaste(pasteText, romModel, paInput);
 	let typingCatchUp = false;
 	let advancedOpen = false;
 	let menuOpen = false;
@@ -738,7 +746,7 @@
 		const generation = romLoadGeneration;
 		try {
 			if (worker) {
-				const result = await workerCall('paste_text', { text: pasteText, generation });
+				const result = await workerCall('paste_text', { text: pasteText, generation, paInput });
 				if (generation !== romLoadGeneration) return;
 				pasteStatus = result;
 			} else {
@@ -1071,7 +1079,14 @@
 			if (worker) {
 				await workerCall(
 					'load_rom',
-					{ bytes, romSource: source, model, generation, ...(model === 'oz-9600' ? { ozProfile, retained } : {}) },
+					{
+						bytes,
+						romSource: source,
+						model,
+						generation,
+						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
+						...(model === 'pa-9500' ? { paProfile, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice() } : {}),
+					},
 					[bytes.buffer],
 				);
 			} else {
@@ -1081,6 +1096,7 @@
 					return;
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
+				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1107,6 +1123,7 @@
 					: 'Automatic saving is off; export backups to keep records';
 		}
 		if (model === 'oz-9600') ozLoadedProfile = ozProfile;
+		if (model === 'pa-9500') paLoadedProfile = paProfile;
 		ozReplayReport = null;
 		ozReplayStatus = '';
 		fallbackTablet.discard();
@@ -1529,8 +1546,101 @@
 		);
 	}
 
+	async function selectPaCard(event: Event, kind: 'rom' | 'sram') {
+		const file = (event.currentTarget as HTMLInputElement).files?.[0];
+		if (!file) return;
+		try {
+			if (file.size !== (kind === 'rom' ? 0x20000 : 0x8000))
+				throw new Error(`PA card ${kind} must be ${kind === 'rom' ? '128' : '32'} KiB`);
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (kind === 'rom') paCardRom = bytes;
+			else paCardSram = bytes;
+			paCardNames = { ...paCardNames, [kind]: file.name };
+			paCardError = '';
+		} catch (error) {
+			paCardError = String(error);
+		}
+	}
+
+	async function reloadPaCard(remove = false) {
+		if (!installedRom || installedRom.model !== 'pa-9500' || loadingRom) return;
+		if (remove) {
+			paCardRom = new Uint8Array();
+			paCardSram = new Uint8Array();
+			paCardNames = { rom: '', sram: '' };
+		}
+		loadingRom = true;
+		const previousGeneration = romLoadGeneration;
+		const previousInput = paInput;
+		const generation = ++romLoadGeneration;
+		paInput = 'native';
+		try {
+			await installRom(installedRom.bytes.slice(), 'pa-9500', installedRom.source, generation);
+			paCardError = '';
+		} catch (error) {
+			paCardError = String(error);
+			if (romLoadGeneration === generation) {
+				romLoadGeneration = previousGeneration;
+				paInput = previousInput;
+				releaseAllPhysicalHeldCodes();
+				releaseInputSource('virtual');
+			}
+		} finally {
+			loadingRom = false;
+		}
+	}
+
+	async function exportPaObservation() {
+		if (!romLoaded || romModel !== 'pa-9500' || !(await stop())) return;
+		try {
+			const observation = worker
+				? await workerCall('pa_observe', { generation: romLoadGeneration })
+				: {
+						status: emulator.pa9500_status(),
+						capture: emulator.lcd_capture(1),
+						card_sram: Array.from(emulator.pa9500_card_sram()),
+					};
+			observation.capture.pixels = Array.from(observation.capture.pixels);
+			downloadBlob(new Blob([safeJson(observation)], { type: 'application/json' }), 'pa9500-observations.json');
+		} catch (error) {
+			paCardError = String(error);
+		}
+	}
+
+	async function exportPaCard() {
+		if (!romLoaded || romModel !== 'pa-9500' || !(await stop())) return;
+		try {
+			const bytes: Uint8Array = worker
+				? await workerCall('pa_card_export', { generation: romLoadGeneration })
+				: emulator.pa9500_card_sram();
+			if (!bytes.length) throw new Error('No PA card is loaded');
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pa9c3-sram.bin');
+		} catch (error) {
+			paCardError = String(error);
+		}
+	}
+
 	async function resetSession() {
 		if (!installedRom || loadingRom) return;
+		if (installedRom.model === 'pa-9500' && workerHealth === 'ready') {
+			if (!(await stop())) return;
+			try {
+				releaseAllPhysicalHeldCodes();
+				releaseInputSource('virtual');
+				if (worker) await workerCall('pa_reset');
+				else {
+					fallbackInputs.clear();
+					resetPa9500(emulator);
+					resetFallbackSerial();
+					refreshAllNow();
+				}
+				lastError = null;
+				paInput = 'native';
+			} catch (error) {
+				lastError = `PA reset failed: ${String(error)}`;
+			}
+			return;
+		}
 		if (installedRom.model === 'oz-9600' && workerHealth === 'ready') {
 			if (!(await stop())) return;
 			try {
@@ -1799,7 +1909,7 @@
 			return;
 		}
 		if (event.repeat) return;
-		const contacts = contactsForKeyEvent(event, romModel, hostKeyboardMode);
+		const contacts = contactsForKeyEvent(event, romModel, hostKeyboardMode, paInput);
 		if (contacts.length === 0) {
 			if (event.key.length === 1)
 				keyboardNotice = `No qualified ${romModel} key mapping for “${event.key}”.${romModel === 'iq-7000' && event.key === ',' ? ' For comma, press F9, release it, then press K.' : ''}`;
@@ -2008,7 +2118,8 @@
 			<strong>Keyboard shortcuts</strong>
 			<button on:click={() => (shortcutsOpen = false)}>Close shortcuts</button>
 			<p class="hint">
-				Click the device to type. F9 = device SHIFT · F10 = CAPS · {romModel === 'oz-9600'
+				Click the device to type. F9 = device SHIFT · F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel ===
+				'oz-9600'
 					? 'F11 = 2nd · F12 = ON'
 					: 'F12 = ON'}. Device CAPS controls letter case; host Shift selects mapped punctuation.
 			</p>
@@ -2017,7 +2128,9 @@
 					? 'F1–F8: Calendar, Schedule, TEL, MEMO, Calc, Card, World, Home. Enter stores; F11 or Shift+Enter inserts a newline. Page Up/Down searches.'
 					: romModel === 'oz-9600'
 						? 'F1: New Entry. F2: Edit. F11: 2nd. Escape: Cancel. Page Up/Down: Prev/Next. Printed mode labels use the tablet.'
-						: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
+						: romModel === 'pa-9500'
+							? 'F1–F7: Calendar, Phonebook, Memo, Business, Handwrite, Calculator, Clock. F8: kana. F10: input mode. F11: BASIC Run/Pro. Tap F9 then N for Special or K for SECRET in native bindings.'
+							: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
 			</p>
 			<p class="hint">
 				Letters, digits, Space, arrows, Backspace, Delete and Insert use device keys. Hover a key for its host binding.
@@ -2252,6 +2365,7 @@
 				disabled={!romLoaded || workerHealth !== 'ready' || functionRunnerBusy}
 				onTablet={tabletContact}
 				{hostKeyboardMode}
+				{paInput}
 				{physicalHighlights}
 				{deliveredContacts}
 				onPress={virtualPress}
@@ -2305,16 +2419,85 @@
 						<option value="iq-7000">IQ-7000</option>
 						<option value="pc-e500">PC-E500</option>
 						<option value="oz-9600">OZ-9600 (experimental hardware)</option>
+						<option value="pa-9500">PA-9500 / DB-Z (experimental hardware)</option>
 					</select>
 				</label>
 
 				<label>
 					Load ROM file:
-					<input type="file" accept=".bin,.rom,.img,.ozrom" data-testid="rom-file" on:change={onSelectRom} />
+					<input type="file" accept=".bin,.rom,.img,.ozrom,.parom" data-testid="rom-file" on:change={onSelectRom} />
 				</label>
 			</div>
 		</header>
 
+		{#if romModel === 'pa-9500'}
+			<section aria-label="PA configuration" data-testid="pa-configuration">
+				<p class="hint">Loaded profile: {paLoadedProfile ?? 'none'}.</p>
+				<label
+					>Profile for next ROM load: <select bind:value={paProfile} data-testid="pa-profile">
+						<option value="bootstrap-v3">Bootstrap v3</option><option value="bootstrap-v2">Bootstrap v2</option><option
+							value="bootstrap-v1">Bootstrap v1</option
+						>
+					</select></label
+				>
+				<label
+					>Letter bindings: <select
+						bind:value={paInput}
+						data-testid="pa-input"
+						on:change={() => {
+							releaseAllPhysicalHeldCodes();
+							releaseInputSource('virtual');
+						}}
+					>
+						<option value="native">Native apps / kana</option><option value="basic">BASIC English</option>
+					</select></label
+				>
+				<p class="hint">
+					The ROM translates native and BASIC letters differently. These bindings send ordinary contacts; the device's
+					Mode key still controls its input mode. Reset starts a fresh organizer and keeps the current card SRAM.
+					Physical geometry and timing remain provisional.
+				</p>
+				<label
+					>PA-9C3 ROM (128 KiB): <input
+						type="file"
+						accept=".bin"
+						data-testid="pa-card-rom"
+						on:change={(event) => selectPaCard(event, 'rom')}
+					/></label
+				>
+				<label
+					>PA-9C3 SRAM (32 KiB): <input
+						type="file"
+						accept=".bin"
+						data-testid="pa-card-sram"
+						on:change={(event) => selectPaCard(event, 'sram')}
+					/></label
+				>
+				<p class="hint">
+					Selected: {paCardNames.rom || 'no ROM'} / {paCardNames.sram || 'no SRAM'}. Import restarts the organizer with
+					this card image. Export saves current card SRAM; Reset preserves it in memory.
+				</p>
+				<button
+					data-testid="pa-card-load"
+					disabled={!romLoaded || loadingRom || !paCardRom.length || !paCardSram.length}
+					on:click={() => reloadPaCard()}>Import card and restart</button
+				>
+				<button data-testid="pa-card-remove" disabled={!romLoaded || loadingRom} on:click={() => reloadPaCard(true)}
+					>Restart without card</button
+				>
+				<button
+					data-testid="pa-card-export"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy}
+					on:click={exportPaCard}>Export card SRAM</button
+				>
+				<button
+					data-testid="pa-observe"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy}
+					on:click={exportPaObservation}>Export PA observations</button
+				>
+				{#if paCardError}<p role="alert" data-testid="pa-card-error">{paCardError}</p>{/if}
+			</section>
+		{/if}
 		{#if romModel === 'oz-9600'}
 			<section aria-label="OZ configuration" data-testid="oz-configuration">
 				<label
@@ -2458,8 +2641,10 @@
 		</p>
 		<p class="hint" id="keyboard-help">
 			Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT ·
-			F10 = CAPS · {romModel === 'oz-9600' ? 'F11 = 2nd · F12 = ON' : 'F12 = ON'} (your keyboard may require Fn). Text fields
-			and Ctrl/Cmd/Alt shortcuts stay with the browser. Hover a device key for its host bindings.
+			F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel === 'oz-9600'
+				? 'F11 = 2nd · F12 = ON'
+				: 'F12 = ON'} (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the browser. Hover
+			a device key for its host bindings.
 		</p>
 		<details class="keyboard-help">
 			<summary>Keyboard mappings & letter case</summary>
@@ -2470,6 +2655,10 @@
 				{:else if romModel === 'oz-9600'}
 					F1 = New Entry; F2 = Edit; Escape = Cancel; Page Up/Down = Prev/Next. Printed application labels and the LCD
 					send tablet contacts.
+				{:else if romModel === 'pa-9500'}
+					F1–F7 = Calendar / Phonebook / Memo / Business / Handwrite / Calculator / Clock. F8 = kana, F10 = input mode,
+					F11 = BASIC Run/Pro. Native-app and BASIC English bindings are selected in PA configuration. Tap F9 then
+					native N for Special or K for SECRET.
 				{:else}
 					F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
 				{/if}

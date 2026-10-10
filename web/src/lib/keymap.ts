@@ -1,12 +1,18 @@
 import type { RomModel } from './rom_model';
 import type { InputContact } from './emulator/host_inputs';
 import physicalMaps from '../../../sc62015/core/data/physical_keys.json';
+import paMaps from './pa9500_keys.json';
+import type { PaInputMode } from './emulator/pa9500_loader';
 
 export type VirtualKey = { label: string; code: InputContact; testId: string };
 export type HostKeyboardMode = 'symbols' | 'keycaps';
 const maps: Record<string, Record<string, number>> = physicalMaps;
-export function physicalKey(model: RomModel, name: string): number | null {
-	return maps[model][name] ?? null;
+export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
+	if (model === 'pa-9500') {
+		const table: Record<string, number> = { ...paMaps.common, ...paMaps[paInput] };
+		return table[name] ?? null;
+	}
+	return maps[model]?.[name] ?? null;
 }
 
 // Keycap mapping, not a desktop text composer: device CAPS controls case and
@@ -80,27 +86,50 @@ const ozHost: Record<string, string> = {
 	PageDown: 'NEXT',
 	NumpadEnter: 'ENTER',
 };
-const modelHost = (model: RomModel) => (model === 'iq-7000' ? iqHost : model === 'oz-9600' ? ozHost : pcHost);
+const paHost: Record<string, string> = {
+	F1: 'CALENDAR',
+	F2: 'PHONEBOOK',
+	F3: 'MEMO',
+	F4: 'BUSINESS',
+	F5: 'HANDWRITE',
+	F6: 'CALC',
+	F7: 'CLOCK',
+	F8: 'KANA',
+	F9: 'SHIFT',
+	F10: 'INPUT_MODE',
+	F11: 'PRO',
+};
+const modelHost = (model: RomModel) =>
+	model === 'iq-7000' ? iqHost : model === 'oz-9600' ? ozHost : model === 'pa-9500' ? paHost : pcHost;
 function hostName(code: string, model: RomModel): string | null {
 	if (/^Key[A-Z]$/.test(code)) return code.slice(3);
 	if (/^(Digit|Numpad)[0-9]$/.test(code)) return code.slice(-1);
 	return modelHost(model)[code] ?? commonHost[code] ?? null;
 }
 
-export function matrixCodeForKeyEvent(event: KeyboardEvent, model: RomModel = 'pc-e500'): InputContact | null {
+export function matrixCodeForKeyEvent(
+	event: KeyboardEvent,
+	model: RomModel = 'pc-e500',
+	paInput: PaInputMode = 'native',
+): InputContact | null {
 	if (event.code === 'F12') return 'on';
 	const name = hostName(event.code, model);
-	return name ? physicalKey(model, name) : null;
+	return name ? physicalKey(model, name, paInput) : null;
 }
 
 // The UI's default maps the character selected by the host layout to an actual
 // device key. Host Shift selects symbols; F9 remains the device SHIFT key.
 // This is not text injection: device CAPS/ROM state still determines letter case.
 // Keycap mode retains positional code mapping and literal host Shift contacts.
-export function contactsForKeyEvent(event: KeyboardEvent, model: RomModel, mode: HostKeyboardMode): InputContact[] {
+export function contactsForKeyEvent(
+	event: KeyboardEvent,
+	model: RomModel,
+	mode: HostKeyboardMode,
+	paInput: PaInputMode = 'native',
+): InputContact[] {
 	if (event.isComposing || event.key === 'Dead' || event.key === 'Process' || event.key === 'Unidentified') return [];
 	if (mode === 'keycaps') {
-		const contact = matrixCodeForKeyEvent(event, model);
+		const contact = matrixCodeForKeyEvent(event, model, paInput);
 		return contact === null ? [] : [contact];
 	}
 	if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') return [];
@@ -119,22 +148,27 @@ export function contactsForKeyEvent(event: KeyboardEvent, model: RomModel, mode:
 			...['Up', 'Down', 'Left', 'Right'].map((d) => 'Arrow' + d),
 		].includes(event.key)
 	) {
-		const contact = matrixCodeForKeyEvent({ code: event.key } as KeyboardEvent, model);
+		const contact = matrixCodeForKeyEvent({ code: event.key } as KeyboardEvent, model, paInput);
 		return contact === null ? [] : [contact];
 	}
 	if (event.key?.length === 1) {
 		const name = event.key === ' ' ? 'SPACE' : event.key.toUpperCase();
-		const contact = physicalKey(model, name);
+		const contact = physicalKey(model, name, paInput);
 		if (contact !== null) return [contact];
 		// IQ comma needs the ROM to observe SHIFT before K. Simultaneous raw
 		// contacts typed K in the live browser test; use F9, release, then K.
 		return []; // Never turn unsupported punctuation into the unshifted key.
 	}
-	const contact = matrixCodeForKeyEvent(event, model);
+	const contact = matrixCodeForKeyEvent(event, model, paInput);
 	return contact === null ? [] : [contact];
 }
 
-export function hostKeyHints(contact: InputContact, model: RomModel, mode: HostKeyboardMode): string {
+export function hostKeyHints(
+	contact: InputContact,
+	model: RomModel,
+	mode: HostKeyboardMode,
+	paInput: PaInputMode = 'native',
+): string {
 	const hosts = { ...commonHost, ...modelHost(model) };
 	const names = Object.entries(hosts)
 		.filter(
@@ -142,13 +176,13 @@ export function hostKeyHints(contact: InputContact, model: RomModel, mode: HostK
 				!host.startsWith('Control') &&
 				(!host.startsWith('Shift') || mode === 'keycaps') &&
 				(mode === 'keycaps' || !['Period', 'Slash', 'Minus', 'Equal', 'Comma', 'Semicolon'].includes(host)) &&
-				physicalKey(model, name) === contact,
+				physicalKey(model, name, paInput) === contact,
 		)
 		.map(([host]) => host.replace(/^Shift(Left|Right)$/, 'Shift').replace('Numpad', 'Keypad '));
 	if (contact === 'on') names.push('F12');
-	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') if (physicalKey(model, c) === contact) names.push(c);
+	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') if (physicalKey(model, c, paInput) === contact) names.push(c);
 	if (mode === 'symbols') {
-		for (const c of '%+-*/=.,;()') if (physicalKey(model, c) === contact) names.push(c);
+		for (const c of '%+-*/=.,;()') if (physicalKey(model, c, paInput) === contact) names.push(c);
 		if (model === 'iq-7000' && contact === physicalKey(model, 'RETURN')) names.push('Shift+Enter');
 	}
 	return [...new Set(names)].join(' / ');
@@ -167,18 +201,32 @@ export const KEY_TO_MATRIX_CODE: Record<string, InputContact> = Object.fromEntri
 		.filter((entry): entry is [string, InputContact] => entry[1] !== null),
 );
 
-export function virtualKeysForModel(model: RomModel): VirtualKey[] {
+export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'native'): VirtualKey[] {
 	const keys: VirtualKey[] = [];
 	const add = (name: string, label = name, id = name.toLowerCase().replaceAll('_', '-')) => {
-		const code = physicalKey(model, name);
+		const code = physicalKey(model, name, paInput);
 		if (code !== null) keys.push({ label, code, testId: 'vk-' + id });
 	};
 	const modeKeys =
 		model === 'iq-7000'
 			? ['CALENDAR', 'SCHEDULE', 'TEL', 'MEMO', 'CALC', 'CARD', 'WORLD', 'HOME']
-			: model === 'oz-9600'
-				? ['NEW ENTRY', 'EDIT', 'PREV', 'NEXT', 'CANCEL', 'MENU', '2ND', 'WORD', 'SYMBOL', 'OFF']
-				: ['PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'BASIC', 'MENU'];
+			: model === 'pa-9500'
+				? [
+						'CALENDAR',
+						'PHONEBOOK',
+						'MEMO',
+						'BUSINESS',
+						'HANDWRITE',
+						'CALC',
+						'CLOCK',
+						'KANA',
+						'INPUT_MODE',
+						'CONFIRM',
+						'PRO',
+					]
+				: model === 'oz-9600'
+					? ['NEW ENTRY', 'EDIT', 'PREV', 'NEXT', 'CANCEL', 'MENU', '2ND', 'WORD', 'SYMBOL', 'OFF']
+					: ['PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'BASIC', 'MENU'];
 	for (const name of modeKeys) add(name);
 	if (model === 'oz-9600') {
 		add('M+', 'M+', 'm-plus');

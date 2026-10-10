@@ -4,6 +4,12 @@ import { planPaste, MAX_PASTE_CHARACTERS } from './paste_plan';
 import { HostInputs, TYPING_GAP, TYPING_HOLD } from './host_inputs';
 
 describe('qualified paste', () => {
+	it('PA paste follows the selected ROM conversion and rejects unsupported native letters', () => {
+		expect(planPaste('MA', 'pa-9500').contacts).toEqual([32, 39]);
+		expect(planPaste('MA', 'pa-9500', 'basic').contacts).toEqual([45, 24]);
+		expect(planPaste('PRINT 1\n', 'pa-9500', 'basic').contacts).toEqual([40, 41, 33, 34, 54, 18, 55, 69]);
+		expect(planPaste('PRINT', 'pa-9500').unsupported.length).toBeGreaterThan(0);
+	});
 	it('uses actual model-specific contacts, sequential IQ comma, and explicit newline keys', () => {
 		for (const model of ['pc-e500', 'iq-7000'] as const) {
 			const names =

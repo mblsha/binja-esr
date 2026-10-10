@@ -57,6 +57,24 @@ describe('host letters and symbols', () => {
 });
 
 describe('matrixCodeForKeyEvent', () => {
+	it('uses PA ROM contacts and keeps native and BASIC letter conversion separate', () => {
+		expect(physicalKey('pa-9500', 'M')).toBe(32);
+		expect(physicalKey('pa-9500', 'A')).toBe(39);
+		expect(physicalKey('pa-9500', 'E')).toBe(34);
+		expect(physicalKey('pa-9500', 'A', 'basic')).toBe(24);
+		expect(physicalKey('pa-9500', 'M', 'basic')).toBe(45);
+		expect(physicalKey('pa-9500', 'F')).toBeNull();
+		expect(matrixCodeForKeyEvent({ code: 'F2' } as KeyboardEvent, 'pa-9500')).toBe(28);
+		expect(matrixCodeForKeyEvent({ code: 'F9' } as KeyboardEvent, 'pa-9500')).toBe(23);
+		expect(matrixCodeForKeyEvent({ code: 'F10' } as KeyboardEvent, 'pa-9500')).toBe(22);
+		expect(matrixCodeForKeyEvent({ code: 'F11' } as KeyboardEvent, 'pa-9500')).toBe(92);
+		expect(matrixCodeForKeyEvent({ code: 'F12' } as KeyboardEvent, 'pa-9500')).toBe('on');
+		for (const mode of ['native', 'basic'] as const) {
+			const keys = virtualKeysForModel('pa-9500', mode);
+			expect(new Set(keys.map((k) => k.testId)).size).toBe(keys.length);
+			expect(keys.find((k) => k.testId === 'vk-a')?.code).toBe(mode === 'native' ? 39 : 24);
+		}
+	});
 	it('maps PF keys', () => {
 		expect(matrixCodeForKeyEvent({ code: 'F1' } as KeyboardEvent)).toBe(0x56);
 		expect(matrixCodeForKeyEvent({ code: 'F2' } as KeyboardEvent)).toBe(0x55);

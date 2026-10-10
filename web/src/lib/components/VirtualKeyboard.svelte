@@ -3,6 +3,7 @@
 	import { virtualKeysForModel, hostKeyHints, type HostKeyboardMode } from '../keymap';
 	import type { InputContact } from '../emulator/host_inputs';
 	import type { RomModel } from '../rom_model';
+	import type { PaInputMode } from '../emulator/pa9500_loader';
 	import { rectStyle, type DeviceLayout, type DeviceKey } from '../device_layout';
 	import ModeGlyph from './ModeGlyph.svelte';
 
@@ -10,17 +11,20 @@
 	export let model: RomModel = 'pc-e500';
 	export let layout: DeviceLayout | null = null;
 	export let hostKeyboardMode: HostKeyboardMode = 'symbols';
+	export let paInput: PaInputMode = 'native';
 	export let physicalHighlights = new Set<InputContact>();
 	export let deliveredContacts = new Set<InputContact>();
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
 	export let onCancelAll: () => void = () => {};
 	const held = new Map<string, { code: InputContact; element: HTMLButtonElement; pointerId?: number }>();
-	$: keys = layout?.keys ?? virtualKeysForModel(model);
+	$: keys = layout?.keys ?? virtualKeysForModel(model, paInput);
 	let activeModel = model;
-	$: if (disabled || model !== activeModel) {
+	let activePaInput = paInput;
+	$: if (disabled || model !== activeModel || paInput !== activePaInput) {
 		cancelAll();
 		activeModel = model;
+		activePaInput = paInput;
 	}
 
 	function press(code: InputContact, owner: string, element: HTMLButtonElement, pointerId?: number) {
@@ -92,7 +96,7 @@
 				aria-label={key.code === null ? `${key.label} (unmapped)` : key.label}
 				title={key.code === null
 					? `${key.label}: physical key shown; input mapping not yet qualified`
-					: `${key.label}${hostKeyHints(key.code, model, hostKeyboardMode) ? ' — keyboard: ' + hostKeyHints(key.code, model, hostKeyboardMode) : ''}`}
+					: `${key.label}${hostKeyHints(key.code, model, hostKeyboardMode, paInput) ? ' — keyboard: ' + hostKeyHints(key.code, model, hostKeyboardMode, paInput) : ''}`}
 				disabled={disabled || key.code === null}
 				on:pointerdown={(event) => {
 					if (key.code !== null) pointerDown(key.code, event);

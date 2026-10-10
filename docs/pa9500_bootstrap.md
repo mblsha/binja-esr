@@ -21,7 +21,7 @@ PA debugger function-call capture is unavailable; use normal matrix input.
 The Function Runner CLI accepts the PA model, explicit profile and paired
 card files. `e.pa9500.status()` and `e.pa9500.cardSram()` observe state;
 `e.step`, `e.keyboard` and `e.onKey` keep their existing interfaces.
-The graphical browser loader is not yet qualified for this profile.
+The interactive browser bench now routes PA through the same explicit constructor, with normal ON release, paired optional card import and retained-card reset. Source-bound DOM consumers cover native and no-Worker paths; see the interactive bench instructions below.
 
 `bootstrap-v2` adds exactly five native read-only bytes from the verified
 1 MiB acquisition: addresses 1..3 and C/D returned E0. The original v1
@@ -63,3 +63,39 @@ The private companion repository contains source-bound native/WASM reset and
 normal BASIC animation replays, independent pixel checks and proof images.
 These qualify firmware behavior under an explicit candidate; they do not
 establish physical hardware equivalence or complete all-application support.
+
+
+## Interactive browser bench
+
+Open Advanced, select PA-9500 / DB-Z and Bootstrap v3, then load a verified
+`.parom` bundle. Optional PA-9C3 input requires its verified128 KiB ROM and a
+32 KiB SRAM image; Import card and restart creates fresh organizer backing.
+Click the LCD to enable host typing, then Resume or use explicit Step controls.
+The displayed controls use ROM-derived contacts and a functional layout;
+physical case geometry, key legends and timing remain provisional.
+
+F1–F7 select Calendar, Phonebook, Memo, Business Cards, Handwritten Memo,
+Calculator and Clock. F8 selects the native kana input behavior. F9 taps the
+native modifier; release it, then native N for Special Functions or K for
+SECRET. F10 operates the ROM input-mode key; F11 selects BASIC Run/Pro.
+F12 operates normal ON/BREAK. Unsupported host characters are reported.
+
+The PA configuration selects native-app/kana or BASIC English letter bindings.
+These follow different ROM conversion tables. Selecting bindings changes
+ordinary host contacts; the organizer's own Mode key continues to determine
+its text-entry mode. The accepted BASIC replay uses normal Mode transitions,
+types10 PRINT1, edits the constant to2 with Backspace, lists and runs it.
+
+Reset starts a fresh CPU/organizer and keeps current logical card SRAM. Export
+card SRAM downloads the current image for a later paired import. Export PA
+observations includes actual controller pixels, exposed machine state and card
+bytes. Browser proofs match42 native checkpoints, independently check22 glyph/
+bitmap regions, and recover the guest-created10 PRINT2 through normal firmware
+LIST/RUN after reset. Every captured UI canvas matches its controller bytes.
+Organizer/RTC/OFF retention, shared PA serial and complete text/navigation/
+modifier coverage remain open. Default PA bootstrap still leaves UART disabled.
+
+The private companion preserves exact input closures, compiled WASM/Vite
+artifacts, normal DOM replays, raw frames and inspected screenshots. Earlier
+proof capsules retain their historical source versions. All171 web unit tests
+and five existing PC/IQ browser regressions pass for this browser integration.

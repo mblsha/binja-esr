@@ -1,6 +1,7 @@
 import { physicalKey, virtualKeysForModel } from './keymap';
 import type { InputContact } from './emulator/host_inputs';
 import type { RomModel } from './rom_model';
+import type { PaInputMode } from './emulator/pa9500_loader';
 
 // Reference-photo proportions, NOT measured dimensions or scan coordinates.
 // Stable IDs join case geometry to input contacts; future scan meshes can use
@@ -25,12 +26,12 @@ export type DeviceLayout = {
 	height: number;
 	lcd: { x: number; y: number; w: number; h: number };
 	keys: DeviceKey[];
-	provenance: 'photo-reference-approximation';
+	provenance: 'photo-reference-approximation' | 'functional-input-layout';
 };
 
-export function deviceLayout(model: RomModel): DeviceLayout {
+export function deviceLayout(model: RomModel, paInput: PaInputMode = 'native'): DeviceLayout {
 	const keys: DeviceKey[] = [];
-	const existing = virtualKeysForModel(model);
+	const existing = virtualKeysForModel(model, paInput);
 	const add = (
 		id: string,
 		x: number,
@@ -41,7 +42,7 @@ export function deviceLayout(model: RomModel): DeviceLayout {
 		legend = '',
 		tone: DeviceKey['tone'] = 'normal',
 	) => {
-		const code = id === 'ON' ? 'on' : physicalKey(model, id);
+		const code = id === 'ON' ? 'on' : physicalKey(model, id, paInput);
 		const known = existing.find((key) => key.code === code);
 		keys.push({
 			id,
@@ -64,6 +65,32 @@ export function deviceLayout(model: RomModel): DeviceLayout {
 		});
 	};
 
+	if (model === 'pa-9500') {
+		// Functional controls for ROM-derived contacts, not a physical case scan.
+		existing.forEach((key, index) =>
+			keys.push({
+				id: key.testId,
+				label: key.label,
+				face: key.label,
+				code: key.code,
+				testId: key.testId,
+				x: 25 + (index % 8) * 90,
+				y: 465 + Math.floor(index / 8) * 42,
+				w: 82,
+				h: 34,
+				tone: 'normal',
+			}),
+		);
+		return {
+			version: 1,
+			model,
+			width: 770,
+			height: 465 + Math.ceil(existing.length / 8) * 42,
+			lcd: { x: 150, y: 22, w: 468, h: 348 },
+			keys,
+			provenance: 'functional-input-layout',
+		};
+	}
 	if (model === 'oz-9600') {
 		// The supplied unit photo places the calculator cluster beside the
 		// navigation keys. Move and Exp/Col are the ROM's 2nd functions of M+/M−.
