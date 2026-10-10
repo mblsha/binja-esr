@@ -19,6 +19,7 @@ pub const FIXED_ROM_HASH: &str = "4e61da23861f8a007cd83116dd26b03db5843bdd6daa03
 pub const SELECTORS: [u8; 16] = [
     0, 1, 2, 3, 4, 5, 6, 7, 248, 249, 250, 251, 252, 253, 254, 255,
 ];
+pub mod compat_probe;
 const MAGIC: &[u8; 8] = b"PAROM01\0";
 
 #[derive(Clone, Copy, Debug, Default)]

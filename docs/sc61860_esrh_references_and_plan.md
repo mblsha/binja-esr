@@ -3,6 +3,13 @@
 ESR-H is the older instruction family represented by SC61860. The current
 plugin and Rust/Python CPU implementations target SC62015 / ESR-L; a public
 ESR-H decoder, Binary Ninja architecture and CPU runtime remain to be built.
+
+PA-9500 analysis has now found paired native/legacy gateways. The shared
+`pa9500::compat_probe` module and Python reference execute a strict ESR-H
+startup signature component with explicit WRIT output and far-transfer
+hypotheses. They do not provide a complete ESR-H CPU, automatic machine ISA
+dispatch or a qualified legacy memory/I/O map. Full mode/state integration
+remains part of the PA-9500 emulator work.
 This page records available references and the work needed to add them.
 
 ## Existing references
