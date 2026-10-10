@@ -2,6 +2,29 @@
 use super::*;
 
 #[test]
+fn controller_view_observes_the_board_without_bus_routing_or_copying() {
+    let (_, hw) = fixture();
+    hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));
+    let view = lcd_view::LcdView(hw.clone());
+    let frame = crate::LcdHal::matrix_frame(&view);
+    assert_eq!(frame.geometry(), (195, 145));
+    assert!(frame.pixels().iter().all(|p| *p == 0));
+    for (offset, value) in [(31, 2), (3, 255), (16, 24), (18, 48), (2, 0x80)] {
+        hw.borrow().write(0x8420 + offset, value, None);
+    }
+    let before = hw.borrow().events.clone();
+    let actual = crate::LcdHal::matrix_frame(&view);
+    assert_eq!(actual, hw.borrow().lcd.as_ref().unwrap().matrix_frame());
+    assert_eq!(actual.pixels().iter().filter(|p| **p != 0).count(), 1);
+    assert_eq!(actual.pixels()[48 * 195 + 24], 1);
+    assert_eq!(hw.borrow().events, before);
+    for address in 0..0x10000 {
+        assert!(!crate::LcdHal::handles(&view, address));
+    }
+    assert!(!crate::LcdHal::may_handle_span(&view, 0, 0xfffff));
+}
+
+#[test]
 fn lcd_coordinate_restore_candidate_requires_a_fresh_pa_controller() {
     let (mut rt, hw) = fixture();
     hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));

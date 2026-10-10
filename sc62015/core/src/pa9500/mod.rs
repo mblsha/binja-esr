@@ -22,6 +22,7 @@ pub const SELECTORS: [u8; 16] = [
 pub mod card;
 pub mod compat_probe;
 pub mod compat_runtime;
+mod lcd_view;
 const MAGIC: &[u8; 8] = b"PAROM01\0";
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -716,6 +717,13 @@ pub fn from_verified_images(
 
 /// Immutable fixed ROM + manifest + banks, never the captured live memory.
 pub fn from_rom_bundle(image: &[u8]) -> Result<(CoreRuntime, SharedHardware), String> {
+    from_rom_bundle_with_profile(image, BootstrapProfile::TrapPeripherals)
+}
+
+fn from_rom_bundle_with_profile(
+    image: &[u8],
+    profile: BootstrapProfile,
+) -> Result<(CoreRuntime, SharedHardware), String> {
     if image.len() < 52 || &image[..8] != MAGIC {
         return Err("PA ROM bundle header mismatch".into());
     }
@@ -742,8 +750,58 @@ pub fn from_rom_bundle(image: &[u8]) -> Result<(CoreRuntime, SharedHardware), St
             offset += 0x20000;
             Ok(data)
         },
-        BootstrapProfile::TrapPeripherals,
+        profile,
     )
+}
+
+/// Explicit firmware-qualified board candidate, with fresh organizer backing.
+/// Physical bus decode, compatibility timing and auxiliary LCD pixels remain
+/// hypotheses. This does not change the strict model factory.
+pub fn from_bootstrap_bundle(
+    image: &[u8],
+    card: Option<card::Pa9c3Card>,
+) -> Result<(CoreRuntime, SharedHardware), String> {
+    let (mut rt, hw) = from_rom_bundle_with_profile(image, BootstrapProfile::ControllerBpD0)?;
+    install_media(&mut rt, &hw, card)?;
+    install_zero_data(&mut rt, &hw, 0xe0)?;
+    hw.borrow().card_eil_presence_candidate = true;
+    install_scratch_candidate(&mut rt, &hw)?;
+    rt.state
+        .set_block_transfer_policy(crate::llama::state::BlockTransferPolicy::CoupledPredecrement);
+    install_on_contact_edge_candidate(&mut rt)?;
+    install_lcd_coordinate_restore_candidate(&mut rt, &hw)?;
+    rt.install_pa9500_compatibility(
+        hw.clone(),
+        compat_runtime::LegacyDataPolicy::AbsentMediaAndPagedRom,
+    )?;
+    *rt.timer = DeviceModel::Pa9500.timer_profile().new_context(true);
+    rt.press_on_key();
+    rt.lcd = Some(Box::new(lcd_view::LcdView(hw.clone())));
+    Ok((rt, hw))
+}
+
+/// Read-only cross-runner observation. Native counters exclude H boundaries;
+/// legacy time is uncalibrated and is not charged as fabricated CPU cycles.
+pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
+    let c = rt
+        .pa9500_compatibility()
+        .ok_or("PA bootstrap coordinator unavailable")?;
+    let hw = c.hardware.borrow();
+    let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    Ok(serde_json::json!({
+        "schema": "pa9500-bootstrap-status-1", "profile": "bootstrap-v1",
+        "active_isa": if c.in_legacy { "esr-h" } else { "native" },
+        "native_registers": crate::collect_registers(&rt.state),
+        "native_instructions": rt.instruction_count(), "native_cycles": rt.cycle_count(),
+        "legacy_boundaries": c.legacy_boundaries,
+        "legacy": compat_runtime::legacy_state(&c.legacy),
+        "transitions": c.transitions, "legacy_trace": c.legacy_trace,
+        "internal_sha256": hash(&(0..256).map(|a| rt.memory.read_internal_byte_silent(a).unwrap()).collect::<Vec<_>>()),
+        "main_ram_sha256": hash(&hw.ram), "scratch_sha256": hw.scratch_candidate.as_ref().map(|b| hash(b)),
+        "selector": hw.selector, "gate": hw.gate.to_vec(),
+        "card_sram_sha256": hw.card.as_ref().map(|card| hash(&card.sram)),
+        "physical_switch_timing_qualified": false
+    }))
 }
 
 #[cfg(test)]

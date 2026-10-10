@@ -121,6 +121,11 @@ impl Sc62015Emulator {
                 "OZ debugger function-call capture is not available; use normal physical input",
             ));
         }
+        if self.model == DeviceModel::Pa9500 {
+            return Err(JsValue::from_str(
+                "PA debugger function-call capture is not available; use normal physical input",
+            ));
+        }
         let id = self
             .next_call_id
             .checked_add(1)

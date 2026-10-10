@@ -226,6 +226,8 @@ export interface EmulatorAdapter {
 	setReg(name: string, value: number): void;
 	read8(addr: number): number;
 	write8(addr: number, value: number): void;
+	pa9500Status?(): unknown;
+	pa9500CardSram?(): Uint8Array | number[];
 	lcdText?(): string[] | null;
 	lcdPixels?(): Uint8Array | number[] | null;
 	lcdCapture?(scale?: number): Omit<LcdCapture, 'pixels'> & { pixels: number[] | Uint8Array };
@@ -264,6 +266,7 @@ export interface EvalApi {
 		read(address: number, size?: 1 | 2 | 3): Promise<number>;
 		write(address: number, size: 1 | 2 | 3, value: number): Promise<void>;
 	};
+	pa9500: { status(): unknown; cardSram(): number[] };
 	lcd: {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
@@ -906,6 +909,16 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 					return;
 				}
 				throw new Error(`Unsupported write size ${size}`);
+			},
+		},
+		pa9500: {
+			status: () => {
+				if (!adapter.pa9500Status) throw new Error('PA status unavailable');
+				return adapter.pa9500Status();
+			},
+			cardSram: () => {
+				if (!adapter.pa9500CardSram) throw new Error('PA card unavailable');
+				return Array.from(adapter.pa9500CardSram());
 			},
 		},
 		lcd: {

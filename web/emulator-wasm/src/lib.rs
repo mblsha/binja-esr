@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 
 mod function_call;
 mod oz9600;
+mod pa9500;
 
 use base64::Engine;
 use sc62015_core::llama::opcodes::RegName;
@@ -307,6 +308,8 @@ pub struct Sc62015Emulator {
     text_decoder: Option<DeviceTextDecoder>,
     iq7000_rtc_seed: Option<String>,
     oz9600_profile: sc62015_core::oz9600::ExecutionProfile,
+    pa9500_bootstrap: bool,
+    pa9500_card_rom: Vec<u8>,
     call_session: Option<function_call::FunctionCallSession>,
     next_call_id: u32,
     last_lcd_source: Option<LcdSource>,
@@ -361,6 +364,8 @@ impl Sc62015Emulator {
             text_decoder: None,
             iq7000_rtc_seed: None,
             oz9600_profile: Default::default(),
+            pa9500_bootstrap: false,
+            pa9500_card_rom: Vec::new(),
             call_session: None,
             next_call_id: 0,
             last_lcd_source: None,
@@ -517,7 +522,7 @@ impl Sc62015Emulator {
     pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
         let model = DeviceModel::parse(model).ok_or_else(|| {
             JsValue::from_str(&format!(
-                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600)"
+                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600|pa-9500)"
             ))
         })?;
         self.install_rom(rom, model, Default::default(), &[])
@@ -551,6 +556,15 @@ impl Sc62015Emulator {
     /// Other models keep their existing ROM-reload reset behavior.
     pub fn reset(&mut self) -> Result<(), JsValue> {
         self.require_no_active_call()?;
+        if self.pa9500_bootstrap {
+            let sram = self.pa9500_card_sram()?;
+            return self.load_pa9500(
+                &self.rom_image.clone(),
+                &self.pa9500_card_rom.clone(),
+                &sram,
+                "bootstrap-v1",
+            );
+        }
         let retained = if self.model == DeviceModel::Oz9600 {
             self.runtime
                 .oz9600_retained_state()

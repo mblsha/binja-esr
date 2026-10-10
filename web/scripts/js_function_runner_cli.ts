@@ -26,6 +26,9 @@ import initWasm, * as wasm from '../src/lib/wasm/pce500_wasm/pce500_wasm.js';
 type RunnerArgs = {
 	model: RomModel | null;
 	romPath: string | null;
+	pa9500Profile: string | null;
+	pa9500CardRom: string | null;
+	pa9500CardSram: string | null;
 	bnidaPath: string | null;
 	disableBnida: boolean;
 	requireBnida: boolean;
@@ -44,8 +47,11 @@ Usage:
   cat script.js | npm run fnr:cli -- [options] --stdin
 
 Options:
-  --model <iq-7000|pc-e500|oz-9600>   ROM preset (default: Rust runtime default)
+  --model <iq-7000|pc-e500|oz-9600|pa-9500>   ROM preset (default: Rust runtime default)
   --rom <path>               Explicit ROM path (overrides --model)
+  --pa9500-profile <bootstrap-v1>  Explicit provisional mixed-ISA board profile
+  --pa9500-card-rom <path>    Verified PA-9C3 ROM (requires SRAM)
+  --pa9500-card-sram <path>   Logical PA-9C3 SRAM (requires ROM)
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
   --require-bnida            Fail if BNIDA symbols cannot be loaded
@@ -475,6 +481,9 @@ async function loadBnidaSymbols(args: RunnerArgs, model: RomModel): Promise<Bnid
 function parseArgs(argv: string[]): RunnerArgs {
 	let model: RomModel | null = null;
 	let romPath: string | null = null;
+	let pa9500Profile: string | null = null;
+	let pa9500CardRom: string | null = null;
+	let pa9500CardSram: string | null = null;
 	let bnidaPath: string | null = null;
 	let disableBnida = false;
 	let requireBnida = false;
@@ -494,7 +503,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 			const next = argv[++i];
 			if (!next) die('error: --model requires a value');
 			const parsed = normalizeRomModel(next);
-			if (!parsed) die(`error: unknown --model '${next}' (expected: iq-7000|pc-e500|oz-9600)`);
+			if (!parsed) die(`error: unknown --model '${next}' (expected: iq-7000|pc-e500|oz-9600|pa-9500)`);
 			model = parsed;
 			continue;
 		}
@@ -502,6 +511,14 @@ function parseArgs(argv: string[]): RunnerArgs {
 			const next = argv[++i];
 			if (!next) die('error: --rom requires a path');
 			romPath = next;
+			continue;
+		}
+		if (['--pa9500-profile', '--pa9500-card-rom', '--pa9500-card-sram'].includes(arg)) {
+			const next = argv[++i];
+			if (!next) die(`error: ${arg} requires a value`);
+			if (arg === '--pa9500-profile') pa9500Profile = next;
+			else if (arg === '--pa9500-card-rom') pa9500CardRom = next;
+			else pa9500CardSram = next;
 			continue;
 		}
 		if (arg === '--bnida') {
@@ -548,6 +565,9 @@ function parseArgs(argv: string[]): RunnerArgs {
 	return {
 		model,
 		romPath,
+		pa9500Profile,
+		pa9500CardRom,
+		pa9500CardSram,
 		bnidaPath,
 		disableBnida,
 		requireBnida,
@@ -599,7 +619,18 @@ async function main() {
 	if (!Emulator) die('error: wasm module missing Sc62015Emulator/Pce500Emulator export');
 	const emulator: any = new Emulator();
 	initStubDispatcher(emulator);
-	emulator.load_rom_with_model?.(romBytes, model) ?? emulator.load_rom(romBytes);
+	if (model === 'pa-9500' && args.pa9500Profile !== null) {
+		const cardRom = args.pa9500CardRom ? new Uint8Array(await readFile(resolve(args.pa9500CardRom))) : new Uint8Array();
+		const cardSram = args.pa9500CardSram
+			? new Uint8Array(await readFile(resolve(args.pa9500CardSram)))
+			: new Uint8Array();
+		emulator.load_pa9500(romBytes, cardRom, cardSram, args.pa9500Profile);
+	} else {
+		if (args.pa9500Profile || args.pa9500CardRom || args.pa9500CardSram)
+			die('error: PA media requires --model pa-9500 and --pa9500-profile bootstrap-v1');
+		if (typeof emulator.load_rom_with_model === 'function') emulator.load_rom_with_model(romBytes, model);
+		else emulator.load_rom(romBytes);
+	}
 	let iq7000Rtc: { mode: 'host' | 'off' | 'fixed'; seed: string | null } | null = null;
 	if (model === 'iq-7000' && typeof emulator.set_iq7000_rtc_yyyymmddhhmm === 'function') {
 		iq7000Rtc = resolveIq7000Rtc(args.iq7000Rtc);
@@ -702,6 +733,8 @@ async function main() {
 			runWithError(`read8(0x${addr.toString(16).toUpperCase()})`, () => emulator.read_u8?.(addr) ?? 0),
 		write8: (addr: number, value: number) =>
 			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
+		pa9500Status: () => emulator.pa9500_status(),
+		pa9500CardSram: () => emulator.pa9500_card_sram(),
 		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
 		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels?.() ?? null),
 		lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),

@@ -674,6 +674,8 @@ pub struct CoreRuntime {
     boundary_device: Option<Box<dyn runtime_device::BoundaryDevice>>,
     #[cfg(feature = "pa9500")]
     pub(crate) pa9500_on_contact_edge_candidate: bool,
+    #[cfg(feature = "pa9500")]
+    pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
     #[cfg(feature = "oz9600")]
     pub(crate) oz9600_hardware: Option<oz9600::SharedHardware>,
 }
@@ -719,6 +721,8 @@ impl CoreRuntime {
             boundary_device: None,
             #[cfg(feature = "pa9500")]
             pa9500_on_contact_edge_candidate: false,
+            #[cfg(feature = "pa9500")]
+            pa9500_compatibility: None,
             #[cfg(feature = "oz9600")]
             oz9600_hardware: None,
         };
@@ -784,6 +788,12 @@ impl CoreRuntime {
     }
 
     pub fn power_on_reset(&mut self) -> Result<()> {
+        #[cfg(feature = "pa9500")]
+        if self.pa9500_compatibility.is_some() {
+            return Err(CoreError::Other(
+                "mixed-ISA PA reset requires a fresh board constructor; export card backing separately".into(),
+            ));
+        }
         struct ResetBus<'a> {
             mem: &'a mut MemoryImage,
             host_read: Option<*mut (dyn FnMut(u32) -> Option<u8> + Send)>,
@@ -1821,6 +1831,14 @@ impl CoreRuntime {
                 "SC62015 CoreRuntime is poisoned after a failed side-effecting operation; \
                  power-on reset required: {reason}"
             )));
+        }
+        #[cfg(feature = "pa9500")]
+        if let Some(mut coordinator) = self.pa9500_compatibility.take() {
+            // The borrowed coordinator invokes the normal native boundary with
+            // this slot empty. IRQ continuations therefore tick devices once.
+            let result = (0..boundaries).try_for_each(|_| coordinator.step(self));
+            self.pa9500_compatibility = Some(coordinator);
+            return result.map_err(CoreError::Other);
         }
         let Some(mut device) = self.boundary_device.take() else {
             return self.step_cpu_boundaries(boundaries);

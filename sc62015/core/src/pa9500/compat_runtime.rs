@@ -18,8 +18,7 @@ pub enum LegacyDataPolicy {
     /// Additionally read the selected instruction C000 window as ordinary data.
     AbsentMediaAndPagedRom,
 }
-pub struct CompatibilityMachine {
-    pub native: CoreRuntime,
+pub struct CompatibilityCoordinator {
     pub hardware: SharedHardware,
     pub legacy: StartupState,
     pub in_legacy: bool,
@@ -28,9 +27,9 @@ pub struct CompatibilityMachine {
     pub legacy_trace: Vec<Value>,
     data_policy: LegacyDataPolicy,
 }
-impl CompatibilityMachine {
-    pub fn new(
-        mut native: CoreRuntime,
+impl CompatibilityCoordinator {
+    fn new(
+        native: &mut CoreRuntime,
         hardware: SharedHardware,
         data_policy: LegacyDataPolicy,
     ) -> Self {
@@ -41,7 +40,6 @@ impl CompatibilityMachine {
         keyboard.set_press_threshold(1);
         native.keyboard = Some(keyboard);
         Self {
-            native,
             hardware,
             legacy: StartupState::new(0),
             in_legacy: false,
@@ -51,27 +49,24 @@ impl CompatibilityMachine {
             data_policy,
         }
     }
-    pub fn step(&mut self) -> Result<(), String> {
+    pub fn step(&mut self, native: &mut CoreRuntime) -> Result<(), String> {
         if !self.in_legacy {
-            let pc = self.native.get_reg("PC");
-            let opcode = self.native.memory.read_byte_for_preflight(pc, None);
-            self.native.step(1).map_err(|e| e.to_string())?;
-            let target = self.native.get_reg("PC");
+            let pc = native.get_reg("PC");
+            let opcode = native.memory.read_byte_for_preflight(pc, None);
+            native.step(1).map_err(|e| e.to_string())?;
+            let target = native.get_reg("PC");
             let gate = self.hardware.borrow().gate[15];
             if opcode == Some(3) && target < 0x10000 && gate & 2 != 0 {
                 self.legacy.pc = target as u16;
                 for i in 0..128 {
-                    self.legacy.internal[i] = self
-                        .native
-                        .memory
-                        .read_internal_byte_silent(i as u32)
-                        .unwrap();
+                    self.legacy.internal[i] =
+                        native.memory.read_internal_byte_silent(i as u32).unwrap();
                 }
-                self.legacy.carry = self.native.get_reg("F") & 1 != 0;
-                self.legacy.zero = self.native.get_reg("F") & 2 != 0;
+                self.legacy.carry = native.get_reg("F") & 1 != 0;
+                self.legacy.zero = native.get_reg("F") & 2 != 0;
                 self.in_legacy = true;
                 self.transitions.push(json!({"from":"native","to":"legacy","source_pc":pc,"target_pc":target,
-                    "native_instructions":self.native.instruction_count(),"gate":self.hardware.borrow().gate[15]}));
+                    "native_instructions":native.instruction_count(),"gate":self.hardware.borrow().gate[15]}));
             }
             return Ok(());
         }
@@ -88,7 +83,7 @@ impl CompatibilityMachine {
                 "native_target":match transfer {Transfer::Continue=>None,Transfer::Native(t)=>Some(t)}}));
         }
         for i in 0..128 {
-            self.native
+            native
                 .memory
                 .write_internal_byte(i as u32, self.legacy.internal[i]);
         }
@@ -96,11 +91,11 @@ impl CompatibilityMachine {
             if self.hardware.borrow().gate[15] & 2 != 0 {
                 return Err("legacy far transfer did not clear gate bit1".into());
             }
-            self.native.set_reg(
+            native.set_reg(
                 "F",
                 u32::from(self.legacy.carry) | (u32::from(self.legacy.zero) << 1),
             );
-            self.native.set_reg("PC", target);
+            native.set_reg("PC", target);
             self.in_legacy = false;
             self.transitions.push(
                 json!({"from":"legacy","to":"native","source_pc":bus.pc,"target_pc":target,
@@ -110,6 +105,60 @@ impl CompatibilityMachine {
         Ok(())
     }
 }
+/// Compatibility wrapper retained for source-bound exploration runners.
+pub struct CompatibilityMachine {
+    pub native: CoreRuntime,
+    coordinator: CompatibilityCoordinator,
+}
+impl std::ops::Deref for CompatibilityMachine {
+    type Target = CompatibilityCoordinator;
+    fn deref(&self) -> &Self::Target {
+        &self.coordinator
+    }
+}
+impl std::ops::DerefMut for CompatibilityMachine {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.coordinator
+    }
+}
+impl CompatibilityMachine {
+    pub fn new(
+        mut native: CoreRuntime,
+        hardware: SharedHardware,
+        policy: LegacyDataPolicy,
+    ) -> Self {
+        let coordinator = CompatibilityCoordinator::new(&mut native, hardware, policy);
+        Self {
+            native,
+            coordinator,
+        }
+    }
+    pub fn step(&mut self) -> Result<(), String> {
+        self.coordinator.step(&mut self.native)
+    }
+}
+
+impl CoreRuntime {
+    /// Explicit bootstrap candidate; never inferred from the PA model name.
+    pub fn install_pa9500_compatibility(
+        &mut self,
+        hardware: SharedHardware,
+        policy: LegacyDataPolicy,
+    ) -> Result<(), String> {
+        if self.device_model() != crate::DeviceModel::Pa9500
+            || self.elapsed_timing_units() != 0
+            || self.pa9500_compatibility.is_some()
+        {
+            return Err("PA compatibility requires a fresh PA runtime, once".into());
+        }
+        self.pa9500_compatibility = Some(CompatibilityCoordinator::new(self, hardware, policy));
+        Ok(())
+    }
+    pub fn pa9500_compatibility(&self) -> Option<&CompatibilityCoordinator> {
+        self.pa9500_compatibility.as_ref()
+    }
+}
+
 pub fn legacy_state(s: &StartupState) -> Value {
     json!({"pc":s.pc,"dp":s.dp,"p":s.p,"q":s.q,"r":s.r,"table_count":s.table_count,
         "internal":s.internal.to_vec(),"carry":s.carry,"zero":s.zero})
@@ -232,6 +281,85 @@ mod tests {
         collections::BTreeMap,
         sync::{Arc, Mutex},
     };
+
+    fn switch_fixture() -> (CoreRuntime, SharedHardware) {
+        let mut fixed = vec![0; 0x20000];
+        fixed[0x1fffd..].copy_from_slice(&[0, 0, 15]);
+        fixed[0x10000..0x10004].copy_from_slice(&[3, 0, 0, 0]); // native JPF 00000
+        fixed[0x10010..0x10012].copy_from_slice(&[8, 0x5a]); // native MV A,5A
+        let mut bank = vec![0; 0x20000];
+        // H: LIA 0; LP 2; LIDP 400F; WRIT; far native transfer F0010.
+        bank[0x10000..0x1000b]
+            .copy_from_slice(&[2, 0, 0x82, 0x10, 0x40, 0x0f, 0xd3, 0x7b, 0x0f, 0, 0x10]);
+        let (mut rt, hw) = super::super::configure(
+            &fixed,
+            BTreeMap::from([(7, bank.clone()), (0, bank)]),
+            BootstrapProfile::TrapPeripherals,
+        )
+        .unwrap();
+        hw.borrow().gate[15] = 2;
+        rt.memory.write_internal_byte(0x40, 0xa5);
+        rt.set_reg("F", 3);
+        (rt, hw)
+    }
+
+    #[test]
+    fn shared_scheduler_and_wrapper_make_identical_isa_transfers() {
+        let (native, hw) = switch_fixture();
+        let mut wrapper = CompatibilityMachine::new(native, hw, LegacyDataPolicy::TrapUnknown);
+        for _ in 0..7 {
+            wrapper.step().unwrap();
+        }
+        for sliced in [false, true] {
+            let (mut rt, hw) = switch_fixture();
+            rt.install_pa9500_compatibility(hw.clone(), LegacyDataPolicy::TrapUnknown)
+                .unwrap();
+            assert!(rt
+                .install_pa9500_compatibility(hw.clone(), LegacyDataPolicy::TrapUnknown)
+                .is_err());
+            if sliced {
+                rt.run_slice(7, |_| false).unwrap();
+            } else {
+                rt.step(7).unwrap();
+            }
+            let c = rt.pa9500_compatibility().unwrap();
+            assert!(!c.in_legacy);
+            assert_eq!(c.legacy_boundaries, 5);
+            assert_eq!(c.transitions, wrapper.transitions);
+            assert_eq!(c.legacy_trace, wrapper.legacy_trace);
+            assert_eq!(rt.get_reg("PC"), 0xf0012);
+            assert_eq!(rt.get_reg("A"), 0x5a);
+            assert_eq!(rt.get_reg("F"), 3);
+            assert_eq!(rt.instruction_count(), 2);
+            assert_eq!(rt.memory.read_internal_byte_silent(0x40), Some(0xa5));
+            assert_eq!(hw.borrow().gate[15], 0);
+            assert_eq!(hw.borrow().ram, wrapper.hardware.borrow().ram);
+            let status = legacy_state(&c.legacy);
+            assert!(rt.power_on_reset().is_err());
+            assert_eq!(legacy_state(&rt.pa9500_compatibility().unwrap().legacy), status);
+            assert_eq!(rt.get_reg("PC"), 0xf0012);
+        }
+        assert!(CoreRuntime::new()
+            .install_pa9500_compatibility(wrapper.hardware.clone(), LegacyDataPolicy::TrapUnknown)
+            .is_err());
+    }
+
+    #[test]
+    fn unsupported_legacy_boundary_keeps_coordinator_and_state() {
+        let (mut rt, hw) = switch_fixture();
+        hw.borrow().banks.get_mut(&0).unwrap()[0x10000] = 0x14;
+        rt.install_pa9500_compatibility(hw.clone(), LegacyDataPolicy::TrapUnknown)
+            .unwrap();
+        rt.step(1).unwrap();
+        let before = legacy_state(&rt.pa9500_compatibility().unwrap().legacy);
+        assert!(rt.step(1).is_err());
+        let c = rt.pa9500_compatibility().unwrap();
+        assert!(c.in_legacy);
+        assert_eq!(c.legacy_boundaries, 0);
+        assert_eq!(legacy_state(&c.legacy), before);
+        assert_eq!(c.transitions.len(), 1);
+        assert_eq!(hw.borrow().gate[15], 2);
+    }
 
     #[test]
     fn split_fetch_alias_and_page_selection_reject_unknown_space() {
