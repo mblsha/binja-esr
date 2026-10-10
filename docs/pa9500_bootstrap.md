@@ -24,7 +24,7 @@ card files. `e.pa9500.status()` and `e.pa9500.cardSram()` observe state;
 The graphical browser loader is not yet qualified for this profile.
 
 `bootstrap-v2` adds exactly five native read-only bytes from the verified
-1 MiB acquisition: addresses1..3 and C/D returned E0. The original v1
+1 MiB acquisition: addresses 1..3 and C/D returned E0. The original v1
 constructor remains available; other unknown reads and all writes at those
 addresses retain their traps. The v2 constructor is
 `from_bootstrap_bundle_with_observed_low_reads`. Physical decode under other
