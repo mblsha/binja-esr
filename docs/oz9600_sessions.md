@@ -13,7 +13,9 @@ Native `--state /path/work.ozsession` reads and writes that same format. Native
 `--retained` imports either full sessions or legacy `.ozbat` RAM/RTC images.
 Browser **Import backup** identifies the format from its bytes. RAM/RTC backups
 retain their existing interface and start a fresh CPU; they recover stored
-records. Reset also starts a fresh CPU and discards unfinished editor context.
+records. A healthy Reset starts a fresh CPU and discards unfinished editor
+context. Reset after a runtime fault restores the last committed checkpoint,
+including its saved editor context when a full session is available.
 
 Browser storage commits the RAM/RTC image and full session in one IndexedDB
 transaction. The pair must agree before loading. Both frontends construct and
