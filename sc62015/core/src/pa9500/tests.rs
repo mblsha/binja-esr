@@ -57,6 +57,66 @@ fn trap_profile_does_not_invent_lcd_registers_or_oz_workspace_alias() {
 }
 
 #[test]
+fn raw_tablet_channels_preserve_unrelated_eil_bits_and_release_contact() {
+    let (mut rt, hw) = fixture();
+    hw.borrow().adc_control = Some(0);
+    hw.borrow().tablet = Some(TabletInput {
+        x: 37,
+        y: 129,
+        pressure: 224,
+        contact: true,
+    });
+    rt.memory.write_internal_byte(0xf5, 0x81);
+    rt.step(1).unwrap();
+    assert_eq!(rt.memory.read_internal_byte_silent(0xf5), Some(0xa1));
+    for (control, value) in [(6, 9), (7, 32), (22, 224), (14, 0), (30, 0)] {
+        hw.borrow().write(0x8800, control, None);
+        assert_eq!(hw.borrow().read(0x8c00), Some(value));
+    }
+    hw.borrow().tablet.as_mut().unwrap().contact = false;
+    rt.step(1).unwrap();
+    assert_eq!(rt.memory.read_internal_byte_silent(0xf5), Some(0x81));
+    hw.borrow().write(0x8800, 6, None);
+    assert_eq!(hw.borrow().read(0x8c00), Some(0));
+}
+
+#[test]
+fn tablet_conversion_holds_low_bits_and_peeks_do_not_advance() {
+    let mut hw = Hardware::new(BTreeMap::new(), BootstrapProfile::ControllerHypothesis);
+    hw.tablet = Some(TabletInput {
+        x: 403,
+        y: 601,
+        pressure: 255,
+        contact: true,
+    });
+    hw.write(0x8800, 6, None);
+    for _ in 0..4 {
+        assert_eq!(hw.read(0x8c00), Some(100));
+    }
+    assert_eq!(hw.adc_data_reads, 0);
+    assert_eq!(hw.architectural_read(0x8c00, None), 100);
+    hw.tablet = Some(TabletInput {
+        x: 404,
+        y: 602,
+        pressure: 255,
+        contact: true,
+    });
+    for _ in 0..4 {
+        assert_eq!(hw.read(0x8c00), Some(3));
+    }
+    assert_eq!(hw.architectural_read(0x8c00, None), 3);
+    hw.write(0x8800, 7, None);
+    assert_eq!(hw.architectural_read(0x8c00, None), 150);
+    assert_eq!(hw.architectural_read(0x8c00, None), 2);
+    assert_eq!(hw.adc_data_reads, 4);
+    hw.gate[16] = 2;
+    hw.gate[18] = 0x81;
+    assert_eq!(hw.read(0x4012), Some(0x83));
+    hw.tablet.as_mut().unwrap().contact = false;
+    assert_eq!(hw.read(0x4012), Some(0x81));
+}
+
+#[test]
 fn explicit_absence_and_one_observed_byte_do_not_fill_unknown_bus_space() {
     let (mut rt, hw) = fixture();
     assert_eq!(rt.memory.read_byte_for_preflight(0x40000, None), None);
@@ -74,6 +134,37 @@ fn explicit_absence_and_one_observed_byte_do_not_fill_unknown_bus_space() {
     assert!(install_zero_data(&mut rt, &hw, 0).is_err());
     hw.borrow().write(0, 0, None);
     assert!(hw.borrow().fault.is_some());
+}
+
+#[test]
+fn scratch_candidate_is_bounded_distinct_and_hidden_until_the_explicit_command() {
+    let (mut strict, strict_hw) = fixture();
+    assert!(install_scratch_candidate(&mut strict, &strict_hw).is_err());
+    let mut fixed = vec![0; 0x20000];
+    fixed[0x1fffd..].copy_from_slice(&[0, 0, 15]);
+    let banks = SELECTORS
+        .into_iter()
+        .map(|s| (s, vec![0; 0x20000]))
+        .collect();
+    let (mut rt, hw) = configure(&fixed, banks, BootstrapProfile::ControllerHypothesis).unwrap();
+    assert_eq!(rt.memory.read_byte_for_preflight(0xe000, None), None);
+    install_scratch_candidate(&mut rt, &hw).unwrap();
+    assert_eq!(rt.memory.read_byte_for_preflight(0xe000, None), None);
+    hw.borrow().compatibility_command = Some(1);
+    rt.step(1).unwrap();
+    for (address, byte) in [(0xe000, 0xA5), (0xefff, 0x5A)] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), Some(0));
+        hw.borrow().write(address, byte, None);
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), Some(byte));
+    }
+    for address in [0xdfff, 0xf000] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), None);
+    }
+    assert!(hw.borrow().ram.iter().all(|byte| *byte == 0));
+    assert!(install_scratch_candidate(&mut rt, &hw).is_err());
+    hw.borrow().compatibility_command = Some(0);
+    rt.step(1).unwrap();
+    assert_eq!(rt.memory.read_byte_for_preflight(0xefff, None), None);
 }
 
 #[test]

@@ -20,13 +20,19 @@ class Hardware:
         self.compatibility_command = None
         self.external_media_enabled, self.card = False, None
         self.native_zero_data = None
+        self.scratch_candidate = None
         self.adc_control = 0 if controller_hypothesis else None
+        # Explicit raw electrical candidate; no host coordinate hit testing.
+        self.tablet = None
+        self.adc_low_next, self.adc_latched, self.adc_data_reads = False, 0, 0
         self.lcd = LcdController(195, 145) if controller_hypothesis else None
         self.rtc = Rtc() if controller_hypothesis else None
 
     def read(self, address):
         if address == 0:
             return self.native_zero_data
+        if address == 0x4012 and self.tablet is not None:
+            return (self.gate[18] & ~2) | (2 if self.tablet[3] else 0)
         if address == 0x4021:
             return self.selector
         if 0x4000 <= address <= 0x403F:
@@ -34,9 +40,15 @@ class Hardware:
         if address == 0x8800:
             return self.adc_control
         if address == 0x8C00 and self.adc_control is not None:
-            return 0
+            return self.adc_latched & 3 if self.adc_low_next else self.adc_sample() >> 2
         if 0x80000 <= address <= 0xBFFFF:
             return self.ram[address - 0x80000]
+        if (
+            0xE000 <= address <= 0xEFFF
+            and self.compatibility_command == 1
+            and self.scratch_candidate is not None
+        ):
+            return self.scratch_candidate[address - 0xE000]
         if 0x20000 <= address <= 0x7FFFF and self.external_media_enabled:
             value = self.card.read(address) if self.card else None
             return 255 if value is None else value
@@ -48,6 +60,22 @@ class Hardware:
             return self.lcd.peek(address & 31, self.cycle)
         return None
 
+    def adc_sample(self):
+        if self.tablet is None or not self.tablet[3]:
+            return 0
+        return {6: self.tablet[0], 7: self.tablet[1], 22: self.tablet[2] << 2}.get(
+            self.adc_control, 0
+        )
+
+    def architectural_read(self, address):
+        value = self.read(address)
+        if address == 0x8C00 and self.adc_control is not None:
+            if not self.adc_low_next:
+                self.adc_latched = self.adc_sample()
+            self.adc_low_next = not self.adc_low_next
+            self.adc_data_reads += 1
+        return value
+
     def write(self, address, value):
         if (
             address == 0x8800
@@ -55,6 +83,7 @@ class Hardware:
             and value in (6, 7, 14, 22, 30)
         ):
             self.adc_control = value
+            self.adc_low_next = False
         elif address == 0x4021:
             self.selector = value
         elif 0x4000 <= address <= 0x403F:
@@ -67,6 +96,12 @@ class Hardware:
             self.compatibility_command = value
         elif 0x80000 <= address <= 0xBFFFF:
             self.ram[address - 0x80000] = value
+        elif (
+            0xE000 <= address <= 0xEFFF
+            and self.compatibility_command == 1
+            and self.scratch_candidate is not None
+        ):
+            self.scratch_candidate[address - 0xE000] = value
         elif 0x20000 <= address <= 0x7FFFF and self.external_media_enabled:
             if self.card:
                 self.card.write(address, value)

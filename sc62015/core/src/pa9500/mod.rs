@@ -42,6 +42,17 @@ impl SharedHardware {
     }
 }
 
+/// Raw tablet electrical candidate, before firmware calibration or hit testing.
+/// Channel 06/07 samples and EIL bit5 are inferred from F07F5/F087D. Physical
+/// wiring, conversion timing and sample-to-panel calibration remain unqualified.
+#[derive(Clone, Copy, Debug)]
+pub struct TabletInput {
+    pub x: u16,
+    pub y: u16,
+    pub pressure: u8,
+    pub contact: bool,
+}
+
 pub struct Hardware {
     pub selector: u8,
     pub gate: [u8; 64],
@@ -51,9 +62,17 @@ pub struct Hardware {
     pub compatibility_command: Option<u8>,
     pub external_media_enabled: bool,
     pub native_zero_data: Option<u8>,
+    /// Separate optional 4 KiB candidate inferred from F28CA/F4146. No alias
+    /// wiring is established by the captured open-bus low-address data.
+    pub scratch_candidate: Option<Vec<u8>>,
+    scratch_mapped_active: bool,
     pub card: Option<card::Pa9c3Card>,
     /// Unwired PA ADC/contact inputs in the explicit peripheral hypothesis.
     pub adc_control: Option<u8>,
+    pub tablet: Option<TabletInput>,
+    adc_low_next: bool,
+    adc_latched: u16,
+    pub adc_data_reads: u64,
     pub banks: BTreeMap<u8, Vec<u8>>,
     pub events: Vec<Value>,
     pub cycle: u64,
@@ -72,8 +91,14 @@ impl Hardware {
             compatibility_command: None,
             external_media_enabled: false,
             native_zero_data: None,
+            scratch_candidate: None,
+            scratch_mapped_active: false,
             card: None,
             adc_control: peripherals.then_some(0),
+            tablet: None,
+            adc_low_next: false,
+            adc_latched: 0,
+            adc_data_reads: 0,
             ram: vec![0; 0x40000],
             banks,
             events: Vec::new(),
@@ -87,10 +112,22 @@ impl Hardware {
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0 if self.native_zero_data.is_some() => self.native_zero_data,
+            0x4012 if self.tablet.is_some() => {
+                let status = self.gate[18] & !2;
+                Some(status | if self.tablet.unwrap().contact { 2 } else { 0 })
+            }
             0x4021 => Some(self.selector),
             0x4000..=0x403f => Some(self.gate[(address - 0x4000) as usize]),
             0x8800 => self.adc_control,
-            0x8c00 if self.adc_control.is_some() => Some(0),
+            0x8c00 if self.adc_control.is_some() => Some(if self.adc_low_next {
+                (self.adc_latched & 3) as u8
+            } else {
+                (self.adc_sample() >> 2) as u8
+            }),
+            0xe000..=0xefff if self.compatibility_command == Some(1) => self
+                .scratch_candidate
+                .as_ref()
+                .map(|bytes| bytes[(address - 0xe000) as usize]),
             0x80000..=0xbffff => Some(self.ram[(address - 0x80000) as usize]),
             0x20000..=0x7ffff if self.external_media_enabled => Some(
                 self.card
@@ -110,6 +147,19 @@ impl Hardware {
             _ => None,
         }
     }
+    fn adc_sample(&self) -> u16 {
+        self.tablet.map_or(0, |sample| {
+            if !sample.contact {
+                return 0;
+            }
+            match self.adc_control {
+                Some(6) => sample.x,
+                Some(7) => sample.y,
+                Some(0x16) => u16::from(sample.pressure) << 2,
+                _ => 0,
+            }
+        })
+    }
     fn event(&mut self, kind: &str, address: u32, value: u8, pc: Option<u32>) {
         if let Some(last) = self.events.last_mut() {
             if last["kind"] == kind
@@ -127,7 +177,15 @@ impl Hardware {
         }
     }
     pub fn architectural_read(&mut self, address: u32, pc: Option<u32>) -> u8 {
-        let value = if (0x8400..=0x841f).contains(&address) {
+        let value = if address == 0x8c00 && self.adc_control.is_some() {
+            let value = self.read(address).unwrap();
+            if !self.adc_low_next {
+                self.adc_latched = self.adc_sample();
+            }
+            self.adc_low_next = !self.adc_low_next;
+            self.adc_data_reads += 1;
+            Ok(value)
+        } else if (0x8400..=0x841f).contains(&address) {
             self.lcd
                 .as_mut()
                 .ok_or("LCD contract disabled".to_string())
@@ -153,6 +211,7 @@ impl Hardware {
         match address {
             0x8800 if self.adc_control.is_some() && matches!(value, 6 | 7 | 0x0e | 0x16 | 0x1e) => {
                 self.adc_control = Some(value);
+                self.adc_low_next = false;
                 self.event("write", address, value, pc);
             }
             0x4021 => {
@@ -173,6 +232,11 @@ impl Hardware {
                 self.event("compatibility_command", address, value, pc);
             }
             0x80000..=0xbffff => self.ram[(address - 0x80000) as usize] = value,
+            0xe000..=0xefff
+                if self.compatibility_command == Some(1) && self.scratch_candidate.is_some() =>
+            {
+                self.scratch_candidate.as_mut().unwrap()[(address - 0xe000) as usize] = value;
+            }
             0x20000..=0x7ffff if self.external_media_enabled => {
                 if let Some(card) = self.card.as_mut() {
                     card.write(address, value);
@@ -219,6 +283,23 @@ struct Boundary(SharedHardware);
 impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
+        let scratch = {
+            let hw = self.0.borrow();
+            let active = hw.compatibility_command == Some(1);
+            (hw.scratch_candidate.is_some() && active != hw.scratch_mapped_active).then_some(active)
+        };
+        if let Some(active) = scratch {
+            c.memory.remove_overlay("pa9500_scratch_candidate");
+            add_memory_view(
+                c.memory,
+                &self.0,
+                0xe000,
+                0xefff,
+                active,
+                "pa9500_scratch_candidate",
+            );
+            self.0.borrow().scratch_mapped_active = active;
+        }
         self.0.borrow().cycle = c.cycles;
         let hw = self.0.borrow();
         if hw.external_media_enabled {
@@ -226,7 +307,23 @@ impl BoundaryDevice for Boundary {
             c.memory
                 .write_internal_byte(0xff, if hw.card.is_some() { ssr | 2 } else { ssr & !2 });
         }
-        Ok(Some(false))
+        if let Some(sample) = hw.tablet {
+            let eil = c.memory.read_internal_byte_silent(0xf5).unwrap_or(0);
+            c.memory.write_internal_byte(
+                0xf5,
+                if sample.contact {
+                    eil | 0x20
+                } else {
+                    eil & !0x20
+                },
+            );
+        }
+        // E0A71 intersects gate 4010 enables with 4012 causes; bit1 calls
+        // F0AA1, which masks that enable until F0A94 rearms after release.
+        // This electrical gate/EXI coupling remains an explicit candidate.
+        Ok(Some(
+            hw.tablet.is_some_and(|sample| sample.contact) && hw.gate[16] & 2 != 0,
+        ))
     }
     fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, _: u64) -> crate::Result<()> {
         let mut hw = self.0.borrow();
@@ -285,10 +382,21 @@ fn add_bus_view(
     safe: bool,
     name: &str,
 ) {
+    add_memory_view(&mut rt.memory, hw, start, end, safe, name);
+}
+
+fn add_memory_view(
+    memory: &mut MemoryImage,
+    hw: &SharedHardware,
+    start: u32,
+    end: u32,
+    safe: bool,
+    name: &str,
+) {
     let reader = hw.clone();
     let peeker = hw.clone();
     let writer = hw.clone();
-    rt.memory.add_overlay(MemoryOverlay {
+    memory.add_overlay(MemoryOverlay {
         start,
         end,
         name: name.into(),
@@ -308,6 +416,28 @@ fn add_bus_view(
         })),
         perfetto_thread: None,
     });
+}
+
+/// Explicit bounded scratch mapping experiment, before any guest execution.
+/// Candidate visibility after F00C=1 is not an established hardware effect.
+pub fn install_scratch_candidate(rt: &mut CoreRuntime, hw: &SharedHardware) -> Result<(), String> {
+    if rt.instruction_count() != 0
+        || rt.cycle_count() != 0
+        || hw.borrow().scratch_candidate.is_some()
+        || hw.borrow().adc_control.is_none()
+    {
+        return Err(
+            "configure scratch candidate once before execution in a peripheral profile".into(),
+        );
+    }
+    hw.borrow().scratch_candidate = Some(vec![0; 4096]);
+    rt.memory.remove_overlay("pa9500_bus_08C01");
+    add_bus_view(rt, hw, 0x8c01, 0xdfff, false, "pa9500_bus_08C01");
+    // The next ordinary boundary publishes a safe view only after F00C=1.
+    // A disabled view must have no safe callback to prevent shadow fallback.
+    add_bus_view(rt, hw, 0xe000, 0xefff, false, "pa9500_scratch_candidate");
+    add_bus_view(rt, hw, 0xf000, 0xf00c, false, "pa9500_bus_0F000");
+    Ok(())
 }
 
 /// Single observed data-bus byte; no instruction alias or wider fallback.
