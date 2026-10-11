@@ -16,6 +16,13 @@ operations and unknown memory still trap; a complete ESR-H CPU, calibrated
 timing, physical map and PyO3/WASM integration remain pending.
 This page records available references and the work needed to add them.
 
+The bounded startup executor also implements FILM (1E), used by related
+PI-3000 startup. Sharp's PC-1350 machine-language instruction manual, printed
+page86, specifies I+1 internal bytes starting at P receiving A, with P advancing
+and flags unchanged. Rust/Python unit cases check count, untouched neighbors,
+P/Q, flags and atomic failure. Resulting P beyond127 remains an unsupported
+boundary, rather than an inferred wrap or a complete FILM implementation.
+
 ## Existing references
 
 The links below were reviewed on 2026-10-05. Source links using `master` can

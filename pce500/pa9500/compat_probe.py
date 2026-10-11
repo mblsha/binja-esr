@@ -81,6 +81,15 @@ def step(state, bus):
             candidate.pc = (
                 state.pc + 1 + (displacement if opcode & 1 == 0 else -displacement)
             ) & 65535
+    elif opcode == 0x1E:
+        # PC-1350 instruction manual, FILM (printed p.86): I+1 internal
+        # bytes beginning at P receive A; P advances and flags are unchanged.
+        count = candidate.internal[0] + 1
+        if candidate.p + count > 127:
+            raise ValueError("unqualified legacy internal fill pointer range")
+        for _ in range(count):
+            candidate.internal[candidate.p] = candidate.internal[2]
+            candidate.p += 1
     elif opcode == 0x1F:
         count = candidate.internal[0] + 1
         fill_output = candidate.dp, count, candidate.internal[2]

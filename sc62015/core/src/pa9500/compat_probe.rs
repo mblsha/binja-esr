@@ -151,6 +151,19 @@ pub fn step(state: &mut StartupState, bus: &mut impl StartupBus) -> Result<Trans
             }
             Transfer::Continue
         }
+        0x1e => {
+            // FILM, PC-1350 instruction manual printed p.86: I+1 internal
+            // bytes receive A, P advances, and flags remain unchanged.
+            let count = usize::from(next.internal[0]) + 1;
+            if usize::from(next.p) + count > 127 {
+                return Err("unqualified legacy internal fill pointer range".into());
+            }
+            for _ in 0..count {
+                next.internal[next.p as usize] = next.internal[2];
+                next.p += 1;
+            }
+            Transfer::Continue
+        }
         0x1f => {
             let count = u16::from(next.internal[0]) + 1;
             fill_output = Some((next.dp, count, next.internal[2]));
@@ -495,6 +508,32 @@ mod tests {
             Transfer::Native(0xf3fc1)
         );
         assert_eq!(state.pc, 4);
+    }
+    #[test]
+    fn internal_fill_count_pointer_flags_and_boundary_failure() {
+        let mut s = StartupState::new(0);
+        s.p = 3;
+        s.q = 19;
+        s.carry = true;
+        s.internal[0] = 0x60;
+        s.internal[1] = 0x29;
+        s.internal[3..].fill(0xa5);
+        let mut bus = Bus { bytes: vec![0x1e] };
+        step(&mut s, &mut bus).unwrap();
+        assert_eq!(&s.internal[3..100], &[0; 97]);
+        assert_eq!(&s.internal[100..], &[0xa5; 28]);
+        assert_eq!((s.pc, s.p, s.q, s.carry, s.zero), (1, 100, 19, true, false));
+        s.pc = 0;
+        s.p = 126;
+        s.internal[0] = 0;
+        step(&mut s, &mut bus).unwrap();
+        assert_eq!((s.p, s.internal[126]), (127, 0));
+        s.pc = 0;
+        let before = s.clone();
+        assert!(step(&mut s, &mut bus)
+            .unwrap_err()
+            .contains("fill pointer range"));
+        assert_eq!(s, before);
     }
     #[test]
     fn counted_copy_is_sequential_preserves_flags_and_rejects_unknown_pointers() {

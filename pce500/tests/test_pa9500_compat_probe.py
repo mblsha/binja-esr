@@ -66,6 +66,32 @@ def test_call_return_stack_order():
     assert (state.pc, state.r) == (3, 0x5C)
 
 
+def test_internal_fill_count_pointer_and_flags_and_boundary_failure():
+    # FILM's documented count is I+1. The PI startup clears 03..63 with it.
+    state = StartupState(0, p=3, q=19, carry=True, zero=False)
+    state.internal[0:3] = bytes([0x60, 0x29, 0])
+    state.internal[3:] = b"\xa5" * 125
+    bus = Bus(bytes([0x1E]))
+    step(state, bus)
+    assert state.internal[3:100] == bytes(97)
+    assert state.internal[100:] == b"\xa5" * 28
+    assert (state.pc, state.p, state.q, state.carry, state.zero) == (
+        1,
+        100,
+        19,
+        True,
+        False,
+    )
+    state.pc, state.p, state.internal[0] = 0, 126, 0
+    step(state, bus)
+    assert state.p == 127 and state.internal[126] == 0
+    state.pc = 0
+    before = deepcopy(state)
+    with pytest.raises(ValueError, match="fill pointer range"):
+        step(state, bus)
+    assert state == before
+
+
 def test_counted_copy_overlap_exchange_and_strict_pointer_boundary():
     state = StartupState(0, p=8, q=2, carry=True, zero=False)
     state.internal[1:4] = bytes([1, 0xCC, 0xC3])
