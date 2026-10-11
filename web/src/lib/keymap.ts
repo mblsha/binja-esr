@@ -87,6 +87,10 @@ const ozHost: Record<string, string> = {
 	NumpadEnter: 'ENTER',
 };
 const paHost: Record<string, string> = {
+	PageUp: 'PREV_RECORD',
+	PageDown: 'NEXT_RECORD',
+	ContextMenu: 'EDIT_MENU',
+	F13: 'EDIT_MENU',
 	Tab: 'NEXT_FIELD',
 	F1: 'CALENDAR',
 	F2: 'PHONEBOOK',
@@ -225,6 +229,9 @@ export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'nat
 						'CONFIRM',
 						'PRO',
 						'NEXT_FIELD',
+						'PREV_RECORD',
+						'NEXT_RECORD',
+						'EDIT_MENU',
 					]
 				: model === 'oz-9600'
 					? ['NEW ENTRY', 'EDIT', 'PREV', 'NEXT', 'CANCEL', 'MENU', '2ND', 'WORD', 'SYMBOL', 'OFF']

@@ -82,6 +82,16 @@ describe('matrixCodeForKeyEvent', () => {
 		expect(virtualKeysForModel('pa-9500').find((key) => key.testId === 'vk-clear')?.code).toBe(5);
 		expect(virtualKeysForModel('pa-9500').some((key) => key.testId === 'vk-del')).toBe(false);
 	});
+	it('keeps PA record search and Edit menu distinct from cursor keys', () => {
+		for (const [host, contact] of Object.entries({ PageUp: 13, PageDown: 9, ContextMenu: 108, F13: 108, Tab: 65 })) {
+			for (const mode of ['native', 'basic'] as const)
+				expect(matrixCodeForKeyEvent({ code: host } as KeyboardEvent, 'pa-9500', mode)).toBe(contact);
+		}
+		const keys = virtualKeysForModel('pa-9500');
+		expect(keys.find((k) => k.testId === 'vk-prev-record')?.code).toBe(13);
+		expect(keys.find((k) => k.testId === 'vk-next-record')?.code).toBe(9);
+		expect(keys.find((k) => k.testId === 'vk-edit-menu')?.code).toBe(108);
+	});
 	it('maps PF keys', () => {
 		expect(matrixCodeForKeyEvent({ code: 'F1' } as KeyboardEvent)).toBe(0x56);
 		expect(matrixCodeForKeyEvent({ code: 'F2' } as KeyboardEvent)).toBe(0x55);

@@ -81,7 +81,10 @@
 		"1": 55,
 		"0": 56,
 		"2": 62,
-		"CLEAR": 5
+		"CLEAR": 5,
+		"PREV_RECORD": 13,
+		"NEXT_RECORD": 9,
+		"EDIT_MENU": 108
 	},
 	"evidence": {
 		"fixed_ROM_sha256": "4e61da23861f8a007cd83116dd26b03db5843bdd6daa033aba36a68e52d6c1aa",

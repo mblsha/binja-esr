@@ -154,3 +154,28 @@ results are compared, with independent acquired font pixels and strict program
 round trips. The40,000-boundary queue timing is an explicit host policy, not a
 physical timing measurement. Full input/search/registration and organizer/RTC/
 OFF retention remain separate work.
+
+
+## Phonebook record lookup and cold recovery
+
+PageDown/contact9 searches forward for a stored record; PageUp/contact13 searches
+backward. These differ from the ordinary cursor arrows. The Menu key/contact108 opens
+the Edit menu; digit2 chooses Modify when a record is selected. Tab/contact65
+completes the current field. The corresponding virtual keys are NEXT_RECORD,
+PREV_RECORD, EDIT_MENU and NEXT_FIELD. Labels describe acquired firmware actions;
+physical organizer key legends remain provisional.
+
+The separate organizer RAM/RTC file controls export high RAM and RTC backing
+bound to the verified ROM, bank views and selected PA profile. Import constructs
+a fresh CPU, while card SRAM remains separate. At the ROM's initialization
+question, No preserves stored records; Yes erases them. Invalid imports preserve
+the current machine. Ordinary Reset continues to start fresh organizer backing.
+
+The private normal-input proof saves AB/1234, imports that backing into a fresh
+CPU, retrieves the record, selects Edit/2, changes the phone field with arrows
+and Backspace, and exports the modified backing. Another fresh CPU retrieves
+AB/5678 through both search directions. The edited digits use the ROM's
+full-width Shift-JIS font. CLEAR cancels the Modify form. Independent acquired
+ASCII/SJIS glyphs and native/Function Runner/browser observations qualify this
+workflow. Search by a typed name, multiple-record ordering, OFF/ON and combined
+organizer/card recovery remain separate targets.
