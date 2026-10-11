@@ -13,6 +13,29 @@ fn synthetic_runtime() -> CoreRuntime {
 }
 
 #[test]
+fn guest_installed_workspace_code_executes_and_observes_high_alias_stores() {
+    let mut rt = synthetic_runtime();
+    // ROM installs MV A,5A in native workspace and jumps to it. No fetch copy.
+    rt.load_rom(
+        &[
+            0x0a, 0x08, 0x5a, 0xaa, 0x00, 0xc0, 0x01, 0x03, 0x00, 0xc0, 0x01,
+        ],
+        0xe0000,
+    );
+    rt.step_scheduler_boundaries(4).unwrap();
+    assert_eq!(rt.get_reg("A"), 0x5a);
+    assert!(rt.memory.instruction_byte_is_stable(0x1c000));
+    assert!(!rt.memory.instruction_byte_is_stable(0x08400));
+    assert!(!rt.memory.instruction_byte_is_stable(0x80000));
+    // A component fixture bus store through the high alias changes real RAM.
+    rt.memory.store(0xbc001, 8, 0xa5).unwrap();
+    rt.state.set_pc(0x1c000);
+    rt.step_scheduler_boundaries(1).unwrap();
+    assert_eq!(rt.get_reg("A"), 0xa5);
+    assert_eq!(rt.memory.read_byte_for_preflight(0x1c001, None), Some(0xa5));
+}
+
+#[test]
 fn workspace_and_top_ram_share_guest_byte_word_and_preflight_accesses() {
     let mut rt = synthetic_runtime();
     let program = [

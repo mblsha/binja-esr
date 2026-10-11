@@ -422,6 +422,14 @@ pub fn configure_hardware(fixed: &[u8], hw: Hardware) -> Result<CoreRuntime, Str
             perfetto_thread: None,
         });
     }
+    // The fixed low workspace is model-owned RAM. Peripheral scheduler ticks
+    // do not change its bytes or mapping; CPU stores through either low or
+    // high alias remain visible to both preflight and architectural fetches.
+    // Resident guest code must execute from that same mutable backing.
+    runtime
+        .memory
+        .declare_passive_instruction_ram("oz9600_workspace")
+        .map_err(|e| e.to_string())?;
     runtime.power_on_reset().map_err(|e| e.to_string())?;
     boundary::sync_bank_view(&hardware, &mut runtime.memory);
     runtime.lcd = Some(Box::new(boundary::LcdView(hardware.clone())));
