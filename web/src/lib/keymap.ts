@@ -7,7 +7,11 @@ import type { PaInputMode } from './emulator/pa9500_loader';
 export type VirtualKey = { label: string; code: InputContact; testId: string };
 export type HostKeyboardMode = 'symbols' | 'keycaps';
 const maps: Record<string, Record<string, number>> = physicalMaps;
+// Functional PI controls from its two-column ROM scan table and fresh-calendar
+// consumers. These labels describe observed actions, not physical key legends.
+const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, OFF: 7 };
 export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
+	if (model === 'pi-3000') return piControls[name] ?? null;
 	if (model === 'pa-9500') {
 		const table: Record<string, number> = { ...paMaps.common, ...paMaps[paInput] };
 		return table[name] ?? null;
@@ -105,8 +109,17 @@ const paHost: Record<string, string> = {
 	F10: 'INPUT_MODE',
 	F11: 'PRO',
 };
+const piHost: Record<string, string> = { F1: 'DATE', F7: 'MENU', PageUp: 'PREV', PageDown: 'NEXT', Pause: 'OFF' };
 const modelHost = (model: RomModel) =>
-	model === 'iq-7000' ? iqHost : model === 'oz-9600' ? ozHost : model === 'pa-9500' ? paHost : pcHost;
+	model === 'iq-7000'
+		? iqHost
+		: model === 'oz-9600'
+			? ozHost
+			: model === 'pa-9500'
+				? paHost
+				: model === 'pi-3000'
+					? piHost
+					: pcHost;
 function hostName(code: string, model: RomModel): string | null {
 	if (/^Key[A-Z]$/.test(code)) return code.slice(3);
 	if (/^(Digit|Numpad)[0-9]$/.test(code)) return code.slice(-1);
@@ -208,7 +221,11 @@ export const KEY_TO_MATRIX_CODE: Record<string, InputContact> = Object.fromEntri
 );
 
 export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'native'): VirtualKey[] {
-	if (model === 'pi-3000') return [{ label: 'ON', code: 'on', testId: 'vk-on' }];
+	if (model === 'pi-3000')
+		return [
+			{ label: 'ON', code: 'on', testId: 'vk-on' },
+			...Object.entries(piControls).map(([label, code]) => ({ label, code, testId: 'vk-' + label.toLowerCase() })),
+		];
 	const keys: VirtualKey[] = [];
 	const add = (name: string, label = name, id = name.toLowerCase().replaceAll('_', '-')) => {
 		const code = physicalKey(model, name, paInput);

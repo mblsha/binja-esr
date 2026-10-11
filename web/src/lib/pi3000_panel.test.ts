@@ -56,7 +56,8 @@ describe('PI panel and raw input', () => {
 	it('selects its bundle and exposes ON without inventing a keyboard matrix', () => {
 		expect(normalizeRomModel('PI3000')).toBe('pi-3000');
 		expect(romBasename('pi-3000')).toBe('pi-3000.pirom');
-		expect(deviceLayout('pi-3000').keys.map((k) => k.code)).toEqual(['on']);
+		expect(deviceLayout('pi-3000').keys.map((k) => k.code)).toEqual(['on', 1, 6, 9, 13, 7]);
+		expect(contactsForKeyEvent({ code: 'PageUp', key: 'PageUp' } as KeyboardEvent, 'pi-3000', 'symbols')).toEqual([9]);
 		expect(contactsForKeyEvent({ code: 'Enter', key: 'Enter' } as KeyboardEvent, 'pi-3000', 'symbols')).toEqual([]);
 		expect(contactsForKeyEvent({ code: 'F12', key: 'F12' } as KeyboardEvent, 'pi-3000', 'symbols')).toEqual(['on']);
 	});

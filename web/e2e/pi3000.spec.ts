@@ -67,8 +67,8 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	const state = snapshots.at(-1);
 	expect(state.fault).toBeNull();
 	expect(state.tablet.slice(0, 3)).toEqual([700, 700, 0]);
-	expect(state.tablet[5]).toBe(995);
-	expect(state.native_instructions).toBe(1071065);
+	expect(state.tablet[5]).toBe(1055);
+	expect(state.native_instructions).toBe(1110227);
 	const observed = await rpc(page, 'eval_js', {
 		source:
 			'return { capture: await e.lcd.capture(1), completed: await Promise.all(Array.from({length:4}, (_,i) => e.memory.read(0xBB294 + 0x21E + i))), result: await e.memory.read(0xBB294 + 0x222) };',
@@ -139,7 +139,7 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	expect(calendarState.fault).toBeNull();
 	expect(calendarState.selector).toBe(0xf1);
 	expect(calendarState.unmapped_low_read).toBe(0xe0);
-	expect(calendarState.native_instructions).toBe(5127802);
+	expect(calendarState.native_instructions).toBe(5197729);
 	expect(calendarDigest).toBe('72d7fc2b314eb7d805a64a68a28e85193d5558a51e24d3083da8defa5e704138');
 	expect(errors).toEqual([]);
 	if (output) {
@@ -152,7 +152,7 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	const contactDigest = await controllerDigest();
 	expect(contactState.fault).toBeNull();
 	expect(contactState.tablet.slice(0, 3)).toEqual([432, 419, 0]);
-	expect(contactState.native_instructions).toBe(5378834);
+	expect(contactState.native_instructions).toBe(5463195);
 	expect(contactDigest).toBe('48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9');
 	expect(errors).toEqual([]);
 	const blinkSnapshots = [{ state: contactState, digest: contactDigest }];
@@ -164,8 +164,53 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 		'48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9',
 		'b5c34cd004f6732bb14f18c76d9e5054cdbd5719fc414b9c3c58bce696212875',
 	]);
-	expect(blinkSnapshots.at(-1)!.state.native_instructions).toBe(5387372);
+	expect(blinkSnapshots.at(-1)!.state.native_instructions).toBe(5474438);
 	expect(blinkSnapshots.every((s) => s.state.fault === null)).toBe(true);
+	expect(errors).toEqual([]);
+	async function holdKey(id: string, held: number, released: number) {
+		const key = page.getByTestId(id);
+		await key.scrollIntoViewIfNeeded();
+		const box = (await key.boundingBox())!;
+		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+		await page.mouse.down();
+		await expect(key).toHaveClass(/delivered/);
+		await rpc(page, 'step', { instructions: held });
+		await page.mouse.up();
+		await expect(key).not.toHaveClass(/delivered/);
+		await rpc(page, 'step', { instructions: released });
+	}
+	// Functional key controls deliver raw matrix contacts. Date opens the ROM's
+	// dialog; its on-screen Cancel returns to the selected calendar date.
+	await holdKey('vk-date', 200_000, 750_000);
+	const dateDialogDigest = await controllerDigest();
+	expect(blinkSnapshots.some((s) => s.digest === dateDialogDigest)).toBe(false);
+	await holdTouch(180, 147, 50_000, 750_000);
+	const cancelledDigest = await controllerDigest();
+	expect(blinkSnapshots.some((s) => s.digest === cancelledDigest)).toBe(true);
+	const cancelledState = await rpc(page, 'pi_state');
+	expect(cancelledState.fault).toBeNull();
+	await holdKey('vk-off', 200_000, 750_000);
+	const offState = await rpc(page, 'pi_state');
+	expect(offState.pc).toBe(0xf8ed5);
+	await rpc(page, 'step', { instructions: 100_000 });
+	const stillOff = await rpc(page, 'pi_state');
+	expect(stillOff.native_instructions).toBe(offState.native_instructions);
+	await holdKey('vk-on', 250_000, 4_770_000);
+	const resumedState = await rpc(page, 'pi_state');
+	expect(resumedState.fault).toBeNull();
+	expect(resumedState.pc).toBe(0xf06ba);
+	expect(resumedState.native_instructions).toBeGreaterThan(offState.native_instructions);
+	const resumedPixels = await canvas.evaluate((node: HTMLCanvasElement) => {
+		const rgba = node.getContext('2d')!.getImageData(0, 0, node.width, node.height).data;
+		return Array.from({ length: node.width * node.height }, (_, i) => (rgba[i * 4] === 0 ? 1 : 0));
+	});
+	const resumedPanelDigest = createHash('sha256').update(Buffer.from(resumedPixels)).digest('hex');
+	// Wake recreates the calendar focus at day1. Check the whole visible panel
+	// against the independently captured native initial-date phases.
+	expect([
+		'd68c2d349da4125a920c3042093e5bb7c80369f2cd6c12ec3d78a8985a99f9f5',
+		'a67f66c45f0b535d6a65b68f69fdab0778591b647992bc618f080aee9e5c64d8',
+	]).toContain(resumedPanelDigest);
 	expect(errors).toEqual([]);
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-calendar-contact.png') });
@@ -181,6 +226,13 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 				contactState,
 				contactDigest,
 				blinkSnapshots,
+				dateDialogDigest,
+				cancelledDigest,
+				cancelledState,
+				offState,
+				stillOff,
+				resumedState,
+				resumedPanelDigest,
 			}),
 		);
 	}
@@ -219,7 +271,7 @@ test('PI no-Worker browser fallback shares panel and assisted contact behavior',
 		await page.mouse.click(box.x + ((x + 0.5) / 239) * box.width, box.y + ((y + 0.5) / 168) * box.height);
 		await advance(15);
 	}
-	await expect(page.getByTestId('emu-status')).toContainText('1071065');
+	await expect(page.getByTestId('emu-status')).toContainText('1110227');
 	const pixels = await canvas.evaluate((node: HTMLCanvasElement) => {
 		const rgba = node.getContext('2d')!.getImageData(0, 0, node.width, node.height).data;
 		return Array.from({ length: node.width * node.height }, (_, i) => (rgba[i * 4] === 0 ? 1 : 0));

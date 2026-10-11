@@ -505,8 +505,12 @@ pub fn configure(
     if profile == BootstrapProfile::Firmware {
         use crate::llama::state::{BlockTransferPolicy, IsrSoftwareWritePolicy};
         rt.memory.write_internal_byte(0xec, 0xd0);
+        // F06CA requests ISR.MTI after its masked keyboard HALT. F13A9/
+        // F1BC5 dispatch that request to F1BEB and the ordinary matrix scanner.
+        // Retain clear-only writes for other sources; silicon timing remains
+        // unqualified, as with the rest of this firmware startup profile.
         rt.state
-            .set_isr_software_write_policy(IsrSoftwareWritePolicy::ClearOnly);
+            .set_isr_software_write_policy(IsrSoftwareWritePolicy::ClearOnlyExceptMti);
         rt.state
             .set_block_transfer_policy(BlockTransferPolicy::CoupledPredecrement);
         let timing = DeviceModel::Pi3000.timer_profile();

@@ -8,8 +8,10 @@ progress. Native and browser raw input complete calibration, pass contrast
 setup, initialize fresh memory, enter the organizer calendar and select dates.
 The selected numeral blinks through ordinary ROM-controlled context updates;
 the previous selected numeral reappears at its original date cell. Native and
-browser idle samples agree on both complete framebuffer phases. Complete organizer navigation,
-complete keyboard/RTC/power behavior and cards remain open.
+browser idle samples agree on both complete framebuffer phases. Raw matrix
+input opens the date dialog and context menu, changes months and reaches OFF;
+ON resumes the calendar after its normal redraw. Complete organizer navigation,
+keyboard/RTC/power qualification and cards remain open.
 
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM
 and 32 complete selector views (00..0F and F0..FF). It does not accept a mapped
@@ -22,12 +24,20 @@ cargo run --manifest-path sc62015/core/Cargo.toml --features pi3000 \
 ```
 
 The normal model factory starts fresh scratch/high RAM with the `Firmware`
-startup candidate. It combines initial BP=D0, clear-only ISR writes, coupled
+startup candidate. It combines initial BP=D0, MTI-writable/otherwise-clear-only ISR writes, coupled
 predecrement transfers, nominal organizer timer periods, the LCC.bit7/HALT
 main-clock candidate, the periodic RTC A2 candidate, integrated ADC and Gate1
 press edges, plus the capture-derived E0 read candidate for 05000..07FFF. These settings are
 supported by ROM consumers; physical reset state and timing remain unqualified.
 Unsupported bus operations stop and poison the runtime.
+F06CA sets ISR.MTI (bit0) after its masked keyboard HALT. F13A9/F1BC5 dispatch
+that request, and F1BEB calls the ordinary FBB42/FBD9A matrix scanner. FBE41
+translates contacts through the ROM table at FBAC6; FC151/FC113 produce press/
+release records. The previous clear-only setting suppressed this software
+request. The shared `ClearOnlyExceptMti` CPU policy now permits it without
+allowing guest software to create other IRQ sources. This is a ROM-derived
+operational policy; the silicon write truth table remains unqualified. The
+private CLI retains `--isr-policy clear-only` for the previous controls.
 The sequential physical acquisition returned E0 at all 12288 bytes in that
 unmapped window. The read-only candidate supplies that value without creating
 RAM or permitting writes. Firmware initialization makes ignored cleanup calls
@@ -115,7 +125,7 @@ set the ON input bit. With explicit initial BP=D0, clear-only ISR writes,
 coupled transfers, nominal clocks, the HALT clock candidate and Gate1, repeated
 raw contacts rearm and advance the calibration screen. The preserved four-point
 consumer reaches 455 ADC reads without a bus fault or the earlier OFF stop.
-Physical reset CPU state, scan orientation and organizer GUI support remain
+Physical reset CPU state and scan orientation remain
 open. Model selection does not enable these
 controls independently; `Firmware` selects the tested combination.
 
@@ -126,7 +136,8 @@ with sufficient holds complete all four targets and produce the ROM's
 calibration-complete message. A shorter third hold collected only nine samples.
 The completion message is followed by a timed wait, not a confirmation-key
 requirement. F3:CC527 passes four ticks to IOCS14 command49; F7E43 waits for
-BFE32 to advance. Ordinary key mapping and entry into the organizer remain open.
+BFE32 to advance. The current firmware profile completes organizer entry;
+physical key legends and complete application input remain open.
 
 `configure_pi3000_rtc_tick_candidate(period)` explicitly configures the RTC
 A2 periodic source before execution. `Firmware` uses the related board's
@@ -142,12 +153,12 @@ remain separate recovery gaps. No calendar or firmware counter is seeded.
 With this source, the original ROM automatically leaves calibration and draws
 the contrast setup. A raw touch on Finish opens the fresh-memory initialization
 confirmation. Selecting Yes in the empty emulated machine runs 00FE and clears
-RAM. The next preserved failure is a filename lookup at F11D0 with X=05844;
-the recovered bus rejects that address. It is not organizer-entry proof.
+RAM. The strict low-bus control stops at F11D0 with X=05844. The current E0
+candidate lets that ignored cleanup call return error21 and reaches the calendar.
 
 Raw replay also accepts `contact` with `column`, `row` and `pressed`, validated
 for the shared 11-column/eight-row matrix before any input runs. This supplies
-electrical contacts only; no PI key-name table or C/CE mapping is asserted.
+electrical contacts only; no physical PI key legends or C/CE mapping are asserted.
 The browser accepts the bundle through PI-3000 model selection or
 `PI3000_ROM_PATH`. It presents a 239×168 crop/transposition of native storage;
 IOCS extents and legible Japanese support this orientation, while the physical
@@ -157,8 +168,18 @@ four endpoints pass the recovered calibration. A short tap stays pressed for
 
 Worker and no-Worker browser paths both reproduce the native ten-sample
 calibration result from fresh RAM. They do not seed firmware queues or
-coefficients. The browser exposes only ON as a named key until the PI button
-mapping is recovered. The periodic RTC now advances past the completion
+coefficients. The browser exposes functional DATE, MENU, PREV, NEXT and OFF
+controls alongside ON. Their labels describe observed calendar actions on
+matrix contacts 1,6,9,13,7; they do not reconstruct the physical keycap layout.
+F1/F7, PageUp/PageDown and Pause provide the same raw contacts. The periodic RTC advances past the completion
 message without keyboard input. Native
 `lcd_capture` and the Function Runner retain the full controller geometry;
 the presentation transform applies only to UI frames.
+
+A bounded OFF/ON consumer returns to the F06BA idle loop and the calendar's
+initial-date visible pixels after redraw. Wake returns the focus to day1,
+even after selecting day16. This is an in-session power
+transition, not persistent snapshot or full retention qualification. A long
+Cancel contact released between independent X/Y conversions can produce a
+mixed final coordinate under the provisional ADC model; shorter or upper-button
+contacts close the modal. Complete ADC sampling/release timing remains open.
