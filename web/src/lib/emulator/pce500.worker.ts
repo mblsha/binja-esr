@@ -46,6 +46,7 @@ type WorkerRequest =
 			paCardRom?: Uint8Array;
 			paCardSram?: Uint8Array;
 			paUart?: boolean;
+			paRetained?: Uint8Array;
 	  }
 	| { id: number; type: 'oz_retained_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
@@ -59,6 +60,7 @@ type WorkerRequest =
 	| { id: number; type: 'oz_reset' }
 	| { id: number; type: 'pa_reset' }
 	| { id: number; type: 'pa_card_export'; generation: number }
+	| { id: number; type: 'pa_retained_export'; generation: number }
 	| { id: number; type: 'pa_observe'; generation: number }
 	| { id: number; type: 'oz_retained_restore'; bytes: Uint8Array }
 	| { id: number; type: 'oz_tablet'; contact: TabletContact; owner: string; cancel?: boolean; generation: number }
@@ -314,6 +316,9 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 					pa9500Status: () => runWithError('pa9500.status()', () => emulator.pa9500_status()),
 					pa9500CardSram: () => runWithError('pa9500.cardSram()', () => emulator.pa9500_card_sram()),
 					pa9500TakeSerial: () => runWithError('pa9500.takeSerial()', () => emulator.pa9500_take_serial()),
+					pa9500RetainedState: () => runWithError('pa9500.retainedState()', () => emulator.pa9500_retained_state()),
+					pa9500RestoreRetained: (bytes) =>
+						runWithError('pa9500.restoreRetained()', () => emulator.restore_pa9500_retained(bytes)),
 					callFunction: async (
 						address: number,
 						maxInstructions: number,
@@ -743,6 +748,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 						msg.paCardRom,
 						msg.paCardSram,
 						msg.paUart === true,
+						msg.paRetained,
 					);
 				else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
@@ -795,6 +801,13 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					capture: emulator.lcd_capture(1),
 					card_sram: Array.from(emulator.pa9500_card_sram()),
 				});
+				return;
+			}
+			case 'pa_retained_export': {
+				if (operations.busy || msg.generation !== machineGeneration)
+					throw new Error('Wait for the current PA generation to be idle');
+				if (romModel !== 'pa-9500' || !emulator?.has_rom()) throw new Error('PA bootstrap is not loaded');
+				replyOk(msg.id, emulator.pa9500_retained_state());
 				return;
 			}
 			case 'pa_card_export': {

@@ -1047,7 +1047,13 @@
 	function saveOzOnHidden() {
 		if (document.hidden) void saveOzBattery(true);
 	}
-	async function installRom(bytes: Uint8Array, model: RomModel, source: string | null, generation: number) {
+	async function installRom(
+		bytes: Uint8Array,
+		model: RomModel,
+		source: string | null,
+		generation: number,
+		paRetained = new Uint8Array(),
+	) {
 		const originalBytes = bytes.slice();
 		if (generation !== romLoadGeneration) return;
 		requestedRom = { bytes: originalBytes, model, source };
@@ -1095,7 +1101,7 @@
 						generation,
 						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
 						...(model === 'pa-9500'
-							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice() }
+							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice(), paRetained }
 							: {}),
 					},
 					[bytes.buffer],
@@ -1107,7 +1113,7 @@
 					return;
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
-				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart);
+				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1618,6 +1624,49 @@
 			downloadBlob(new Blob([safeJson(observation)], { type: 'application/json' }), 'pa9500-observations.json');
 		} catch (error) {
 			paCardError = String(error);
+		}
+	}
+
+	async function exportPaRetained() {
+		if (!romLoaded || romModel !== 'pa-9500' || !(await stop())) return;
+		try {
+			const bytes = worker
+				? await workerCall('pa_retained_export', { generation: romLoadGeneration })
+				: emulator.pa9500_retained_state();
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pa9500-ram-rtc.bin');
+		} catch (error) {
+			paCardError = String(error);
+		}
+	}
+
+	async function importPaRetained(event: Event) {
+		const file = (event.currentTarget as HTMLInputElement).files?.[0];
+		if (!file || !installedRom || installedRom.model !== 'pa-9500' || loadingRom || !(await stop())) return;
+		const oldGeneration = romLoadGeneration,
+			oldInput = paInput,
+			oldCard = paCardSram;
+		loadingRom = true;
+		const generation = ++romLoadGeneration;
+		try {
+			if (file.size !== 104 + 0x40000 + 32) throw new Error('PA RAM/RTC backing has an invalid length');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			paCardSram = Uint8Array.from(
+				worker
+					? (await workerCall('pa_observe', { generation: oldGeneration })).card_sram
+					: emulator.pa9500_card_sram(),
+			);
+			await installRom(installedRom.bytes.slice(), 'pa-9500', installedRom.source, generation, bytes);
+			paInput = 'native';
+			paCardError = '';
+		} catch (error) {
+			paCardError = String(error);
+			if (romLoadGeneration === generation) {
+				romLoadGeneration = oldGeneration;
+				paInput = oldInput;
+				paCardSram = oldCard;
+			}
+		} finally {
+			loadingRom = false;
 		}
 	}
 
@@ -2544,6 +2593,24 @@
 					on:click={exportPaObservation}>Export PA observations</button
 				>
 				{#if paCardError}<p role="alert" data-testid="pa-card-error">{paCardError}</p>{/if}
+				<label
+					>Import organizer RAM/RTC and restart
+					<input
+						type="file"
+						data-testid="pa-retained-file"
+						disabled={!romLoaded || loadingRom || functionRunnerBusy}
+						on:change={importPaRetained}
+					/>
+				</label>
+				<button
+					data-testid="pa-retained-export"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy}
+					on:click={exportPaRetained}>Export organizer RAM/RTC</button
+				>
+				<p>
+					Card SRAM is saved separately. Import starts a fresh CPU; choose No at the ROM's erase-data prompt to keep
+					organizer records.
+				</p>
 			</section>
 		{/if}
 		{#if romModel === 'oz-9600'}

@@ -6,6 +6,35 @@ use sc62015_core::pa9500::{self, card::Pa9c3Card};
 
 #[wasm_bindgen]
 impl Sc62015Emulator {
+    /// RAM/RTC restart backing only, bound to the verified PA ROM and profile.
+    pub fn pa9500_retained_state(&self) -> Result<Vec<u8>, JsValue> {
+        self.require_no_active_call()?;
+        pa9500::retained::retained_state(&self.runtime).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Explicit fresh-CPU loader; validate backing before replacing the machine.
+    pub fn load_pa9500_with_retained(
+        &mut self,
+        bundle: &[u8],
+        card_rom: &[u8],
+        card_sram: &[u8],
+        profile: &str,
+        retained: &[u8],
+        uart: bool,
+    ) -> Result<(), JsValue> {
+        if retained.is_empty() {
+            return Err(JsValue::from_str("PA retained backing is empty"));
+        }
+        self.install_pa9500_candidate_with_retained(
+            bundle, card_rom, card_sram, profile, uart, retained,
+        )
+    }
+
+    pub fn restore_pa9500_retained(&mut self, retained: &[u8]) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        pa9500::retained::restore_retained_state(&mut self.runtime, retained)
+            .map_err(|e| JsValue::from_str(&e))
+    }
     /// Fresh organizer backing, optional verified PA-9C3 media. Replacement is
     /// atomic. No captured main RAM or CPU state is accepted by this loader.
     pub fn load_pa9500(
@@ -79,6 +108,18 @@ impl Sc62015Emulator {
         profile: &str,
         uart: bool,
     ) -> Result<(), JsValue> {
+        self.install_pa9500_candidate_with_retained(bundle, card_rom, card_sram, profile, uart, &[])
+    }
+
+    fn install_pa9500_candidate_with_retained(
+        &mut self,
+        bundle: &[u8],
+        card_rom: &[u8],
+        card_sram: &[u8],
+        profile: &str,
+        uart: bool,
+        retained: &[u8],
+    ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
         if !matches!(profile, "bootstrap-v1" | "bootstrap-v2" | "bootstrap-v3") {
             return Err(JsValue::from_str(
@@ -100,6 +141,10 @@ impl Sc62015Emulator {
         .map_err(|e| JsValue::from_str(&e))?;
         if uart {
             pa9500::install_uart_candidate(&mut candidate).map_err(|e| JsValue::from_str(&e))?;
+        }
+        if !retained.is_empty() {
+            pa9500::retained::restore_retained_state(&mut candidate, retained)
+                .map_err(|e| JsValue::from_str(&e))?;
         }
         self.runtime = candidate;
         self.rom_image = bundle.to_vec();

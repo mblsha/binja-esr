@@ -55,6 +55,7 @@
 		"INPUT_MODE": 22,
 		"SHIFT": 23,
 		"ENTER": 69,
+		"NEXT_FIELD": 65,
 		"CONFIRM": 70,
 		"PRO": 92,
 		"SPACE": 18,

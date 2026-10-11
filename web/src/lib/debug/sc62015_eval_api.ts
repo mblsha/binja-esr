@@ -229,6 +229,8 @@ export interface EmulatorAdapter {
 	pa9500Status?(): unknown;
 	pa9500CardSram?(): Uint8Array | number[];
 	pa9500TakeSerial?(): unknown;
+	pa9500RetainedState?(): Uint8Array | number[];
+	pa9500RestoreRetained?(bytes: Uint8Array): void;
 	lcdText?(): string[] | null;
 	lcdPixels?(): Uint8Array | number[] | null;
 	lcdCapture?(scale?: number): Omit<LcdCapture, 'pixels'> & { pixels: number[] | Uint8Array };
@@ -267,7 +269,13 @@ export interface EvalApi {
 		read(address: number, size?: 1 | 2 | 3): Promise<number>;
 		write(address: number, size: 1 | 2 | 3, value: number): Promise<void>;
 	};
-	pa9500: { status(): unknown; cardSram(): number[]; takeSerial(): unknown };
+	pa9500: {
+		status(): unknown;
+		cardSram(): number[];
+		takeSerial(): unknown;
+		retainedState(): number[];
+		restoreRetained(bytes: number[] | Uint8Array): void;
+	};
 	lcd: {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
@@ -913,6 +921,17 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			},
 		},
 		pa9500: {
+			retainedState: () => {
+				if (!adapter.pa9500RetainedState) throw new Error('PA retained backing unavailable');
+				return Array.from(adapter.pa9500RetainedState());
+			},
+			restoreRetained: (bytes) => {
+				requireNoCall();
+				if (!adapter.pa9500RestoreRetained) throw new Error('PA retained backing unavailable');
+				if (!Array.from(bytes).every((n) => Number.isInteger(n) && n >= 0 && n <= 255))
+					throw new Error('Invalid PA retained byte');
+				adapter.pa9500RestoreRetained(Uint8Array.from(bytes));
+			},
 			takeSerial: () => {
 				if (!adapter.pa9500TakeSerial) throw new Error('PA serial observation unavailable');
 				return adapter.pa9500TakeSerial();

@@ -17,8 +17,10 @@ export function loadPa9500(
 	cardRom: Uint8Array = new Uint8Array(),
 	cardSram: Uint8Array = new Uint8Array(),
 	uartCandidate = false,
+	retained: Uint8Array = new Uint8Array(),
 ) {
-	if (uartCandidate) emulator.load_pa9500_with_uart(bundle, cardRom, cardSram, profile);
+	if (retained.length) emulator.load_pa9500_with_retained(bundle, cardRom, cardSram, profile, retained, uartCandidate);
+	else if (uartCandidate) emulator.load_pa9500_with_uart(bundle, cardRom, cardSram, profile);
 	else emulator.load_pa9500(bundle, cardRom, cardSram, profile);
 	emulator.step(64);
 	emulator.release_on_key();

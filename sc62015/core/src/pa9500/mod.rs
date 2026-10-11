@@ -23,6 +23,7 @@ pub mod card;
 pub mod compat_probe;
 pub mod compat_runtime;
 mod lcd_view;
+pub mod retained;
 const MAGIC: &[u8; 8] = b"PAROM01\0";
 
 #[derive(Clone, Copy, Debug, Default)]

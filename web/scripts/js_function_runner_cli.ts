@@ -744,6 +744,8 @@ async function main() {
 			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
 		pa9500Status: () => emulator.pa9500_status(),
 		pa9500CardSram: () => emulator.pa9500_card_sram(),
+		pa9500RetainedState: () => emulator.pa9500_retained_state(),
+		pa9500RestoreRetained: (bytes) => emulator.restore_pa9500_retained(bytes),
 		pa9500TakeSerial: () => emulator.pa9500_take_serial(),
 		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
 		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels?.() ?? null),

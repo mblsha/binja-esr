@@ -21,6 +21,8 @@ export const SYNC_SCRIPT_METHODS = [
 	'pa9500.status',
 	'pa9500.cardSram',
 	'pa9500.takeSerial',
+	'pa9500.retainedState',
+	'pa9500.restoreRetained',
 ] as const;
 export const ASYNC_SCRIPT_METHODS = [
 	'reset',

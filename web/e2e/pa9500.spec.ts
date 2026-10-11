@@ -77,6 +77,7 @@ const expectedPath = process.env.PA9500_BROWSER_EXPECTED;
 const cardRom = process.env.PA9500_CARD_ROM;
 const cardSram = process.env.PA9500_CARD_SRAM;
 const recoveryPath = process.env.PA9500_RECOVERY_CASE;
+const recoveryExpected = process.env.PA9500_RECOVERY_EXPECTED;
 
 async function observation(page: Page) {
 	const generation = (await request(page, 'input_state')).generation;
@@ -119,6 +120,7 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		22: 'F10',
 		92: 'F11',
 		69: 'Enter',
+		65: 'Tab',
 		43: 'Backspace',
 		18: 'Space',
 		8: 'ArrowLeft',
@@ -217,6 +219,55 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 			expect(actual.card_sram).toEqual(target.card_sram);
 		}
 	}
+});
+
+test('PA native record backing export and fresh CPU import through file controls', async ({ page }) => {
+	test.skip(
+		!replayPath || !expectedPath || !recoveryPath || !recoveryExpected || !output,
+		'Supply frozen native save/recovery cases and proof output',
+	);
+	test.setTimeout(240_000);
+	await openPa(page);
+	await page.getByTestId('advanced-panel').locator('> summary').click();
+	await mkdir(output!, { recursive: true });
+	const save = await replay(page, JSON.parse(await readFile(replayPath!, 'utf8')), true, 'record-save');
+	const expected = JSON.parse(await readFile(expectedPath!, 'utf8')).checkpoints;
+	for (const actual of save.snapshots) {
+		const target = expected.find((c: any) => c.boundary === actual.boundary);
+		expect(actual.status).toEqual(target.status);
+		expect(actual.capture.pixels).toEqual(target.capture.pixels);
+	}
+	const download = page.waitForEvent('download');
+	await page.getByTestId('pa-retained-export').click();
+	const file = await download;
+	expect(file.suggestedFilename()).toBe('pa9500-ram-rtc.bin');
+	const bytes = await readFile((await file.path())!);
+	const nativeRecord = expected.at(-1).backing.find((b: any) => b.kind === 'retained');
+	expect(bytes).toEqual(await readFile(resolve(expectedPath!, '..', nativeRecord.file)));
+	const saved = resolve(output!, 'browser-retained.bin');
+	await writeFile(saved, bytes);
+	const corrupt = Buffer.from(bytes);
+	corrupt[104] ^= 1;
+	const bad = resolve(output!, 'corrupt-retained.bin');
+	await writeFile(bad, corrupt);
+	const before = await observation(page);
+	await page.getByTestId('pa-retained-file').setInputFiles(bad);
+	await expect(page.getByTestId('pa-card-error')).toContainText('checksum');
+	expect(await observation(page)).toEqual(before);
+	await page.getByTestId('pa-retained-file').setInputFiles(saved);
+	await expect(page.getByTestId('pa-retained-file')).toBeEnabled();
+	await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	const recovery = await replay(page, JSON.parse(await readFile(recoveryPath!, 'utf8')), false, 'record-recovery');
+	const expectedRecovery = JSON.parse(await readFile(recoveryExpected!, 'utf8')).checkpoints;
+	for (const actual of recovery.snapshots) {
+		const target = expectedRecovery.find((c: any) => c.boundary === actual.boundary);
+		expect(actual.status).toEqual(target.status);
+		expect(actual.capture.pixels).toEqual(target.capture.pixels);
+	}
+	await writeFile(
+		resolve(output!, 'browser-record.json'),
+		JSON.stringify({ save, recovery, corrupt_import_preserved_machine: true }),
+	);
 });
 
 test('PA ordinary BASIC navigation and ON BREAK through host DOM keys', async ({ page }) => {
