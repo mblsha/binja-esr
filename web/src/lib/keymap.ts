@@ -9,7 +9,7 @@ export type HostKeyboardMode = 'symbols' | 'keycaps';
 const maps: Record<string, Record<string, number>> = physicalMaps;
 // Functional PI controls from its two-column ROM scan table and fresh-calendar
 // consumers. These labels describe observed actions, not physical key legends.
-const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, OFF: 7 };
+const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, CLEAR: 14, OFF: 7 };
 export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
 	if (model === 'pi-3000') return piControls[name] ?? null;
 	if (model === 'pa-9500') {
@@ -109,7 +109,14 @@ const paHost: Record<string, string> = {
 	F10: 'INPUT_MODE',
 	F11: 'PRO',
 };
-const piHost: Record<string, string> = { F1: 'DATE', F7: 'MENU', PageUp: 'PREV', PageDown: 'NEXT', Pause: 'OFF' };
+const piHost: Record<string, string> = {
+	F1: 'DATE',
+	F7: 'MENU',
+	PageUp: 'PREV',
+	PageDown: 'NEXT',
+	Escape: 'CLEAR',
+	Pause: 'OFF',
+};
 const modelHost = (model: RomModel) =>
 	model === 'iq-7000'
 		? iqHost

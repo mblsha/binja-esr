@@ -566,6 +566,35 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	await expect.poll(renderedPanelDigest).toBe('907c04c5345fbdd18946d32c317fb9fc83a949779ff2954ad12c3bb761ea3078');
 	const clockDialogDigest = await renderedPanelDigest();
 	expect(clockDialogDigest).toBe('907c04c5345fbdd18946d32c317fb9fc83a949779ff2954ad12c3bb761ea3078');
+	// Clear uses column1,row6 (scanner byte1C). It closes the rejected-hour
+	// popup and clears the hour field through the ROM's matrix scanner.
+	await holdTouch(16, 142, 50_000, 300_000);
+	await holdTouch(219, 49, 50_000, 1_000_000);
+	await expect.poll(renderedPanelDigest).toBe('f58544d70fe253f96fd64f6b415f700b2a39264e539809beacce5833d3efb45b');
+	await holdKey('vk-clear', 50_000, 3_000_000);
+	const clearedClockError = await rpc(page, 'eval_js', {
+		source:
+			'return { capture: await e.lcd.capture(1), time: await Promise.all(Array.from({length:5}, (_,i) => e.memory.read(0x8000+i))) };',
+	});
+	expect(clearedClockError.error).toBeNull();
+	const clearedClockResult = JSON.parse(clearedClockError.resultJson);
+	expect(clearedClockResult.time).toEqual([0x00, 0xc0, 0x08, 0xe1, 0x05]);
+	const clearedClockDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					clearedClockResult.capture.pixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(clearedClockDigest).toBe('8e86fbeb187388db18991a3323257a4ad27779dc5c04db24c4ed9171fe619820');
+	await expect.poll(renderedPanelDigest).toBe(clearedClockDigest);
+	if (output)
+		await writeFile(
+			resolve(output, 'browser-clock-error-clear.json'),
+			JSON.stringify({ clearedClockDigest, time: clearedClockResult.time, state: await rpc(page, 'pi_state') }),
+		);
 	await holdTouch(219, 69, 50_000, 3_000_000);
 	const cancelledClockCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
 	expect(cancelledClockCapture.error).toBeNull();

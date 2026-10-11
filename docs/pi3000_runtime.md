@@ -157,10 +157,16 @@ on the packed RTC bytes and complete visible frames. The earlier single-digit
 input leaves hour-field status bit7 set and takes the ROM's incorrect-time path.
 With the separately enabled calendar/cyclic/alarm candidate, normal input and
 scheduler advancement deliver the daily-alarm popup and reschedule its deadline
-for the next day. Calendar-only advancement does not deliver it. Raw column0,
-row0 clears the alarm, but the larger popup's restored background contains
-fragments; complete alarm dismissal and audible output remain under recovery.
-The smaller incorrect-time popup clears back to its numeric editor normally.
+for the next day. Calendar-only advancement does not deliver it. A no-input
+counterfactual reaches the same fragmented Clock repaint after the next minute
+as the earlier contact sequence. That repaint does not establish an alarm-clear
+contact; timed refresh/modal ownership, acknowledgement and audible output
+remain under recovery.
+The browser's Clear control and Escape use column1,row6 (scanner byte1C,
+virtual contact14). They close the incorrect-time popup and clear its hour
+field through the ROM's matrix scanner, preserving RTC. Native and browser
+input agree on the complete visible result. Column0,row0 instead closes that
+smaller popup while retaining the entered digit.
 Clock redraws can require several million scheduler boundaries after closing
 a dialog. These are emulator contracts, not physical timing qualification.
 
