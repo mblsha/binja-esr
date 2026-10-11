@@ -25,6 +25,14 @@ main-clock candidate, the periodic RTC A2 candidate, integrated ADC and Gate1
 press edges. These settings are
 supported by ROM consumers; physical reset state and timing remain unqualified.
 Unsupported bus operations stop and poison the runtime.
+`configure_pi3000_rtc_calendar_candidate(period)` separately opts into packed
+calendar advancement before execution. It uses independent scheduler time in
+running, HALT and OFF states, freezes calendar phase under CONTROL.HOLD, and
+never seeds a date or generates PI alarm/cyclic causes. The shared OZ calendar
+codec and rollover rules remain a PI hypothesis pending complete getter and
+physical qualification. Invalid dates stop rather than being repaired. This
+option is disabled in every bootstrap profile, preserving the current startup
+consumer. `pi3000_status` reports its period, phase, elapsed seconds and held units.
 An unknown instruction mapping fails preflight; an unknown data access stops
 after its committed instruction. Generic card overlays are not applied.
 Restart constructs a new board; v4 snapshots do not represent its devices.

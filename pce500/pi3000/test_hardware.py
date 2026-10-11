@@ -164,6 +164,35 @@ def test_periodic_rtc_candidate_coalesces_and_requires_device_and_gate_ack():
     assert not any(h.ram) and h.rtc.registers()[:5] == bytes(5)
 
 
+def test_calendar_candidate_crosses_year_and_hold_freezes_only_calendar_phase():
+    from pce500.oz9600.rtc import Clock
+
+    h = Hardware({})
+    h.rtc_second_period, h.rtc_second_phase = 10, 7
+    with pytest.raises(ValueError, match="invalid ordinary RTC"):
+        h.advance_rtc_calendar(3)
+    assert (h.rtc_seconds, h.rtc_second_phase) == (0, 7)
+    assert h.rtc.registers()[:5] == bytes(5)
+    before = Clock(1994, 12, 31, 23, 59, 59, 3)
+    for offset, value in enumerate(before.encode(bytes([192, 0, 0, 0, 128]))):
+        h.rtc.write(offset, value)
+    h.rtc.write(12, 128)
+    h.advance_rtc_calendar(25)
+    for _ in range(100):
+        assert h.read(0x8000) == 251
+    assert h.rtc.clock() == before
+    assert (h.rtc_seconds, h.rtc_second_phase, h.rtc_held_units) == (0, 7, 25)
+    h.rtc_tick_period = 5
+    h.advance_rtc_ticks(25)
+    assert h.rtc.read(10) == 4
+    h.rtc.write(12, 0)
+    h.advance_rtc_calendar(3)
+    assert h.rtc.clock() == Clock(1995, 1, 1, 0, 0, 0, 4)
+    assert (h.rtc_seconds, h.rtc_second_phase) == (1, 0)
+    assert h.rtc.read(0) & 192 == 192 and h.rtc.read(4) & 128 == 128
+    assert not any(h.ram)
+
+
 def test_auxiliary_initialization_control_matches_single_byte_acknowledgment():
     from pce500.pi3000.auxiliary import Auxiliary
 

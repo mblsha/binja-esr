@@ -84,6 +84,11 @@ pub struct Hardware {
     pub rtc_tick_period: Option<u64>,
     pub rtc_tick_phase: u64,
     pub rtc_ticks: u64,
+    /// Opt-in packed-calendar candidate, independent of periodic A2 causes.
+    pub rtc_second_period: Option<u64>,
+    pub rtc_second_phase: u64,
+    pub rtc_seconds: u64,
+    pub rtc_held_units: u64,
     pub gpio: [u8; 18],
     pub clock_control: u8,
     pub startup_latches: [u8; 3],
@@ -121,6 +126,26 @@ impl Hardware {
             }
         }
     }
+    pub fn advance_rtc_calendar(&mut self, elapsed: u64) -> Result<(), String> {
+        if let Some(period) = self.rtc_second_period {
+            // F8210 reads the five packed bytes under CONTROL.HOLD. Freeze
+            // the calendar phase while held; crystal/hold timing is provisional.
+            if self.rtc.read(crate::oz9600::rtc::CONTROL) & crate::oz9600::rtc::HOLD != 0 {
+                self.rtc_held_units = self.rtc_held_units.wrapping_add(elapsed);
+            } else {
+                let total = u128::from(self.rtc_second_phase) + u128::from(elapsed);
+                let seconds = (total / u128::from(period)) as u64;
+                if seconds != 0 {
+                    // Calendar only: PI cyclic/alarm matching is still open.
+                    // Validate before committing phase or counters.
+                    self.rtc.advance_seconds(seconds)?;
+                    self.rtc_seconds = self.rtc_seconds.wrapping_add(seconds);
+                }
+                self.rtc_second_phase = (total % u128::from(period)) as u64;
+            }
+        }
+        Ok(())
+    }
     pub fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
         Self {
             selector: 0xfd,
@@ -139,6 +164,10 @@ impl Hardware {
             rtc_tick_period: (profile == BootstrapProfile::Firmware).then_some(512_000),
             rtc_tick_phase: 0,
             rtc_ticks: 0,
+            rtc_second_period: None,
+            rtc_second_phase: 0,
+            rtc_seconds: 0,
+            rtc_held_units: 0,
             gpio: [0; 18],
             clock_control: 0,
             startup_latches: [0; 3],
@@ -352,7 +381,10 @@ impl BoundaryDevice for Boundary {
             h.halt_main_timer_units += elapsed;
         }
         h.cycle = c.cycles;
-        h.advance_rtc_ticks(c.elapsed_timing_units.wrapping_sub(self.2));
+        let rtc_elapsed = c.elapsed_timing_units.wrapping_sub(self.2);
+        h.advance_rtc_ticks(rtc_elapsed);
+        h.advance_rtc_calendar(rtc_elapsed)
+            .map_err(CoreError::Other)?;
         if let Some(auxiliary) = &mut h.auxiliary {
             auxiliary.advance(c.cycles);
         }
@@ -505,6 +537,18 @@ impl CoreRuntime {
             .rtc_tick_period = Some(period);
         Ok(())
     }
+    /// Opt-in calendar clock; does not enable alarm/cyclic causes or seed a date.
+    pub fn configure_pi3000_rtc_calendar_candidate(&mut self, period: u64) -> Result<(), String> {
+        if period == 0 || self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PI RTC calendar requires a nonzero period before execution".into());
+        }
+        self.pi3000_hardware
+            .as_ref()
+            .ok_or("not a PI runtime")?
+            .borrow()
+            .rtc_second_period = Some(period);
+        Ok(())
+    }
     pub fn configure_pi3000_halt_main_timer_candidate(
         &mut self,
         enabled: bool,
@@ -585,6 +629,8 @@ impl CoreRuntime {
             "tablet_interrupt_source":format!("{:?}",h.tablet_interrupt_source),
             "halt_main_timer_candidate":h.halt_main_timer_candidate,"halt_main_timer_units":h.halt_main_timer_units,
             "rtc_tick_period":h.rtc_tick_period,"rtc_ticks":h.rtc_ticks,"rtc_tick_phase":h.rtc_tick_phase,
+            "rtc_second_period":h.rtc_second_period,"rtc_second_phase":h.rtc_second_phase,
+            "rtc_seconds":h.rtc_seconds,"rtc_held_units":h.rtc_held_units,
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),
         )

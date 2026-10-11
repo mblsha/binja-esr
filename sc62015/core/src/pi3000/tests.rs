@@ -56,6 +56,99 @@ fn explicit_rtc_tick_clock_runs_in_halt_and_off_without_retiring_instructions() 
 }
 
 #[test]
+fn explicit_calendar_uses_scheduler_time_in_running_halt_and_off() {
+    use crate::llama::state::PowerState;
+    for power in [PowerState::Running, PowerState::Halted, PowerState::Off] {
+        let mut rt = fixture(&[0; 8]);
+        assert!(rt.configure_pi3000_rtc_calendar_candidate(0).is_err());
+        assert_eq!(
+            rt.pi3000_hardware().unwrap().borrow().rtc_second_period,
+            None
+        );
+        rt.configure_pi3000_rtc_calendar_candidate(3).unwrap();
+        {
+            let mut h = rt.pi3000_hardware().unwrap().borrow();
+            for (offset, value) in [59, 0, 8, 0xe1, 5].into_iter().enumerate() {
+                h.rtc.write(offset, value); // explicit component date: 1994-01-01 00:00:59
+            }
+        }
+        rt.state.set_power_state(power);
+        rt.step_scheduler_boundaries(8).unwrap();
+        let h = rt.pi3000_hardware().unwrap().borrow();
+        assert_eq!((h.rtc_seconds, h.rtc_second_phase), (2, 2));
+        let clock = h.rtc.clock().unwrap();
+        assert_eq!((clock.year, clock.month, clock.day), (1994, 1, 1));
+        assert_eq!((clock.hour, clock.minute, clock.second), (0, 1, 1));
+        assert_eq!(h.rtc.read(10), 0); // no unqualified PI cyclic/alarm cause generation
+        assert!(h.ram.iter().all(|v| *v == 0));
+        assert_eq!(
+            rt.instruction_count(),
+            if power == PowerState::Running { 8 } else { 0 }
+        );
+        drop(h);
+        assert!(rt.configure_pi3000_rtc_calendar_candidate(3).is_err());
+    }
+}
+
+#[test]
+fn calendar_hold_preserves_phase_and_errors_preserve_clock_and_counters() {
+    use crate::oz9600::rtc::{Clock, CONTROL, HOLD};
+    let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
+    h.rtc_second_period = Some(10);
+    h.rtc_second_phase = 7;
+    assert!(h.advance_rtc_calendar(3).is_err()); // invalid fresh clock is never repaired
+    assert_eq!((h.rtc_seconds, h.rtc_second_phase), (0, 7));
+    assert_eq!(&h.rtc.registers()[..5], &[0; 5]);
+    let before = Clock {
+        year: 1994,
+        month: 12,
+        day: 31,
+        hour: 23,
+        minute: 59,
+        second: 59,
+        weekday: 3,
+    };
+    for (offset, value) in before
+        .encode([0xc0, 0, 0, 0, 0x80])
+        .unwrap()
+        .into_iter()
+        .enumerate()
+    {
+        h.rtc.write(offset, value);
+    }
+    h.rtc.write(CONTROL, HOLD);
+    h.advance_rtc_calendar(25).unwrap();
+    for _ in 0..100 {
+        assert_eq!(h.read(0x8000), Some(0xfb));
+    }
+    assert_eq!(h.rtc.clock().unwrap(), before);
+    assert_eq!(
+        (h.rtc_seconds, h.rtc_second_phase, h.rtc_held_units),
+        (0, 7, 25)
+    );
+    h.rtc_tick_period = Some(5);
+    h.advance_rtc_ticks(25);
+    assert_eq!(h.rtc.read(10), 4); // separate A2 source continues during HOLD
+    h.rtc.write(CONTROL, 0);
+    h.advance_rtc_calendar(3).unwrap();
+    assert_eq!(
+        h.rtc.clock().unwrap(),
+        Clock {
+            year: 1995,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            weekday: 4
+        }
+    );
+    assert_eq!((h.rtc_seconds, h.rtc_second_phase), (1, 0));
+    assert_eq!(h.rtc.read(0) & 0xc0, 0xc0);
+    assert_eq!(h.rtc.read(4) & 0x80, 0x80);
+}
+
+#[test]
 fn guest_cannot_write_device_owned_eport_inputs() {
     let mut rt = fixture(&[
         0x30, 0xcc, 0xf5, 0x44, 0x30, 0xcc, 0xf6, 0x55, 0x30, 0xcc, 0xf3, 0xa5,
