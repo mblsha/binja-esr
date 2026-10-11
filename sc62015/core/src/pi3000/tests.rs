@@ -129,3 +129,30 @@ fn raw_press_uses_only_the_candidate_gate_edge_and_invalid_inputs_are_atomic() {
     rt.set_pi3000_raw_contact(404, 602, true).unwrap();
     assert_eq!(rt.pi3000_hardware().unwrap().borrow().gate[0x12], 8);
 }
+
+#[test]
+fn foreground_contact_candidate_uses_gate1_and_cannot_switch_after_sampling() {
+    let mut rt = fixture(&[0]);
+    rt.pi3000_hardware().unwrap().borrow().auxiliary = Some(auxiliary::Auxiliary::default());
+    rt.configure_pi3000_tablet_route(TabletAdcRoute::Integrated)
+        .unwrap();
+    rt.configure_pi3000_tablet_interrupt_source(TabletInterruptSource::Gate1)
+        .unwrap();
+    rt.set_pi3000_raw_contact(66, 66, true).unwrap();
+    assert_eq!(rt.pi3000_hardware().unwrap().borrow().gate[0x12], 2);
+    assert!(rt
+        .configure_pi3000_tablet_interrupt_source(TabletInterruptSource::Gate3)
+        .is_err());
+    rt.pi3000_hardware().unwrap().borrow().gate[0x12] = 0;
+    rt.set_pi3000_raw_contact(66, 67, true).unwrap();
+    assert_eq!(rt.pi3000_hardware().unwrap().borrow().gate[0x12], 0);
+    rt.set_pi3000_raw_contact(66, 67, false).unwrap();
+    {
+        let mut h = rt.pi3000_hardware().unwrap().borrow();
+        h.tablet.write_conversion_control(6).unwrap();
+        h.tablet.read_data().unwrap();
+    }
+    assert!(rt
+        .configure_pi3000_tablet_interrupt_source(TabletInterruptSource::Gate3)
+        .is_err());
+}

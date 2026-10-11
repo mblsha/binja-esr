@@ -20,6 +20,7 @@ class Hardware:
         self.gate, self.gpio = bytearray(64), bytearray(18)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
         self.tablet, self.tablet_route = Tablet(), None
+        self.tablet_interrupt_source = "gate3"
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
@@ -172,7 +173,16 @@ class Hardware:
                 "PI tablet ADC route is unqualified; select an explicit candidate"
             )
         if self.tablet.set_contact(x, y, pressed) and self.auxiliary is not None:
-            self.gate[0x12] |= 8
+            self.gate[0x12] |= 2 if self.tablet_interrupt_source == "gate1" else 8
+
+    def configure_tablet_interrupt_source(self, source):
+        if source not in ("gate1", "gate3"):
+            raise ValueError("unknown PI contact-source candidate")
+        if self.tablet.pressed or self.tablet.data_reads:
+            raise ValueError(
+                "PI contact source must be selected before input/conversion"
+            )
+        self.tablet_interrupt_source = source
 
     def advance(self, cycle):
         self.cycle = cycle

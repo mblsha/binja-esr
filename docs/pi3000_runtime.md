@@ -46,8 +46,8 @@ semantics remain unqualified; model selection does not infer that experiment.
 FE:DBE41. `Integrated` routes control/data to 08B80/08BC0; `External` routes
 to 08800/08C00. `set_pi3000_raw_contact` supplies ten-bit samples and contact
 state. It never populates firmware event queues. Strict/absence profiles supply
-only samples; the auxiliary-control candidate routes press edges through gate
-bit3 and the normal EX interrupt. The route cannot change once selected. Both original ROM branches
+only samples; the auxiliary-control candidate routes press edges through the
+selected gate source and the normal EX interrupt. The ADC route cannot change once selected. Both original ROM branches
 return independently chosen raw coordinates with balanced stacks.
 
 ADC completion-on-first-read, held split-byte samples, binary contact pressure,
@@ -55,8 +55,19 @@ LCD sampling sync and physical route selection remain provisional. The
 controller frame is 240×336 native storage; the physical panel specification
 is 239×168 and scan orientation is still being recovered.
 
+`configure_pi3000_tablet_interrupt_source` selects `Gate3` (the unchanged
+default) or `Gate1` while contact is released and no ADC reads have occurred.
+Both remain physical
+wiring candidates. Gate3 reaches FD859, whose interrupt sampler requires
+BFF20.bit7. Gate1 reaches FD6B0, posts a foreground contact flag and reaches
+FE:DBC74 -> DBE41 without that mode bit. A reset/press/release replay with
+nominal timers increases ADC reads from 2 to 9 to 10 under Gate1; Gate3 stays
+at two. No guest event records or mode flags are seeded.
+
 `pi3000::input::Replay` validates raw tablet/ON contacts and boundary budgets
-before execution. The current startup replays deliver their hardware interrupt
-and acknowledgment, but BFF20.bit7 remains clear and the ROM takes its
-disabled-sampling branch. Timers and an initial-BP experiment do not resolve
-that mode-enable gap; ordinary foreground touch and GUI support remain open.
+before execution. Foreground sampling now executes, but the calibration frame
+does not advance. Repeated contact rearming and coordinate calibration remain
+open. Eight startup string calls also pass window selector CH=FF; FAFEB rejects
+it outside 10..1D before glyph rendering. Recovering that resource/window
+initialization is the next display dependency; this is not a missing font bank.
+Ordinary foreground touch and organizer GUI support remain open.

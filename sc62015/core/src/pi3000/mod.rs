@@ -34,6 +34,16 @@ pub enum TabletAdcRoute {
     External,
 }
 
+/// Explicit contact wiring candidates; neither has physical qualification.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabletInterruptSource {
+    /// FD859 interrupt sampler, conditional on BFF20.bit7.
+    #[default]
+    Gate3,
+    /// FD6B0 posts the contact flag consumed by the foreground raw sampler.
+    Gate1,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BootstrapProfile {
     /// Retain the native-only control and unknown auxiliary status trap.
@@ -65,6 +75,7 @@ pub struct Hardware {
     pub rtc: Rtc,
     pub tablet: Tablet,
     pub tablet_route: Option<TabletAdcRoute>,
+    pub tablet_interrupt_source: TabletInterruptSource,
     pub gpio: [u8; 18],
     pub clock_control: u8,
     pub startup_latches: [u8; 3],
@@ -96,6 +107,7 @@ impl Hardware {
             rtc: Rtc::default(),
             tablet: Tablet::default(),
             tablet_route: None,
+            tablet_interrupt_source: TabletInterruptSource::default(),
             gpio: [0; 18],
             clock_control: 0,
             startup_latches: [0; 3],
@@ -418,9 +430,24 @@ impl CoreRuntime {
         h.tablet_route = Some(route);
         Ok(())
     }
+    pub fn configure_pi3000_tablet_interrupt_source(
+        &mut self,
+        source: TabletInterruptSource,
+    ) -> Result<(), String> {
+        let mut h = self
+            .pi3000_hardware
+            .as_ref()
+            .ok_or("PI hardware is unavailable")?
+            .borrow();
+        if h.tablet.pressed || h.tablet.data_reads != 0 {
+            return Err("PI contact source must be selected before input/conversion".into());
+        }
+        h.tablet_interrupt_source = source;
+        Ok(())
+    }
     /// Raw ten-bit physical samples only. Interrupt wiring is still pending;
     /// this does not inject firmware event queues or calibration coordinates.
-    /// The AuxiliaryControl candidate routes press edges through gate bit3.
+    /// AuxiliaryControl routes press edges through the selected gate candidate.
     pub fn set_pi3000_raw_contact(&mut self, x: u16, y: u16, pressed: bool) -> Result<(), String> {
         let mut h = self
             .pi3000_hardware
@@ -431,9 +458,10 @@ impl CoreRuntime {
             return Err("PI tablet ADC route is unqualified; select an explicit candidate".into());
         }
         if h.tablet.set_contact(x, y, pressed)? && h.auxiliary.is_some() {
-            // Firmware-installed source bit3 dispatches FD859's raw sampler.
-            // Edge routing remains part of the explicit auxiliary candidate.
-            h.gate[0x12] |= 8;
+            h.gate[0x12] |= match h.tablet_interrupt_source {
+                TabletInterruptSource::Gate3 => 8,
+                TabletInterruptSource::Gate1 => 2,
+            };
         }
         Ok(())
     }
@@ -456,6 +484,7 @@ impl CoreRuntime {
             "auxiliary_accepted_count":h.auxiliary.as_ref().map(|a|a.accepted_count),
             "auxiliary_command_count":h.auxiliary_command_count,"auxiliary_commands":h.auxiliary_commands,
             "tablet_route":h.tablet_route.map(|r|format!("{r:?}")),
+            "tablet_interrupt_source":format!("{:?}",h.tablet_interrupt_source),
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),
         )

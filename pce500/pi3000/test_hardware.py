@@ -103,3 +103,21 @@ def test_raw_press_uses_candidate_gate_and_replay_rejects_all_invalid_data_first
     ]:
         with pytest.raises(ValueError):
             parse_replay(data)
+
+
+def test_foreground_contact_source_is_selected_before_input_and_conversion():
+    h = Hardware({}, auxiliary_control=True)
+    h.configure_tablet_route("integrated")
+    h.configure_tablet_interrupt_source("gate1")
+    h.set_raw_contact(66, 66, True)
+    assert h.gate[0x12] == 2
+    with pytest.raises(ValueError):
+        h.configure_tablet_interrupt_source("gate3")
+    h.gate[0x12] = 0
+    h.set_raw_contact(66, 67, True)
+    assert h.gate[0x12] == 0
+    h.set_raw_contact(66, 67, False)
+    h.tablet.write_conversion_control(6)
+    h.tablet.read_data()
+    with pytest.raises(ValueError):
+        h.configure_tablet_interrupt_source("gate3")
