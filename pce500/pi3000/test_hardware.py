@@ -301,18 +301,15 @@ def test_auxiliary_contact_handshake_completes_without_response_bytes():
     a.acknowledge(0xBF)
 
 
-def test_auxiliary_sample_irq_is_explicit_and_requires_an_active_capture():
+def test_auxiliary_sample_irq_follows_enable_register_before_capture_command():
     h = Hardware({}, auxiliary_control=True)
     h.write(0x8A06, 0x80)
     assert h.gate[0x12] == 0
     h.auxiliary_sample_irq_candidate = True
-    h.write(0x8A06, 0x80)
-    assert h.gate[0x12] == 0
-    h.write(0x8A20, 0xFC)
-    h.write(0x8A21, 3)
-    h.write(0x8A02, 0x80)
-    h.write(0x8A06, 0x80)
+    h.write(0x8A06, 0xC2)
     assert h.gate[0x12] == 8 and h.fault is None
+    assert h.auxiliary_command_count == 0
+    assert not h.auxiliary.capture_active
     assert not any(h.ram) and not any(h.scratch)
     h.gate[0x12] = 0
     h.advance_auxiliary_sample_irq(4095)

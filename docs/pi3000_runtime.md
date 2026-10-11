@@ -104,12 +104,16 @@ with BFF20.bit7 set requests 03FC through FD6EA. This command completes and
 acknowledges BF without reading response bytes; 05FE instead reads status01.
 The prior analysis annotation had these two branches reversed.
 
-The experimental Firmware profile now models a capture session between
-03FC/05FE and a sample-clock candidate enabled by 08A06.bit7. Gate3 reaches
+The experimental Firmware profile models capture sessions between 03FC/05FE,
+and a separate sample-clock candidate enabled by 08A06.bit7. Gate3 reaches
 FD859/FE:DBBD8. Its contact debounce needs a second stable sample before
 coordinate collection; one enable pulse is insufficient. The provisional
-cadence is 4096 native timing units and is inactive outside the capture
-session. AuxiliaryControl and Strict keep the candidate disabled. The private
+cadence is 4096 native timing units. The clock follows the enable register
+independently of the auxiliary capture session: FE:DD6C8 writes 08A06=C2
+when initializing an editor before any 03FC command. Requiring that command
+previously left direct To-do input without subsequent ADC samples. A minimal
+Rust/Python regression covers enable, cadence and disable with no command.
+AuxiliaryControl and Strict keep the candidate disabled. The private
 CLI retains explicit clock-disabled and period controls. Physical cadence,
 wiring, parameter effects and auxiliary recognition data remain unqualified.
 
@@ -157,6 +161,18 @@ both fields with the complete native reference panel. The regression uses
 can leave a different cursor phase. These scheduler budgets are emulator input
 contracts. Phonebook 2, field limits, reading/sorting, checklist and birthday
 behavior, deletion, searching, printing and communications remain open.
+
+The To-do control at raw `(240,128)` opens the ROM's Action List directly.
+Ordinary numeric-panel input saves content `1` with the initial entry date
+January 1, 1994, priority A and no completion mark/date. Leaving the editor
+displays the stored record. Native and actual browser pointer consumers match
+the complete visible panels and every backup byte; a fresh runtime restores
+the record and reopens its editor after normal calibration. The independent
+native replay uses 29 steps / 19,900,000 scheduler boundaries and retires
+7,948,333 instructions without a fault. Field editing, validation errors,
+completion/priority semantics, sorting, deletion and complete To-do storage
+contracts remain open. This consumer does not qualify handwriting recognition
+or physical sample timing.
 
 The browser exposes Calculator at raw `(200,424)`. Ordinary LCD contacts
 compute `2 + 3 = 5`; native and browser checks compare the complete visible

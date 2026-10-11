@@ -99,18 +99,15 @@ fn retained_backing_rejects_running_and_elapsed_halt_restore() {
 }
 
 #[test]
-fn auxiliary_sample_irq_is_explicit_and_requires_active_capture() {
+fn auxiliary_sample_irq_follows_enable_register_before_capture_command() {
     let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::AuxiliaryControl);
     h.write(0x8a06, 0x80, None);
     assert_eq!(h.gate[0x12], 0);
     h.auxiliary_sample_irq_candidate = true;
-    h.write(0x8a06, 0x80, None);
-    assert_eq!(h.gate[0x12], 0);
-    h.write(0x8a20, 0xfc, None);
-    h.write(0x8a21, 3, None);
-    h.write(0x8a02, 0x80, None);
-    h.write(0x8a06, 0x80, None);
+    h.write(0x8a06, 0xc2, None);
     assert_eq!(h.gate[0x12], 8);
+    assert_eq!(h.auxiliary_command_count, 0);
+    assert!(!h.auxiliary.as_ref().unwrap().capture_active);
     assert!(h.fault.is_none());
     assert!(h.ram.iter().all(|v| *v == 0));
     assert!(h.scratch.iter().all(|v| *v == 0));

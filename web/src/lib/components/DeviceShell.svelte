@@ -113,6 +113,9 @@
 			<OzTabletSurface label="Phonebook" fixed={[200, 276]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
 				><span>Phonebook</span></OzTabletSurface
 			>
+			<OzTabletSurface label="To-do" fixed={[240, 128]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
+				><span>To-do</span></OzTabletSurface
+			>
 			<OzTabletSurface label="Calculator" fixed={[200, 424]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
 				><span>Calculator</span></OzTabletSurface
 			>

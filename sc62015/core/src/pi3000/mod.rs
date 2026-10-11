@@ -119,10 +119,7 @@ impl Hardware {
             .auxiliary_sample_deadline
             .is_some_and(|deadline| cycle >= deadline)
         {
-            if self.auxiliary_sample_irq_candidate
-                && self.io_8a[6] & 0x80 != 0
-                && self.auxiliary.as_ref().is_some_and(|a| a.capture_active)
-            {
+            if self.auxiliary_sample_irq_candidate && self.io_8a[6] & 0x80 != 0 {
                 self.gate[0x12] |= 8;
                 self.auxiliary_sample_deadline =
                     Some(cycle.saturating_add(self.auxiliary_sample_period));
@@ -327,13 +324,10 @@ impl Hardware {
             }
             0x8a01 | 0x8a06..=0x8a08 => {
                 self.io_8a[(address - 0x8a00) as usize] = value;
-                // Explicit wiring hypothesis: a capture-enable write requests
-                // one ADC sample interrupt through the installed gate3 handler.
-                if address == 0x8a06
-                    && value & 0x80 != 0
-                    && self.auxiliary_sample_irq_candidate
-                    && self.auxiliary.as_ref().is_some_and(|a| a.capture_active)
-                {
+                // The editor enables 08A06.bit7 before any 03FC capture
+                // command. The explicit clock candidate follows this latch,
+                // independently of the auxiliary transport's capture session.
+                if address == 0x8a06 && value & 0x80 != 0 && self.auxiliary_sample_irq_candidate {
                     self.gate[0x12] |= 8;
                     self.auxiliary_sample_deadline =
                         Some(self.cycle.saturating_add(self.auxiliary_sample_period));

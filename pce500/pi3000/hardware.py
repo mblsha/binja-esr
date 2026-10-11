@@ -149,8 +149,6 @@ class Hardware:
                     address == 0x8A06
                     and value & 0x80
                     and self.auxiliary_sample_irq_candidate
-                    and self.auxiliary is not None
-                    and self.auxiliary.capture_active
                 ):
                     self.gate[0x12] |= 8
                     self.auxiliary_sample_deadline = (
@@ -226,12 +224,7 @@ class Hardware:
             self.auxiliary_sample_deadline is not None
             and cycle >= self.auxiliary_sample_deadline
         ):
-            if (
-                self.auxiliary_sample_irq_candidate
-                and self.io_8a[6] & 0x80
-                and self.auxiliary is not None
-                and self.auxiliary.capture_active
-            ):
+            if self.auxiliary_sample_irq_candidate and self.io_8a[6] & 0x80:
                 self.gate[0x12] |= 8
                 self.auxiliary_sample_deadline = cycle + self.auxiliary_sample_period
             else:
