@@ -51,3 +51,24 @@ host callbacks, active ROM Function Runner calls and failed runtimes require
 their existing separate backups/recovery controls. Physical reset/clock/IRQ
 accuracy and automatic alarm wake remain provisional. Saved-session restoration
 continues prior execution; it does not establish a hardware cold-boot result.
+
+## CPU-contract update, 11 October 2026
+
+Physical OZ-9600 probes through ordinary stock-OZ-707 BASIC CALLs established
+software setting of every ISR source in the tested direct, BP-relative and OR
+stores. The device now uses replacement ISR writes, low-byte ADD/SUB sources
+and coupled external predecrement block transfers independently of its reset
+or clock profile. The explicit `experimental-isr-clear-only` and
+`experimental-isr-mti-writable` profiles remain available for historical
+comparisons. Other machine models retain their existing defaults.
+
+Older v1, ON-edge and advancing-RTC full sessions automatically upgrade their
+MTI-only ISR implementation option to replacement. Import preserves all guest
+registers, pending latches, memory, peripherals and the saved scheduler boundary;
+only this implementation option changes. The explicit ISR experiment and other
+clock/wake/profile mismatches still reject before replacing the live runtime.
+RAM/RTC backup format and identity checks are unchanged.
+
+These measurements do not establish power-on BP, instruction timing, nested
+interrupt acceptance or alarm wake. The Schedule cache-eviction counterexample
+still reproduces with the corrected ISR store rule.

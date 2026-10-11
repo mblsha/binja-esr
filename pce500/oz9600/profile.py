@@ -37,32 +37,14 @@ class ExecutionProfile:
         ):
             raise ValueError("Unknown execution profile")
         experiment = name != "strict"
-        clear_only = name in {
-            "experimental-isr-clear-only",
-            "experimental-isr-mti-writable",
-            "experimental-on-edge",
-            "experimental-irq-imr",
-            "experimental-rtc",
-            "experimental-rtc-irq-imr",
-            "provisional-v1",
-            "experimental-external-wake",
-        }
         return cls(
-            "coupled_predecrement" if experiment else "independent",
-            "low_byte" if experiment else "strict",
+            # Device instruction measurements, independent of clock/reset profile.
+            "coupled_predecrement",
+            "low_byte",
             "clear_only_except_mti"
-            if name
-            in {
-                "experimental-isr-mti-writable",
-                "experimental-on-edge",
-                "experimental-irq-imr",
-                "experimental-rtc",
-                "experimental-rtc-irq-imr",
-                "provisional-v1",
-                "experimental-external-wake",
-            }
+            if name == "experimental-isr-mti-writable"
             else "clear_only"
-            if clear_only
+            if name == "experimental-isr-clear-only"
             else "replace",
             experiment,
             experiment,

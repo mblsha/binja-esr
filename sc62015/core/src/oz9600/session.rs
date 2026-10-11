@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     keyboard::{KeyboardMatrix, KeyboardSnapshot},
-    llama::state::LlamaState,
+    llama::state::{IsrSoftwareWritePolicy, LlamaState},
     sio::SioStub,
     timer::TimerContext,
     CoreError, CoreRuntime, DeviceModel, Result, SnapshotMetadata,
@@ -167,7 +167,7 @@ impl CoreRuntime {
         if body.len() > MAX_BODY || !gzip.into_inner().is_empty() {
             return Err(invalid("OZ session compression/length mismatch"));
         }
-        let data: Session = serde_json::from_slice(&body).map_err(invalid)?;
+        let mut data: Session = serde_json::from_slice(&body).map_err(invalid)?;
         if data.schema != 1
             || data.metadata.device_model != Some(DeviceModel::Oz9600)
             || data.external.len() != 0xe0000
@@ -177,6 +177,23 @@ impl CoreRuntime {
             || data.hardware.gpio.len() != 256
         {
             return Err(invalid("OZ session layout mismatch"));
+        }
+        // Older v1/ON/RTC sessions encode the disproven MTI-only store rule.
+        // Upgrade only that implementation option; guest registers, pending
+        // latches, memory, peripherals and scheduler position stay exact. The
+        // named MTI-only experiment has neither ON-edge nor advancing-calendar
+        // settings, so it retains the explicit profile mismatch protection.
+        if data.state.isr_software_write_policy() == IsrSoftwareWritePolicy::ClearOnlyExceptMti
+            && self.state.isr_software_write_policy() == IsrSoftwareWritePolicy::Replace
+            && (data.hardware.execution.diagnostic_on_irq_edge_only
+                || data
+                    .hardware
+                    .execution
+                    .experimental_rtc_second_period
+                    .is_some())
+        {
+            data.state
+                .set_isr_software_write_policy(IsrSoftwareWritePolicy::Replace);
         }
         if data.state.block_transfer_policy() != self.state.block_transfer_policy()
             || data.state.byte_arithmetic_source_policy()
@@ -390,6 +407,59 @@ mod tests {
         let before = live.oz9600_session_state().unwrap();
         assert!(live.restore_oz9600_session(&image).is_err());
         assert_eq!(before, live.oz9600_session_state().unwrap());
+    }
+    #[test]
+    fn historical_v1_on_and_rtc_sessions_upgrade_only_isr_implementation_option() {
+        use super::super::ExecutionProfile;
+        for profile in [
+            ExecutionProfile::ProvisionalV1,
+            ExecutionProfile::ExperimentalOnEdge,
+            ExecutionProfile::ExperimentalRtc,
+        ] {
+            let mut old = runtime();
+            old.configure_oz9600_profile(profile).unwrap();
+            old.step_scheduler_boundaries(10).unwrap();
+            old.set_reg("BA", 0x5a11);
+            old.memory.write_internal_byte(0xfc, 0x42);
+            old.oz9600_hardware().unwrap().borrow_mut().ram[123] = 97;
+            old.state
+                .set_isr_software_write_policy(IsrSoftwareWritePolicy::ClearOnlyExceptMti);
+            let image = old.oz9600_session_state().unwrap();
+            let battery = old.oz9600_retained_state().unwrap();
+            // Expected continuation differs solely in CPU implementation policy.
+            old.state
+                .set_isr_software_write_policy(IsrSoftwareWritePolicy::Replace);
+            let expected = old.oz9600_session_state().unwrap();
+            let mut candidate = runtime();
+            candidate.configure_oz9600_profile(profile).unwrap();
+            candidate.restore_oz9600_session(&image).unwrap();
+            assert_eq!(candidate.oz9600_session_state().unwrap(), expected);
+            assert_eq!(candidate.oz9600_retained_state().unwrap(), battery);
+            assert_eq!(candidate.get_reg("BA"), 0x5a11);
+            assert_eq!(candidate.memory.internal_slice()[0xfc], 0x42);
+        }
+    }
+    #[test]
+    fn explicit_isr_experiments_and_other_profile_mismatches_do_not_migrate() {
+        use super::super::ExecutionProfile;
+        let mut legacy = runtime();
+        legacy
+            .configure_oz9600_profile(ExecutionProfile::ExperimentalIsrMtiWritable)
+            .unwrap();
+        let image = legacy.oz9600_session_state().unwrap();
+        let mut ordinary = runtime();
+        ordinary
+            .configure_oz9600_profile(ExecutionProfile::Experimental)
+            .unwrap();
+        let before = ordinary.oz9600_session_state().unwrap();
+        assert!(ordinary.restore_oz9600_session(&image).is_err());
+        assert_eq!(ordinary.oz9600_session_state().unwrap(), before);
+        let mut v1 = runtime();
+        assert!(v1.restore_oz9600_session(&image).is_err());
+        let image = changed(&runtime().oz9600_session_state().unwrap(), |d| {
+            d["state"]["isr_software_write_policy"] = serde_json::json!("clear_only");
+        });
+        assert!(v1.restore_oz9600_session(&image).is_err());
     }
 }
 

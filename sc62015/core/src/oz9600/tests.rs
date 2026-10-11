@@ -171,11 +171,11 @@ fn strict_device_defaults_do_not_enable_diagnostic_cpu_clock_or_pc_devices() {
     assert!(!rt.timer.enabled);
     assert_eq!(
         rt.state.block_transfer_policy(),
-        BlockTransferPolicy::Independent
+        BlockTransferPolicy::CoupledPredecrement
     );
     assert_eq!(
         rt.state.byte_arithmetic_source_policy(),
-        ByteArithmeticSourcePolicy::Strict
+        ByteArithmeticSourcePolicy::LowByte
     );
     assert_eq!(rt.memory.read_internal_byte_silent(0xec), Some(0));
     assert_eq!(
@@ -288,7 +288,7 @@ fn v1_profile_initializes_cpu_without_patching_empty_or_saved_battery_memory() {
     assert_eq!(rt.oz9600_retained_state().unwrap(), empty);
     assert_eq!(
         rt.state.isr_software_write_policy(),
-        IsrSoftwareWritePolicy::ClearOnlyExceptMti
+        IsrSoftwareWritePolicy::Replace
     );
     {
         let hw = rt.oz9600_hardware().unwrap().borrow();
@@ -334,7 +334,7 @@ fn experimental_calendar_runs_in_halt_freezes_in_hold_and_requires_profile_opt_i
     assert_eq!(rt.memory.read_internal_byte_silent(0xec), Some(0));
     assert_eq!(
         rt.state.isr_software_write_policy(),
-        IsrSoftwareWritePolicy::ClearOnlyExceptMti
+        IsrSoftwareWritePolicy::Replace
     );
     rt.configure_oz9600_profile(ExecutionProfile::Strict)
         .unwrap();
@@ -826,4 +826,129 @@ fn experimental_external_off_wake_requires_rtc_gate_and_cpu_masks_without_on_con
             }
         }
     }
+}
+
+// Raw arithmetic result SHA256 from the 11 October 2026 physical acquisition:
+// 986495f8bbabb058a0666a08b57544b7d7a6a5ebc1f2a2211870c462715e2970.
+// Component fixtures exercise guest instructions; no ROM consumer is patched.
+#[test]
+fn physical_arithmetic_vectors_execute_in_default_and_v1_device_modes() {
+    let cases = [
+        (0x4e, 8, 2, 0x5a06, 0),
+        (0x4e, 8, 0x102, 0x5a06, 0),
+        (0x4e, 8, 9, 0x5aff, 1),
+        (0x4e, 0x80, 1, 0x5a7f, 0),
+        (0x4e, 0, 0, 0x5a00, 2),
+        (0x4e, 0, 0x101, 0x5aff, 1),
+        (0x46, 8, 2, 0x5a0a, 0),
+        (0x46, 8, 0x102, 0x5a0a, 0),
+        (0x46, 0xff, 1, 0x5a00, 3),
+        (0x46, 0x7f, 1, 0x5a80, 0),
+        (0x46, 0x80, 0x80, 0x5a00, 3),
+        (0x46, 0, 0, 0x5a00, 2),
+    ];
+    for profile in [ExecutionProfile::Strict, ExecutionProfile::ProvisionalV1] {
+        for (opcode, a, i, expected_ba, expected_flags) in cases {
+            let mut rt = synthetic_runtime();
+            rt.configure_oz9600_profile(profile).unwrap();
+            let program = [
+                0x30,
+                0xcc,
+                0xfb,
+                0, // IMR=0; source clocks cannot accept IRQ
+                0x0a,
+                a,
+                0x5a,
+                0x0b,
+                i as u8,
+                (i >> 8) as u8,
+                opcode,
+                0x03,
+            ];
+            rt.load_rom(&program, 0xe0000);
+            rt.step_scheduler_boundaries(4).unwrap();
+            assert_eq!(rt.get_reg("BA"), expected_ba);
+            assert_eq!(rt.get_reg("I"), i);
+            assert_eq!(rt.get_reg("F") & 3, expected_flags);
+        }
+    }
+}
+
+#[test]
+fn physical_isr_vectors_set_every_source_in_default_and_v1_modes() {
+    for profile in [ExecutionProfile::Strict, ExecutionProfile::ProvisionalV1] {
+        for method in 0..3 {
+            for requested in [0, 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x7f] {
+                let mut rt = synthetic_runtime();
+                rt.configure_oz9600_profile(profile).unwrap();
+                let mut program = vec![
+                    0x30, 0xcc, 0xfb, 0, // IMR=0
+                    0x30, 0xcc, 0xec, 0xfc, // BP=FC
+                    0x30, 0xcc, 0xfc, 0,
+                ]; // clear ISR
+                match method {
+                    0 => program.extend([0x30, 0xcc, 0xfc, requested]),
+                    1 => program.extend([0xcc, 0, requested]), // MV (BP+0),imm
+                    _ => program.extend([0x30, 0x79, 0xfc, requested]),
+                }
+                program.extend([0x30, 0x80, 0xfc]); // MV A,(ISR)
+                rt.load_rom(&program, 0xe0000);
+                rt.step_scheduler_boundaries(5).unwrap();
+                assert_eq!(rt.get_reg("A"), u32::from(requested), "method{method}");
+            }
+        }
+    }
+}
+
+#[test]
+fn physical_predecrement_and_overlap_vectors_are_device_defaults() {
+    let mut rt = synthetic_runtime();
+    for (address, value) in (0x70..0x80).zip((1..=16).map(|n| (n * 0x11) as u8)) {
+        rt.memory.write_internal_byte(address, value);
+    }
+    rt.load_rom(
+        &[0x0b, 8, 0, 0x0c, 8, 0, 1, 0x30, 0xeb, 0x34, 0x77],
+        0xe0000,
+    );
+    rt.step_scheduler_boundaries(3).unwrap();
+    assert_eq!(rt.get_reg("X"), 0x10000);
+    assert_eq!(rt.get_reg("I"), 0);
+    for (n, expected) in [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            rt.memory.read_byte_for_preflight(0x10000 + n as u32, None),
+            Some(expected)
+        );
+    }
+    rt.load_rom(&[0x0b, 8, 0, 0x32, 0xcb, 0x72, 0x70], 0xe0000);
+    rt.set_reg("PC", 0xe0000);
+    rt.step_scheduler_boundaries(2).unwrap();
+    let expected = [
+        0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        0x10,
+    ];
+    for (address, expected) in (0x70..0x80).zip(expected) {
+        assert_eq!(rt.memory.read_internal_byte_silent(address), Some(expected));
+    }
+    rt.power_on_reset().unwrap();
+    assert_eq!(
+        rt.state.byte_arithmetic_source_policy(),
+        ByteArithmeticSourcePolicy::LowByte
+    );
+    assert_eq!(
+        rt.state.block_transfer_policy(),
+        BlockTransferPolicy::CoupledPredecrement
+    );
+    // The related earlier models retain their separately qualified defaults.
+    let other = CoreRuntime::new();
+    assert_eq!(
+        other.state.byte_arithmetic_source_policy(),
+        ByteArithmeticSourcePolicy::Strict
+    );
+    assert_eq!(
+        other.state.block_transfer_policy(),
+        BlockTransferPolicy::Independent
+    );
 }

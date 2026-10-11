@@ -95,28 +95,22 @@ def test_profiles_do_not_claim_automatic_experimental_settings():
     assert mti_writable.isr_software_write == "clear_only_except_mti"
     assert mti_writable.timers_enabled
     clock = ExecutionProfile.configure("experimental-rtc")
-    assert clock.initial_bp == 0 and clock.isr_software_write == "clear_only_except_mti"
+    assert clock.initial_bp == 0 and clock.isr_software_write == "replace"
     assert clock.rtc_a2_period == 512_000 and clock.rtc_second_period == 1_024_000
     edge = ExecutionProfile.configure("experimental-on-edge")
-    assert edge.initial_bp == 0 and edge.isr_software_write == "clear_only_except_mti"
+    assert edge.initial_bp == 0 and edge.isr_software_write == "replace"
     assert edge.on_irq_edge_only and edge.rtc_a2_period == 1_000_000
     assert edge.rtc_second_period is None
     assert not mti_writable.on_irq_edge_only and not clock.on_irq_edge_only
     irq_imr = ExecutionProfile.configure("experimental-irq-imr")
     assert irq_imr.on_irq_edge_only and irq_imr.irq_imr_only
     assert irq_imr.rtc_second_period is None and irq_imr.rtc_a2_period == 1_000_000
-    assert (
-        irq_imr.initial_bp == 0
-        and irq_imr.isr_software_write == "clear_only_except_mti"
-    )
+    assert irq_imr.initial_bp == 0 and irq_imr.isr_software_write == "replace"
     assert not edge.irq_imr_only and not clock.irq_imr_only
     combined = ExecutionProfile.configure("experimental-rtc-irq-imr")
     assert combined.on_irq_edge_only and combined.irq_imr_only
     assert combined.rtc_second_period == 1_024_000 and combined.rtc_a2_period == 512_000
-    assert (
-        combined.initial_bp == 0
-        and combined.isr_software_write == "clear_only_except_mti"
-    )
+    assert combined.initial_bp == 0 and combined.isr_software_write == "replace"
     assert ExecutionProfile.configure("strict").rtc_second_period is None
     assert ExecutionProfile.configure("strict").isr_software_write == "replace"
     assert (
@@ -138,7 +132,7 @@ def test_v1_profile_exposes_provisional_power_on_and_saved_memory_reset_contract
     assert cold.initial_bp == 0xD0 and warm.initial_bp == 0
     assert cold.block_transfer == warm.block_transfer == "coupled_predecrement"
     assert cold.byte_arithmetic == warm.byte_arithmetic == "low_byte"
-    assert cold.isr_software_write == warm.isr_software_write == "clear_only_except_mti"
+    assert cold.isr_software_write == warm.isr_software_write == "replace"
     assert cold.on_irq_edge_only and cold.irq_imr_only
     assert cold.rtc_second_period == 1_024_000 and cold.rtc_a2_period == 512_000
     with pytest.raises(ValueError):

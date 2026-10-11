@@ -433,5 +433,6 @@ pub fn configure_hardware(fixed: &[u8], hw: Hardware) -> Result<CoreRuntime, Str
         )))
         .map_err(|error| error.to_string())?;
     runtime.oz9600_hardware = Some(hardware);
+    runtime.configure_oz9600_cpu_instruction_contracts();
     Ok(runtime)
 }

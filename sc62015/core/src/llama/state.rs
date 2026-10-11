@@ -49,7 +49,8 @@ pub enum PowerState {
 }
 
 /// Nonarchitectural transfer policy. The coupled variant is inferred from
-/// ESR-P firmware save/restore pairs; it is not a qualified silicon contract.
+/// ESR-P firmware save/restore pairs and measured OZ-9600 external copy cases.
+/// Those cases do not qualify every ESR-P addressing mode or cycle count.
 /// Keep the measured SC62015 policy as the default for existing machines.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,7 +68,8 @@ impl BlockTransferPolicy {
 
 /// Explicit firmware compatibility hypothesis for ESR-P byte ADD/SUB.
 /// LowByte truncates a wider source before arithmetic and flag calculation;
-/// it is not a measured silicon contract. Existing SC62015 users stay strict.
+/// measured OZ-9600 A/I fixtures support this device choice, without qualifying
+/// every ESR-P operand form. Existing SC62015 users stay strict.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ByteArithmeticSourcePolicy {
@@ -82,7 +84,8 @@ impl ByteArithmeticSourcePolicy {
     }
 }
 
-/// Explicit ISR guest-write compatibility hypothesis. Hardware/host latch
+/// Explicit ISR guest-write policy; the OZ-9600 selects measured replacement.
+/// The two clear-only choices remain historical hypotheses. Hardware/host latch
 /// updates bypass this CPU-store policy. Existing machines retain replacement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
