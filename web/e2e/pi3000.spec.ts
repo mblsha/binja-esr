@@ -389,6 +389,52 @@ test('PI browser initializes, handles input and power, and reopens a saved Sched
 	expect(reopenedContentDigest).toBe('7a5f6055da909a1b7b9fa0da10724478f8c7575e7c8ce761f3b34489c50de0e0');
 	expect(reopenedPanelDigest).toBe('9caec32856f67c8ebffff4f202a227807917adf46451004e07aa510e817d96f5');
 	expect(errors).toEqual([]);
+	await holdKey('vk-off', 200_000, 750_000);
+	const recordOffState = await rpc(page, 'pi_state');
+	expect(recordOffState.pc).toBe(0xf8ed5);
+	await rpc(page, 'step', { instructions: 100_000 });
+	const recordStillOff = await rpc(page, 'pi_state');
+	expect(recordStillOff.native_instructions).toBe(recordOffState.native_instructions);
+	await holdKey('vk-on', 250_000, 4_770_000);
+	const recordWakeState = await rpc(page, 'pi_state');
+	expect(recordWakeState.fault).toBeNull();
+	expect(recordWakeState.pc).toBe(0xf06ba);
+	// Calendar -> selected day -> weekly view -> day view -> record -> Edit.
+	await holdTouch(222, 34, 50_000, 300_000);
+	await holdTouch(222, 34, 50_000, 1_000_000);
+	await holdTouch(14, 146, 50_000, 1_000_000);
+	await holdTouch(100, 70, 50_000, 300_000);
+	await holdTouch(198, 7, 50_000, 1_000_000);
+	const retainedRecordState = await rpc(page, 'pi_state');
+	expect(retainedRecordState.fault).toBeNull();
+	expect(retainedRecordState.pc).toBe(0xf06ba);
+	const retainedCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(retainedCapture.error).toBeNull();
+	const retainedPixels = JSON.parse(retainedCapture.resultJson).pixels;
+	const retainedPanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					retainedPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-schedule-power-reopened.png') });
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < retainedPixels.length; i++)
+			if (retainedPixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		await writeFile(resolve(output, 'browser-power-reopened-controller.pbm'), frame);
+		await writeFile(
+			resolve(output, 'browser-power-record-diagnostic.json'),
+			JSON.stringify({ recordOffState, recordStillOff, recordWakeState, retainedRecordState, retainedPanelDigest }),
+		);
+	}
+	expect(retainedPanelDigest).toBe(reopenedPanelDigest);
+	await expect.poll(renderedPanelDigest).toBe(retainedPanelDigest);
+	expect(errors).toEqual([]);
 	if (output) {
 		await writeFile(
 			resolve(output, 'browser-startup.json'),

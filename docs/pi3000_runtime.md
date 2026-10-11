@@ -112,8 +112,11 @@ content. The ROM's day view shows the stored record; switching to Phonebook
 and back, then using Edit, reopens it. Actual browser LCD contacts and the
 Calendar/Schedule and Phonebook application controls reproduce the workflow
 and its visible panel. No guest queues, coefficients or storage are injected.
-This qualifies this software record workflow, not complete application
-coverage, OFF/ON record retention or handwriting recognition.
+The saved record also survives OFF/ON. Wake returns to Calendar; selecting
+January 1, opening its weekly view, choosing the Saturday day row and then
+selecting the record enables Edit. Native and actual browser contacts reopen
+the same content with identical visible pixels. Complete application coverage,
+persisted restart images and handwriting recognition remain open.
 
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only
