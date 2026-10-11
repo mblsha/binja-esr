@@ -917,6 +917,156 @@ test('PI daily alarm returns to Clock through ordinary C/CE input', async ({ pag
 	}
 });
 
+test('PI Phonebook saves and restores a name and phone through ordinary input', async ({ page }, testInfo) => {
+	test.setTimeout(180_000);
+	const bundle = await readFile(bundlePath!);
+	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
+	await installPiRpc(page);
+	const errors: string[] = [];
+	page.on('pageerror', (error) => errors.push(String(error)));
+	await page.goto('/');
+	await expect(page.getByTestId('pause-resume')).toBeEnabled();
+	const canvas = page.getByTestId('pi-tablet-lcd').locator('canvas');
+	async function rawPrefix(steps: any[]) {
+		const { generation } = await rpc(page, 'input_state');
+		for (const step of steps) {
+			if (step.tablet)
+				await rpc(page, 'pi_tablet', {
+					contact: step.tablet,
+					owner: 'phonebook-raw-prefix',
+					generation,
+					cancel: !step.tablet.pressed,
+				});
+			await rpc(page, 'step', { instructions: step.boundaries });
+		}
+	}
+	async function panelDigest() {
+		const observed = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+		expect(observed.error).toBeNull();
+		const pixels = JSON.parse(observed.resultJson).pixels;
+		return createHash('sha256')
+			.update(
+				Buffer.from(
+					Array.from({ length: 239 * 168 }, (_, i) => (pixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0)),
+				),
+			)
+			.digest('hex');
+	}
+	async function renderedDigest() {
+		return canvas.evaluate(async (element: HTMLCanvasElement) => {
+			const rgba = element.getContext('2d')!.getImageData(0, 0, 239, 168).data;
+			const bytes = new Uint8Array(239 * 168);
+			for (let i = 0; i < bytes.length; i++) bytes[i] = rgba[i * 4] < 128 ? 1 : 0;
+			const digest = await crypto.subtle.digest('SHA-256', bytes);
+			return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+		});
+	}
+	async function touch(x: number, y: number, held: number, released: number) {
+		await canvas.scrollIntoViewIfNeeded();
+		const box = (await canvas.boundingBox())!;
+		await page.mouse.move(box.x + ((x + 0.5) / 239) * box.width, box.y + ((y + 0.5) / 168) * box.height);
+		await page.mouse.down();
+		await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
+		await rpc(page, 'step', { instructions: held });
+		await page.mouse.up();
+		await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(0);
+		await rpc(page, 'step', { instructions: released });
+	}
+	const replay = JSON.parse(await readFile(resolve('e2e/fixtures/pi3000-phonebook-record.json'), 'utf8'));
+	await rawPrefix(replay.steps.slice(0, 21));
+	expect(await panelDigest()).toBe('82b78298286d7d73a559f6282bd833154eed8d98aebe5294f5f63af73bfc1b47');
+	const contacts = [
+		[100, 24],
+		[223, 93],
+		[16, 142],
+		[219, 155], // Name 1.
+		[100, 56],
+		[223, 93],
+		[40, 142],
+		[64, 142],
+		[16, 130],
+		[219, 155], // Phone 234.
+		[185, 7],
+		[120, 84],
+		[211, 7],
+		[223, 7], // Register, message, exit and Edit.
+	];
+	const expected: Record<number, string> = {
+		28: '66e45a9e296ec3ccae9432bb7baed97fa8789f00d7fe2751d6f3551893902b2a',
+		40: '26a164a795c5e5a219dccc352b9c7cf0fa453e76ef5d2431f0ab10550cba542a',
+		42: '0f864ac286c214349be4854c4c7c1c23f164f760a99c8c05736129fa4351fe30',
+		46: '029ab482ad319f78fd3db3c6bc0b434f0603c421b316be6044b581384e425a84',
+		48: 'eafb4dd4966c453c2879cfd5b2fdbd60f573a27d579988ed2e3c97a338c7f412',
+	};
+	const panels: Record<number, string> = {};
+	for (const [i, [x, y]] of contacts.entries()) {
+		const held = replay.steps[21 + i * 2],
+			released = replay.steps[22 + i * 2];
+		await touch(x, y, held.boundaries, released.boundaries);
+		const step = 22 + i * 2;
+		if (expected[step]) {
+			panels[step] = await panelDigest();
+			expect(panels[step]).toBe(expected[step]);
+			await expect.poll(renderedDigest).toBe(panels[step]);
+			if (output) await canvas.screenshot({ path: resolve(output, `browser-phonebook-step-${step}.png`) });
+		}
+	}
+	const state = await rpc(page, 'pi_state');
+	expect(state.fault).toBeNull();
+	expect(state.native_instructions).toBe(10_455_064);
+	const downloadPromise = page.waitForEvent('download');
+	await page.getByTestId('pi-backup-export').click();
+	const download = await downloadPromise;
+	const backupPath = output
+		? resolve(output, 'browser-phonebook.piram')
+		: testInfo.outputPath('browser-phonebook.piram');
+	await download.saveAs(backupPath);
+	const backup = await readFile(backupPath);
+	expect(backup.length).toBe(104 + 0x40000 + 0x4000 + 32);
+	await page.getByTestId('pi-backup-file').setInputFiles({
+		name: 'phonebook.piram',
+		mimeType: 'application/octet-stream',
+		buffer: backup,
+	});
+	expect(createHash('sha256').update(backup).digest('hex')).toBe(
+		'ece21aa8204180aa844d9c7d713cffa0331fa57538be3d9fcf7db4f68e614b28',
+	);
+	await expect(page.getByTestId('pi-backup-status')).toContainText('Restored phonebook.piram');
+	expect((await rpc(page, 'pi_state')).native_instructions).toBe(0);
+	const restart = JSON.parse(await readFile(resolve('e2e/fixtures/pi3000-phonebook-restart.json'), 'utf8'));
+	await rawPrefix(restart.steps.slice(0, 13));
+	const launcher = page.getByTestId('pi-tablet-phonebook');
+	await launcher.hover();
+	await page.mouse.down();
+	await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
+	await rpc(page, 'step', { instructions: 200_000 });
+	await page.mouse.up();
+	await rpc(page, 'step', { instructions: 1_000_000 });
+	await touch(223, 7, 200_000, 1_000_000);
+	const restoredList = await panelDigest();
+	expect(restoredList).toBe('14d50040cdb89cac08f20680fa5fb9fb7dc4f2d405e9374cfca91572d3203311');
+	await touch(213, 7, 200_000, 1_000_000);
+	const restored = await panelDigest();
+	expect(restored).toBe('97f1b50051a561467bd07dde1d524ccdadde2693db2eabdb16716c49e7c21c6a');
+	await expect.poll(renderedDigest).toBe(restored);
+	expect((await rpc(page, 'pi_state')).fault).toBeNull();
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-phonebook-restarted.png') });
+		await writeFile(
+			resolve(output, 'browser-phonebook.json'),
+			JSON.stringify({
+				panels,
+				state,
+				restoredList,
+				restored,
+				backupSha256: createHash('sha256').update(backup).digest('hex'),
+				errors,
+			}),
+		);
+	}
+});
+
 test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);

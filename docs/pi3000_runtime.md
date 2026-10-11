@@ -147,6 +147,17 @@ the original saved-record panel. The private native CLI exposes
 restores and re-exports a native-produced image byte-identically. Complete
 application, clock/alarm, card and serial coverage remain open.
 
+Phonebook 1 also completes an ordinary two-field workflow. Native raw contacts
+and actual browser pointer input enter name `1` and phone `234`, register the
+record, leave the editor and reopen it through Edit. The browser's exported
+`PIRAM01` image is byte-identical to the native image. Restoring that backup
+into a fresh runtime, completing calibration and reopening Phonebook recovers
+both fields with the complete native reference panel. The regression uses
+200,000-boundary holds to match the browser's tablet hold policy; shorter holds
+can leave a different cursor phase. These scheduler budgets are emulator input
+contracts. Phonebook 2, field limits, reading/sorting, checklist and birthday
+behavior, deletion, searching, printing and communications remain open.
+
 The browser exposes Calculator at raw `(200,424)`. Ordinary LCD contacts
 compute `2 + 3 = 5`; native and browser checks compare the complete visible
 panel. The tall middle button is plus, and the tall button to its right is

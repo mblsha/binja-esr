@@ -1,0 +1,429 @@
+{
+	"steps": [
+		{
+			"boundaries": 400000,
+			"label": "wait for four calibration targets"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 240,
+				"pressed": true
+			},
+			"label": "hold target 0"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 240,
+				"pressed": false
+			},
+			"label": "release target 0"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 240,
+				"pressed": true
+			},
+			"label": "hold target 1"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 240,
+				"pressed": false
+			},
+			"label": "release target 1"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 700,
+				"pressed": true
+			},
+			"label": "hold target 2"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 700,
+				"pressed": false
+			},
+			"label": "release target 2"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 700,
+				"pressed": true
+			},
+			"label": "hold target 3"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 700,
+				"pressed": false
+			},
+			"label": "release target 3"
+		},
+		{
+			"boundaries": 3000000,
+			"label": "periodic RTC completion wait"
+		},
+		{
+			"boundaries": 250000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": true
+			},
+			"label": "touch contrast Finish"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": false
+			},
+			"label": "release and continue startup"
+		},
+		{
+			"boundaries": 250000,
+			"tablet": {
+				"raw_x": 427,
+				"raw_y": 597,
+				"pressed": true
+			},
+			"label": "confirm fresh emulated RAM initialization"
+		},
+		{
+			"boundaries": 1500000,
+			"tablet": {
+				"raw_x": 427,
+				"raw_y": 597,
+				"pressed": false
+			},
+			"label": "release and enter organizer"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "finish RAM initialization"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 604,
+				"raw_y": 128,
+				"pressed": true
+			},
+			"label": "new-entry"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 604,
+				"raw_y": 128,
+				"pressed": false
+			},
+			"label": "Bounded foreground"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 440,
+				"raw_y": 544,
+				"pressed": true
+			},
+			"label": "content-center"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 440,
+				"raw_y": 544,
+				"pressed": false
+			}
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 200,
+				"raw_y": 276,
+				"pressed": true
+			},
+			"label": "left-middle-press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 200,
+				"raw_y": 276,
+				"pressed": false
+			},
+			"label": "left-middle-release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 482,
+				"raw_y": 204,
+				"pressed": true
+			},
+			"label": "focus Phonebook name field press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 482,
+				"raw_y": 204,
+				"pressed": false
+			},
+			"label": "focus Phonebook name field release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 512,
+				"pressed": true
+			},
+			"label": "select numeric input press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 512,
+				"pressed": false
+			},
+			"label": "select numeric input release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "type name digit1 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "type name digit1 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": true
+			},
+			"label": "apply name input press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": false
+			},
+			"label": "apply name input release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 482,
+				"raw_y": 347,
+				"pressed": true
+			},
+			"label": "focus phone field press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 482,
+				"raw_y": 347,
+				"pressed": false
+			},
+			"label": "focus phone field release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 512,
+				"pressed": true
+			},
+			"label": "select numeric phone input press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 512,
+				"pressed": false
+			},
+			"label": "select numeric phone input release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 357,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "type phone digit2 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 357,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "type phone digit2 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 407,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "type phone digit3 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 407,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "type phone digit3 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 678,
+				"pressed": true
+			},
+			"label": "type phone digit4 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 678,
+				"pressed": false
+			},
+			"label": "type phone digit4 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": true
+			},
+			"label": "apply phone234 press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": false
+			},
+			"label": "apply phone234 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 658,
+				"raw_y": 128,
+				"pressed": true
+			},
+			"label": "register name1 phone234 press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 658,
+				"raw_y": 128,
+				"pressed": false
+			},
+			"label": "register name1 phone234 release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 523,
+				"raw_y": 472,
+				"pressed": true
+			},
+			"label": "dismiss registration message press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 523,
+				"raw_y": 472,
+				"pressed": false
+			},
+			"label": "dismiss registration message release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 712,
+				"raw_y": 128,
+				"pressed": true
+			},
+			"label": "leave record editor press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 712,
+				"raw_y": 128,
+				"pressed": false
+			},
+			"label": "leave record editor release"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 128,
+				"pressed": true
+			},
+			"label": "reopen saved record through Edit press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 737,
+				"raw_y": 128,
+				"pressed": false
+			},
+			"label": "reopen saved record through Edit release"
+		}
+	]
+}
