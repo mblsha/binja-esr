@@ -4,7 +4,8 @@
 class Auxiliary:
     def __init__(self):
         self.written, self.ready_at, self.complete = 0, None, False
-        self.response_bytes = bytes(32)
+        self.response_byte = None
+        self.capture_active = False
         self.accepted = []
         self.accepted_count = 0
 
@@ -25,6 +26,8 @@ class Auxiliary:
             0x00F9: 2,
             0x01F9: 2,
             0x02F9: 2,
+            0x03FC: 2,
+            0x05FE: 2,
             0x04FE: 3,
             0x03FE: 8,
         }.get(header)
@@ -38,7 +41,11 @@ class Auxiliary:
                 f"PI auxiliary control requires exactly {count} written bytes"
             )
         self.written = 0
-        self.response_bytes = b"\x01" + bytes(31)
+        self.response_byte = None if header == 0x03FC else 1
+        if header == 0x03FC:
+            self.capture_active = True
+        if header == 0x05FE:
+            self.capture_active = False
         self.ready_at = cycle + 32
         self.accepted_count += 1
         if len(self.accepted) < 256:
@@ -52,7 +59,7 @@ class Auxiliary:
         return 2 | (0x80 if self.ready_at is not None else 0x40 if self.complete else 0)
 
     def response(self, offset):
-        return self.response_bytes[0] if self.complete and offset == 0 else None
+        return self.response_byte if self.complete and offset == 0 else None
 
     def acknowledge(self, value):
         if value != 0xBF:

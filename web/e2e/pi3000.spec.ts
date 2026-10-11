@@ -9,7 +9,7 @@ test.skip(!bundlePath, 'Supply verified private PI bundle with PI3000_ROM_PATH')
 const rpc = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__piRpc(type, payload), { type, payload });
 
-test('PI fresh browser touch completes initialization and enters the calendar', async ({ page }) => {
+test('PI browser initializes, handles input and power, and reopens a saved Schedule record', async ({ page }) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);
 	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
@@ -304,6 +304,91 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	}
 	expect(contentControlsDigest).toBe('6bf16689d09e4ef64ae62cbcb635a2faa53279709da73f392af8d5a5e3fe20dc');
 	expect(errors).toEqual([]);
+	await holdTouch(223, 93, 50_000, 300_000);
+	await holdTouch(16, 142, 50_000, 300_000);
+	await holdTouch(219, 155, 50_000, 1_000_000);
+	const savedState = await rpc(page, 'pi_state');
+	expect(savedState.fault).toBeNull();
+	if (output) await canvas.screenshot({ path: resolve(output, 'browser-schedule-saved.png') });
+	await holdTouch(120, 84, 50_000, 1_000_000);
+	await holdTouch(198, 7, 50_000, 1_000_000);
+	async function holdApplication(id: string) {
+		const control = page.getByTestId(id);
+		await control.scrollIntoViewIfNeeded();
+		await control.hover();
+		await page.mouse.down();
+		await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
+		await rpc(page, 'step', { instructions: 200_000 });
+		await page.mouse.up();
+		await rpc(page, 'step', { instructions: 1_000_000 });
+	}
+	await holdApplication('pi-tablet-phonebook');
+	const phonebookState = await rpc(page, 'pi_state');
+	expect(phonebookState.fault).toBeNull();
+	expect(phonebookState.selector).toBe(0xf9);
+	const phonebookCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(phonebookCapture.error).toBeNull();
+	const phonebookPixels = JSON.parse(phonebookCapture.resultJson).pixels;
+	const phonebookHeaderDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 16 }, (_, i) =>
+					phonebookPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(phonebookHeaderDigest).toBe('d989767fc00b3380ab73d5ede75a1dc17279bfb253eac63ccde11676c43b9b86');
+	if (output) await canvas.screenshot({ path: resolve(output, 'browser-record-phonebook.png') });
+	await holdApplication('pi-tablet-schedule');
+	await holdTouch(198, 7, 50_000, 1_000_000);
+	const reopenedState = await rpc(page, 'pi_state');
+	expect(reopenedState.fault).toBeNull();
+	expect(reopenedState.pc).toBe(0xf06ba);
+	const reopenedCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(reopenedCapture.error).toBeNull();
+	const reopenedPixels = JSON.parse(reopenedCapture.resultJson).pixels;
+	const reopenedContentDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 30 * 16 }, (_, i) =>
+					reopenedPixels[49 + Math.floor(i / 30) + (10 + (i % 30)) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	const reopenedPanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					reopenedPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	await expect.poll(renderedPanelDigest).toBe(reopenedPanelDigest);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-schedule-reopened.png') });
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < reopenedPixels.length; i++)
+			if (reopenedPixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		await writeFile(resolve(output, 'browser-reopened-controller.pbm'), frame);
+		await writeFile(
+			resolve(output, 'browser-record-diagnostic.json'),
+			JSON.stringify({
+				savedState,
+				phonebookState,
+				phonebookHeaderDigest,
+				reopenedState,
+				reopenedContentDigest,
+				reopenedPanelDigest,
+			}),
+		);
+	}
+	expect(reopenedContentDigest).toBe('7a5f6055da909a1b7b9fa0da10724478f8c7575e7c8ce761f3b34489c50de0e0');
+	expect(reopenedPanelDigest).toBe('9caec32856f67c8ebffff4f202a227807917adf46451004e07aa510e817d96f5');
+	expect(errors).toEqual([]);
 	if (output) {
 		await writeFile(
 			resolve(output, 'browser-startup.json'),
@@ -331,6 +416,12 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 				contentState,
 				contentPanelDigest,
 				contentControlsDigest,
+				savedState,
+				phonebookState,
+				phonebookHeaderDigest,
+				reopenedState,
+				reopenedContentDigest,
+				reopenedPanelDigest,
 			}),
 		);
 	}

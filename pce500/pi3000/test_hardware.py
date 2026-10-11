@@ -244,6 +244,51 @@ def test_auxiliary_parameter_controls_require_complete_exact_request(header, cou
         a.start(request, 80)
 
 
+def test_auxiliary_contact_handshake_completes_without_response_bytes():
+    a = Auxiliary()
+    a.mark_written(0)
+    a.mark_written(1)
+    a.start(b"\xfc\x03" + bytes(30), 40)
+    assert a.capture_active
+    assert a.status() == 0x82
+    a.advance(72)
+    assert a.status() == 0x42
+    assert a.response(0) is None and a.response(1) is None
+    a.acknowledge(0xBF)
+    assert a.status() == 2 and a.accepted == [0x03FC]
+    a.mark_written(0)
+    a.mark_written(1)
+    a.start(b"\xfe\x05" + bytes(30), 80)
+    assert not a.capture_active
+    a.advance(112)
+    assert a.response(0) == 1
+    a.acknowledge(0xBF)
+
+
+def test_auxiliary_sample_irq_is_explicit_and_requires_an_active_capture():
+    h = Hardware({}, auxiliary_control=True)
+    h.write(0x8A06, 0x80)
+    assert h.gate[0x12] == 0
+    h.auxiliary_sample_irq_candidate = True
+    h.write(0x8A06, 0x80)
+    assert h.gate[0x12] == 0
+    h.write(0x8A20, 0xFC)
+    h.write(0x8A21, 3)
+    h.write(0x8A02, 0x80)
+    h.write(0x8A06, 0x80)
+    assert h.gate[0x12] == 8 and h.fault is None
+    assert not any(h.ram) and not any(h.scratch)
+    h.gate[0x12] = 0
+    h.advance_auxiliary_sample_irq(4095)
+    assert h.gate[0x12] == 0
+    h.advance_auxiliary_sample_irq(4096)
+    assert h.gate[0x12] == 8
+    h.gate[0x12] = 0
+    h.write(0x8A06, 0)
+    h.advance_auxiliary_sample_irq(8192)
+    assert h.gate[0x12] == 0
+
+
 @pytest.mark.parametrize(
     "contact",
     [

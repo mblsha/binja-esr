@@ -92,12 +92,28 @@ acknowledgment before another request. Unknown commands and query bytes stay
 unsupported. Its idle auxiliary event ports return zero; physical protocol,
 device identity, timing and recognition behavior remain unqualified.
 
-Ordinary Schedule content-label input now opens the ROM's character-entry
-panel; a recovered left tablet-strip contact opens Phonebook 1. Native and
-actual browser consumers verify the content controls without injecting guest
-queues or coefficients. Further contact with BFF20.bit7 set requests 03FC
-through FD6EA, which remains unsupported. Complete character acceptance,
-handwriting recognition and stored records are still open.
+Ordinary Schedule content-label input opens the ROM's character-entry panel;
+a recovered left tablet-strip contact opens Phonebook 1. Further contact
+with BFF20.bit7 set requests 03FC through FD6EA. This command completes and
+acknowledges BF without reading response bytes; 05FE instead reads status01.
+The prior analysis annotation had these two branches reversed.
+
+The experimental Firmware profile now models a capture session between
+03FC/05FE and a sample-clock candidate enabled by 08A06.bit7. Gate3 reaches
+FD859/FE:DBBD8. Its contact debounce needs a second stable sample before
+coordinate collection; one enable pulse is insufficient. The provisional
+cadence is 4096 native timing units and is inactive outside the capture
+session. AuxiliaryControl and Strict keep the candidate disabled. The private
+CLI retains explicit clock-disabled and period controls. Physical cadence,
+wiring, parameter effects and auxiliary recognition data remain unqualified.
+
+Normal raw contacts now select the numeric keypad, type1 and save Schedule
+content. The ROM's day view shows the stored record; switching to Phonebook
+and back, then using Edit, reopens it. Actual browser LCD contacts and the
+Calendar/Schedule and Phonebook application controls reproduce the workflow
+and its visible panel. No guest queues, coefficients or storage are injected.
+This qualifies this software record workflow, not complete application
+coverage, OFF/ON record retention or handwriting recognition.
 
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only

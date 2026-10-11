@@ -105,9 +105,33 @@
 			/>
 		</div>
 	</div>
+	{#if model === 'pi-3000'}
+		<div class="pi-app-controls" aria-label="Applications">
+			<OzTabletSurface label="Schedule" fixed={[200, 128]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
+				><span>Calendar / Schedule</span></OzTabletSurface
+			>
+			<OzTabletSurface label="Phonebook" fixed={[200, 276]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
+				><span>Phonebook</span></OzTabletSurface
+			>
+		</div>
+	{/if}
 </section>
 
 <style>
+	.pi-app-controls {
+		display: flex;
+		gap: 12px;
+		margin-top: 8px;
+	}
+	.pi-app-controls :global(.surface) {
+		padding: 10px 14px;
+		border: 1px solid #84918b;
+		border-radius: 6px;
+		background: #394942;
+		text-align: center;
+		color: #f2f4eb;
+		cursor: pointer;
+	}
 	.pi-3000 {
 		width: 100%;
 		min-width: 360px;

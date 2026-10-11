@@ -102,12 +102,33 @@ pub struct Hardware {
     pub auxiliary_command_count: u64,
     pub absent_auxiliary: bool,
     pub auxiliary: Option<auxiliary::Auxiliary>,
+    pub auxiliary_sample_irq_candidate: bool,
+    pub auxiliary_sample_period: u64,
+    auxiliary_sample_deadline: Option<u64>,
     pub cycle: u64,
     pub fault: Option<String>,
     pub lcd_writes: u64,
     mapped: Option<(u8, u8)>,
 }
 impl Hardware {
+    pub fn advance_auxiliary_sample_irq(&mut self, cycle: u64) {
+        if self
+            .auxiliary_sample_deadline
+            .is_some_and(|deadline| cycle >= deadline)
+        {
+            if self.auxiliary_sample_irq_candidate
+                && self.io_8a[6] & 0x80 != 0
+                && self.auxiliary.as_ref().is_some_and(|a| a.capture_active)
+            {
+                self.gate[0x12] |= 8;
+                self.auxiliary_sample_deadline =
+                    Some(cycle.saturating_add(self.auxiliary_sample_period));
+            } else {
+                self.auxiliary_sample_deadline = None;
+            }
+        }
+    }
+
     pub fn external_irq(&mut self) -> bool {
         // F15C4 consumes the RTC mask/cause pair through gate bit0. It clears
         // the RTC cause before acknowledging the gate latch (F1860/F14C5).
@@ -186,6 +207,9 @@ impl Hardware {
                 BootstrapProfile::AuxiliaryControl | BootstrapProfile::Firmware
             )
             .then(auxiliary::Auxiliary::default),
+            auxiliary_sample_irq_candidate: profile == BootstrapProfile::Firmware,
+            auxiliary_sample_period: 4096,
+            auxiliary_sample_deadline: None,
             cycle: 0,
             fault: None,
             lcd_writes: 0,
@@ -285,7 +309,22 @@ impl Hardware {
                     self.fault.get_or_insert(e);
                 }
             }
-            0x8a01 | 0x8a06..=0x8a08 => self.io_8a[(address - 0x8a00) as usize] = value,
+            0x8a01 | 0x8a06..=0x8a08 => {
+                self.io_8a[(address - 0x8a00) as usize] = value;
+                // Explicit wiring hypothesis: a capture-enable write requests
+                // one ADC sample interrupt through the installed gate3 handler.
+                if address == 0x8a06
+                    && value & 0x80 != 0
+                    && self.auxiliary_sample_irq_candidate
+                    && self.auxiliary.as_ref().is_some_and(|a| a.capture_active)
+                {
+                    self.gate[0x12] |= 8;
+                    self.auxiliary_sample_deadline =
+                        Some(self.cycle.saturating_add(self.auxiliary_sample_period));
+                } else if address == 0x8a06 {
+                    self.auxiliary_sample_deadline = None;
+                }
+            }
             0x8a02..=0x8a03 if self.absent_auxiliary || self.auxiliary.is_some() => {
                 self.io_8a[(address - 0x8a00) as usize] = value;
                 if address == 0x8a02 && value == 0x80 {
@@ -393,6 +432,7 @@ impl BoundaryDevice for Boundary {
         if let Some(auxiliary) = &mut h.auxiliary {
             auxiliary.advance(c.cycles);
         }
+        h.advance_auxiliary_sample_irq(c.cycles);
         if let Some(e) = &h.fault {
             return Err(CoreError::Other(e.clone()));
         }

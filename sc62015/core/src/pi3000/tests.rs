@@ -1,6 +1,33 @@
 // PY_SOURCE: pce500/pi3000/hardware.py
 use super::*;
 
+#[test]
+fn auxiliary_sample_irq_is_explicit_and_requires_active_capture() {
+    let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::AuxiliaryControl);
+    h.write(0x8a06, 0x80, None);
+    assert_eq!(h.gate[0x12], 0);
+    h.auxiliary_sample_irq_candidate = true;
+    h.write(0x8a06, 0x80, None);
+    assert_eq!(h.gate[0x12], 0);
+    h.write(0x8a20, 0xfc, None);
+    h.write(0x8a21, 3, None);
+    h.write(0x8a02, 0x80, None);
+    h.write(0x8a06, 0x80, None);
+    assert_eq!(h.gate[0x12], 8);
+    assert!(h.fault.is_none());
+    assert!(h.ram.iter().all(|v| *v == 0));
+    assert!(h.scratch.iter().all(|v| *v == 0));
+    h.gate[0x12] = 0;
+    h.advance_auxiliary_sample_irq(4095);
+    assert_eq!(h.gate[0x12], 0);
+    h.advance_auxiliary_sample_irq(4096);
+    assert_eq!(h.gate[0x12], 8);
+    h.gate[0x12] = 0;
+    h.write(0x8a06, 0, None);
+    h.advance_auxiliary_sample_irq(8192);
+    assert_eq!(h.gate[0x12], 0);
+}
+
 fn fixture(code: &[u8]) -> CoreRuntime {
     let mut fixed = vec![0xff; 0x20000];
     fixed[0x10000..0x10000 + code.len()].copy_from_slice(code);

@@ -7,7 +7,8 @@ pub struct Auxiliary {
     written: u32,
     ready_at: Option<u64>,
     complete: bool,
-    response: [u8; 32],
+    response: Option<u8>,
+    pub capture_active: bool,
     pub accepted: Vec<u16>,
     pub accepted_count: u64,
 }
@@ -21,7 +22,7 @@ impl Auxiliary {
         }
         let header = u16::from_le_bytes([request[0], request[1]]);
         let request_bytes = match header {
-            0x00fe | 0x01fe | 0x30fb | 0x02fe | 0x00f9 | 0x01f9 | 0x02f9 => 2,
+            0x00fe | 0x01fe | 0x30fb | 0x02fe | 0x00f9 | 0x01f9 | 0x02f9 | 0x03fc | 0x05fe => 2,
             // FE:DDFDB and DE006 send parameter/geometry bytes, then read
             // only DE219-compatible status01 and acknowledge BF.
             0x04fe => 3,
@@ -46,8 +47,15 @@ impl Auxiliary {
             ));
         }
         self.written = 0;
-        self.response = [0; 32];
-        self.response[0] = 1;
+        // FD6EA sets IL=1; FD722 decrements it to zero and acknowledges
+        // 03FC at FD726 without reading any response byte.
+        self.response = if header == 0x03fc { None } else { Some(1) };
+        if header == 0x03fc {
+            self.capture_active = true;
+        }
+        if header == 0x05fe {
+            self.capture_active = false;
+        }
         self.ready_at = Some(cycle.saturating_add(32));
         self.accepted_count += 1;
         if self.accepted.len() < 256 {
@@ -72,7 +80,7 @@ impl Auxiliary {
     }
     pub fn response(&self, offset: usize) -> Option<u8> {
         if self.complete && offset == 0 {
-            Some(self.response[0])
+            self.response
         } else {
             None
         }
@@ -166,5 +174,32 @@ mod tests {
             }
             assert!(a.start(&request, 80).is_err());
         }
+    }
+
+    #[test]
+    fn contact_handshake_completes_without_any_response_bytes() {
+        let mut a = Auxiliary::default();
+        let mut request = [0; 32];
+        request[..2].copy_from_slice(&0x03fc_u16.to_le_bytes());
+        a.mark_written(0);
+        a.mark_written(1);
+        a.start(&request, 40).unwrap();
+        assert!(a.capture_active);
+        assert_eq!(a.status(), 0x82);
+        a.advance(72);
+        assert_eq!(a.status(), 0x42);
+        assert_eq!(a.response(0), None);
+        assert_eq!(a.response(1), None);
+        a.acknowledge(0xbf).unwrap();
+        assert_eq!(a.status(), 2);
+        assert_eq!(a.accepted, [0x03fc]);
+        request[..2].copy_from_slice(&0x05fe_u16.to_le_bytes());
+        a.mark_written(0);
+        a.mark_written(1);
+        a.start(&request, 80).unwrap();
+        assert!(!a.capture_active);
+        a.advance(112);
+        assert_eq!(a.response(0), Some(1));
+        a.acknowledge(0xbf).unwrap();
     }
 }

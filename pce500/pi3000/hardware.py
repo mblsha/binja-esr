@@ -34,6 +34,9 @@ class Hardware:
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
         self.auxiliary = Auxiliary() if auxiliary_control or firmware else None
+        self.auxiliary_sample_irq_candidate = firmware
+        self.auxiliary_sample_period = 4096
+        self.auxiliary_sample_deadline = None
         self.auxiliary_request = bytearray(32)
         self.auxiliary_commands = []
         self.auxiliary_command_count = 0
@@ -140,6 +143,19 @@ class Hardware:
                 and address in (0x8A02, 0x8A03)
             ):
                 self.io_8a[address - 0x8A00] = value
+                if (
+                    address == 0x8A06
+                    and value & 0x80
+                    and self.auxiliary_sample_irq_candidate
+                    and self.auxiliary is not None
+                    and self.auxiliary.capture_active
+                ):
+                    self.gate[0x12] |= 8
+                    self.auxiliary_sample_deadline = (
+                        self.cycle + self.auxiliary_sample_period
+                    )
+                elif address == 0x8A06:
+                    self.auxiliary_sample_deadline = None
                 if address == 0x8A02 and value == 0x80:
                     self.auxiliary_command_count += 1
                     if len(self.auxiliary_commands) < 256:
@@ -201,6 +217,23 @@ class Hardware:
         self.cycle = cycle
         if self.auxiliary is not None:
             self.auxiliary.advance(cycle)
+        self.advance_auxiliary_sample_irq(cycle)
+
+    def advance_auxiliary_sample_irq(self, cycle):
+        if (
+            self.auxiliary_sample_deadline is not None
+            and cycle >= self.auxiliary_sample_deadline
+        ):
+            if (
+                self.auxiliary_sample_irq_candidate
+                and self.io_8a[6] & 0x80
+                and self.auxiliary is not None
+                and self.auxiliary.capture_active
+            ):
+                self.gate[0x12] |= 8
+                self.auxiliary_sample_deadline = cycle + self.auxiliary_sample_period
+            else:
+                self.auxiliary_sample_deadline = None
 
     def halt_main_deadline(self, *, halted, off, lcc, next_mti):
         """Boundary clock candidate; shared CPU runtime owns timer/IRQ mutation."""
