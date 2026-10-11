@@ -147,6 +147,14 @@ the original saved-record panel. The private native CLI exposes
 restores and re-exports a native-produced image byte-identically. Complete
 application, clock/alarm, card and serial coverage remain open.
 
+The browser also exposes the verified Clock contact at raw `(240,572)`.
+The ROM keeps Clock open after release and shows its Tokyo/New York views,
+time-setting dialog and daily-alarm dialog. Enabling the default daily alarm
+through normal touch input programs an ordinary next-day RTC deadline.
+Numeric hour editing and delivery of the due alarm remain under recovery;
+dialog reachability does not establish those contracts. Clock redraws can
+require several million scheduler boundaries after closing a dialog.
+
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only
 ISR experiment reaches a four-cross calibration frame after two million

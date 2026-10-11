@@ -54,7 +54,7 @@
 	role="button"
 	tabindex={disabled ? -1 : 0}
 	aria-label={label}
-	title={label === 'Clock' ? 'Hold to view Clock; release to close' : undefined}
+	title={label === 'Clock' && testPrefix === 'oz-tablet' ? 'Hold to view Clock; release to close' : undefined}
 	aria-disabled={disabled}
 	data-testid={`${testPrefix}-${label.toLowerCase().replaceAll(' ', '-')}`}
 	class="surface"

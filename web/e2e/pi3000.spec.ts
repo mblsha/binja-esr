@@ -551,6 +551,87 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 			}),
 		);
 	}
+	// Clock is the second printed column at raw240,572. It remains open after
+	// release; the OZ hold-to-view convention does not apply to this control.
+	await holdApplication('pi-tablet-clock');
+	await rpc(page, 'step', { instructions: 500_000 });
+	const clockState = await rpc(page, 'pi_state');
+	expect(clockState.fault).toBeNull();
+	await expect.poll(renderedPanelDigest).toBe('28e58649ba1e5e1f499cecbad6b5e69eca6910c38694c0e4cd3753d67d026c77');
+	const clockDigest = await renderedPanelDigest();
+	expect(clockDigest).toBe('28e58649ba1e5e1f499cecbad6b5e69eca6910c38694c0e4cd3753d67d026c77');
+	await holdTouch(38, 14, 250_000, 1_500_000);
+	const clockDialogState = await rpc(page, 'pi_state');
+	expect(clockDialogState.fault).toBeNull();
+	await expect.poll(renderedPanelDigest).toBe('907c04c5345fbdd18946d32c317fb9fc83a949779ff2954ad12c3bb761ea3078');
+	const clockDialogDigest = await renderedPanelDigest();
+	expect(clockDialogDigest).toBe('907c04c5345fbdd18946d32c317fb9fc83a949779ff2954ad12c3bb761ea3078');
+	await holdTouch(219, 69, 50_000, 3_000_000);
+	const cancelledClockCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(cancelledClockCapture.error).toBeNull();
+	const cancelledClockPixels = JSON.parse(cancelledClockCapture.resultJson).pixels;
+	const cancelledClockDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					cancelledClockPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	if (output)
+		await writeFile(
+			resolve(output, 'browser-clock-cancel.json'),
+			JSON.stringify({
+				cancelledClockDigest,
+				renderedDigest: await renderedPanelDigest(),
+				state: await rpc(page, 'pi_state'),
+			}),
+		);
+	expect(cancelledClockDigest).toBe(clockDigest);
+	await expect.poll(renderedPanelDigest).toBe(clockDigest);
+	await holdTouch(84, 14, 50_000, 1_500_000);
+	const dailyAlarmState = await rpc(page, 'pi_state');
+	expect(dailyAlarmState.fault).toBeNull();
+	const dailyCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(dailyCapture.error).toBeNull();
+	const dailyPixels = JSON.parse(dailyCapture.resultJson).pixels;
+	const dailyNativeDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) => (dailyPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0)),
+			),
+		)
+		.digest('hex');
+	if (output)
+		await writeFile(
+			resolve(output, 'browser-daily-native.json'),
+			JSON.stringify({ dailyNativeDigest, renderedDigest: await renderedPanelDigest() }),
+		);
+	// Native idle replay establishes two phases differing only in the focused
+	// hour digit's 12x18 rectangle; all other pixels are identical.
+	expect([
+		'ce421b2abf4dfdf87bc80188229f4b5b47fd8c831f8f3a8769ca6006c193f0d9',
+		'1e8fc8ef30ec57cc7b31ee95adfde2e4397789a89823d8311d4f110e030a79b2',
+	]).toContain(dailyNativeDigest);
+	await expect.poll(renderedPanelDigest).toBe(dailyNativeDigest);
+	const dailyAlarmDigest = await renderedPanelDigest();
+	expect(dailyAlarmDigest).toBe(dailyNativeDigest);
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-daily-alarm-dialog.png') });
+		await writeFile(
+			resolve(output, 'browser-clock.json'),
+			JSON.stringify({
+				clockState,
+				clockDigest,
+				clockDialogState,
+				clockDialogDigest,
+				dailyAlarmState,
+				dailyAlarmDigest,
+			}),
+		);
+	}
 });
 
 test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
