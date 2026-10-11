@@ -113,6 +113,7 @@ def test_foreground_contact_source_is_selected_before_input_and_conversion():
     assert h.gate[0x12] == 2
     with pytest.raises(ValueError):
         h.configure_tablet_interrupt_source("gate3")
+
     h.gate[0x12] = 0
     h.set_raw_contact(66, 67, True)
     assert h.gate[0x12] == 0
@@ -121,3 +122,21 @@ def test_foreground_contact_source_is_selected_before_input_and_conversion():
     h.tablet.read_data()
     with pytest.raises(ValueError):
         h.configure_tablet_interrupt_source("gate3")
+
+
+def test_halt_clock_candidate_requires_lcc7_and_never_off():
+    h = Hardware({})
+    args = dict(halted=True, off=False, lcc=0x80, next_mti=17)
+    assert h.halt_main_deadline(**args) is None
+    h.halt_main_timer_candidate = True
+    assert h.halt_main_deadline(**args) == 17
+    for replacement in [dict(halted=False), dict(off=True), dict(lcc=0)]:
+        assert h.halt_main_deadline(**(args | replacement)) is None
+
+
+def test_mapper_readbacks_follow_saved_output_latches():
+    h = Hardware({})
+    for i, value in enumerate((0x12, 0x34, 0x56)):
+        h.write(0xF00C + i, value)
+        assert h.read(0xF01C + i) == value
+    assert h.startup_latches == bytes((0x12, 0x34, 0x56))

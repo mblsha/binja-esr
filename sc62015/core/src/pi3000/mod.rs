@@ -76,6 +76,8 @@ pub struct Hardware {
     pub tablet: Tablet,
     pub tablet_route: Option<TabletAdcRoute>,
     pub tablet_interrupt_source: TabletInterruptSource,
+    pub halt_main_timer_candidate: bool,
+    pub halt_main_timer_units: u64,
     pub gpio: [u8; 18],
     pub clock_control: u8,
     pub startup_latches: [u8; 3],
@@ -108,6 +110,8 @@ impl Hardware {
             tablet: Tablet::default(),
             tablet_route: None,
             tablet_interrupt_source: TabletInterruptSource::default(),
+            halt_main_timer_candidate: false,
+            halt_main_timer_units: 0,
             gpio: [0; 18],
             clock_control: 0,
             startup_latches: [0; 3],
@@ -159,6 +163,7 @@ impl Hardware {
             0x8b1a => Some(self.gpio[2]),
             0x8b1c => Some(self.clock_control),
             0x8b1d => Some(self.gpio[5]),
+            0xf01c..=0xf01e => Some(self.startup_latches[(address - 0xf01c) as usize]),
             0x20000..=0x7ffff => Some(255),
             0x80000..=0xbffff => Some(self.ram[(address - 0x80000) as usize]),
             0xc0000..=0xdffff if self.mode == 0 => self
@@ -289,7 +294,7 @@ fn sync_bank(hw: &SharedHardware, memory: &mut MemoryImage) {
     h.mapped = Some((h.selector, h.mode));
 }
 
-struct Boundary(SharedHardware);
+struct Boundary(SharedHardware, Option<u64>);
 impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory);
@@ -298,10 +303,23 @@ impl BoundaryDevice for Boundary {
             return Err(CoreError::Other(e.clone()));
         }
         h.cycle = c.cycles;
+        self.1 = (h.halt_main_timer_candidate
+            && c.state.is_halted()
+            && !c.state.is_off()
+            && c.memory.read_internal_byte_silent(0xfe).unwrap_or(0) & 0x80 != 0)
+            .then_some(c.timer.next_mti);
         Ok(Some(h.external_irq()))
     }
-    fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, _elapsed: u64) -> crate::Result<()> {
+    fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, elapsed: u64) -> crate::Result<()> {
         let mut h = self.0.borrow();
+        if let Some(deadline) = self.1.take() {
+            // Same explicit LCC7/HALT clock experiment as the related board.
+            // CoreRuntime owns wake/IRQ delivery; no guest flags are seeded.
+            c.timer.next_mti = deadline;
+            c.timer
+                .tick_timers_selected(c.memory, c.cycles, Some(c.state.pc()), true, false);
+            h.halt_main_timer_units += elapsed;
+        }
         h.cycle = c.cycles;
         if let Some(auxiliary) = &mut h.auxiliary {
             auxiliary.advance(c.cycles);
@@ -366,6 +384,7 @@ pub fn configure(
         (0x8bc0, 0x8bc0, true),
         (0x8c00, 0x8c00, true),
         (0xf00c, 0xf00e, false),
+        (0xf01c, 0xf01e, true),
         (0xf103, 0xf103, false),
         (0x20000, 0x7ffff, true),
         (0x80000, 0xbffff, true),
@@ -407,7 +426,7 @@ pub fn configure(
     }
     sync_bank(&hardware, &mut rt.memory);
     rt.power_on_reset().map_err(|e| e.to_string())?;
-    rt.install_boundary_device(Box::new(Boundary(hardware.clone())))
+    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None)))
         .map_err(|e| e.to_string())?;
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
     rt.pi3000_hardware = Some(hardware.clone());
@@ -418,6 +437,17 @@ pub fn configure(
 }
 
 impl CoreRuntime {
+    pub fn configure_pi3000_halt_main_timer_candidate(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.pi3000_hardware
+            .as_ref()
+            .ok_or("PI hardware is unavailable")?
+            .borrow()
+            .halt_main_timer_candidate = enabled;
+        Ok(())
+    }
     pub fn configure_pi3000_tablet_route(&mut self, route: TabletAdcRoute) -> Result<(), String> {
         let mut h = self
             .pi3000_hardware
@@ -485,6 +515,7 @@ impl CoreRuntime {
             "auxiliary_command_count":h.auxiliary_command_count,"auxiliary_commands":h.auxiliary_commands,
             "tablet_route":h.tablet_route.map(|r|format!("{r:?}")),
             "tablet_interrupt_source":format!("{:?}",h.tablet_interrupt_source),
+            "halt_main_timer_candidate":h.halt_main_timer_candidate,"halt_main_timer_units":h.halt_main_timer_units,
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),
         )

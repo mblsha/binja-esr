@@ -21,6 +21,8 @@ class Hardware:
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
         self.tablet, self.tablet_route = Tablet(), None
         self.tablet_interrupt_source = "gate3"
+        self.halt_main_timer_candidate = False
+        self.halt_main_timer_units = 0
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
@@ -67,6 +69,8 @@ class Hardware:
             return self.clock_control
         if address == 0x8B1D:
             return self.gpio[5]
+        if 0xF01C <= address <= 0xF01E:
+            return self.startup_latches[address - 0xF01C]
         if 0x20000 <= address < 0x80000:
             return 255
         if 0x80000 <= address < 0xC0000:
@@ -188,6 +192,12 @@ class Hardware:
         self.cycle = cycle
         if self.auxiliary is not None:
             self.auxiliary.advance(cycle)
+
+    def halt_main_deadline(self, *, halted, off, lcc, next_mti):
+        """Boundary clock candidate; shared CPU runtime owns timer/IRQ mutation."""
+        if self.halt_main_timer_candidate and halted and not off and lcc & 0x80:
+            return next_mti
+        return None
 
     def external_irq(self):
         return self.auxiliary is not None and bool(

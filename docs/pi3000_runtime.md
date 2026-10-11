@@ -65,9 +65,25 @@ nominal timers increases ADC reads from 2 to 9 to 10 under Gate1; Gate3 stays
 at two. No guest event records or mode flags are seeded.
 
 `pi3000::input::Replay` validates raw tablet/ON contacts and boundary budgets
-before execution. Foreground sampling now executes, but the calibration frame
-does not advance. Repeated contact rearming and coordinate calibration remain
-open. Eight startup string calls also pass window selector CH=FF; FAFEB rejects
-it outside 10..1D before glyph rendering. Recovering that resource/window
-initialization is the next display dependency; this is not a missing font bank.
-Ordinary foreground touch and organizer GUI support remain open.
+before execution. Startup allocates windows 10 and 11. With independent block
+transfers, F6DF9 overwrites the caller's saved window 11 with FF, and FAFEB
+rejects that selector before glyph rendering. The existing shared CPU
+`CoupledPredecrement` policy preserves the window and renders the Japanese
+calibration instructions. This policy remains an explicit firmware experiment.
+
+`configure_pi3000_halt_main_timer_candidate(true)` is a separate clock
+experiment: while HALTed with LCC.bit7 set, the main timer keeps its deadline
+and advances through the ordinary timer/interrupt path. It never advances the
+main timer in OFF. The default retains the shared CPU's frozen main clock.
+The F01C..F01E readbacks retain the F00C..F00E output latch values used by
+F8DC4..F8DD2's save and F9106..F9111's restore sequence; electrical behavior
+and mapping meanings remain unqualified.
+
+Starting BP at zero lets a startup scratch write at F93CB wrap into SSR and
+set the ON input bit. With explicit initial BP=D0, clear-only ISR writes,
+coupled transfers, nominal clocks, the HALT clock candidate and Gate1, repeated
+raw contacts rearm and advance the calibration screen. The preserved four-point
+consumer reaches 455 ADC reads without a bus fault or the earlier OFF stop.
+Calibration completion, physical reset CPU state, scan orientation and
+organizer GUI support remain open. Model selection does not enable these
+experiments automatically.

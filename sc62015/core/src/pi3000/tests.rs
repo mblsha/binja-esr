@@ -156,3 +156,30 @@ fn foreground_contact_candidate_uses_gate1_and_cannot_switch_after_sampling() {
         .configure_pi3000_tablet_interrupt_source(TabletInterruptSource::Gate3)
         .is_err());
 }
+
+#[test]
+fn halt_main_timer_candidate_requires_lcc7_and_preserves_default_freeze() {
+    for (enabled, lcc, wakes) in [(false, 0x80, false), (true, 0, false), (true, 0x80, true)] {
+        let mut rt = fixture(&[0xde, 0, 0, 0, 0, 0, 0, 0]);
+        *rt.timer = TimerContext::new(true, 4, 0);
+        rt.memory.write_internal_byte(0xfe, lcc);
+        rt.configure_pi3000_halt_main_timer_candidate(enabled)
+            .unwrap();
+        rt.step_scheduler_boundaries(7).unwrap();
+        assert_eq!(rt.instruction_count() > 1, wakes);
+        assert_eq!(
+            rt.pi3000_hardware().unwrap().borrow().halt_main_timer_units > 0,
+            wakes
+        );
+    }
+}
+
+#[test]
+fn mapper_readbacks_follow_the_saved_output_latches() {
+    let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
+    for (i, value) in [0x12, 0x34, 0x56].into_iter().enumerate() {
+        h.write(0xf00c + i as u32, value, None);
+        assert_eq!(h.read(0xf01c + i as u32), Some(value));
+    }
+    assert_eq!(h.startup_latches, [0x12, 0x34, 0x56]);
+}
