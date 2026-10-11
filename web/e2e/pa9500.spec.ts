@@ -111,6 +111,7 @@ async function canvasMatches(page: Page, pixels: number[]) {
 
 async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 	const aliases: Record<number, string> = {
+		7: 'Pause',
 		1: 'F1',
 		28: 'F2',
 		44: 'F3',
@@ -210,8 +211,14 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 	test.setTimeout(240_000);
 	await openPa(page);
 	const spec = JSON.parse(await readFile(replayPath!, 'utf8'));
-	if (spec.input_bindings === 'basic' || retainedInput)
+	if (spec.input_bindings === 'basic' || retainedInput || spec.profile === 'bootstrap-v4')
 		await page.getByTestId('advanced-panel').locator('> summary').click();
+	if (spec.profile === 'bootstrap-v4') {
+		await page.getByTestId('pa-profile').selectOption('bootstrap-v4');
+		await page.getByTestId('pa-card-remove').click();
+		await expect(page.getByTestId('pa-card-remove')).toBeEnabled();
+		await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	}
 	if (cardRom && cardSram) {
 		await page.getByTestId('pa-card-rom').setInputFiles(cardRom);
 		await page.getByTestId('pa-card-sram').setInputFiles(cardSram);

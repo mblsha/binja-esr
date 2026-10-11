@@ -82,6 +82,7 @@
 		"0": 56,
 		"2": 62,
 		"CLEAR": 5,
+		"OFF": 7,
 		"PREV_RECORD": 13,
 		"NEXT_RECORD": 9,
 		"EDIT_MENU": 108

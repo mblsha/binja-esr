@@ -675,6 +675,8 @@ pub struct CoreRuntime {
     #[cfg(feature = "pa9500")]
     pub(crate) pa9500_on_contact_edge_candidate: bool,
     #[cfg(feature = "pa9500")]
+    pub(crate) pa9500_irq_imr_only_candidate: bool,
+    #[cfg(feature = "pa9500")]
     pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
     #[cfg(feature = "oz9600")]
     pub(crate) oz9600_hardware: Option<oz9600::SharedHardware>,
@@ -721,6 +723,8 @@ impl CoreRuntime {
             boundary_device: None,
             #[cfg(feature = "pa9500")]
             pa9500_on_contact_edge_candidate: false,
+            #[cfg(feature = "pa9500")]
+            pa9500_irq_imr_only_candidate: false,
             #[cfg(feature = "pa9500")]
             pa9500_compatibility: None,
             #[cfg(feature = "oz9600")]
@@ -1035,6 +1039,10 @@ impl CoreRuntime {
 
     // PY_SOURCE: pce500/oz9600/profile.py:handler_blocks_irq
     fn irq_handler_suppresses_delivery(&self) -> bool {
+        #[cfg(feature = "pa9500")]
+        if self.device_model() == DeviceModel::Pa9500 && self.pa9500_irq_imr_only_candidate {
+            return false;
+        }
         #[cfg(feature = "oz9600")]
         {
             self.timer.in_interrupt

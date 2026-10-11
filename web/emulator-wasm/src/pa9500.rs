@@ -121,9 +121,12 @@ impl Sc62015Emulator {
         retained: &[u8],
     ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
-        if !matches!(profile, "bootstrap-v1" | "bootstrap-v2" | "bootstrap-v3") {
+        if !matches!(
+            profile,
+            "bootstrap-v1" | "bootstrap-v2" | "bootstrap-v3" | "bootstrap-v4"
+        ) {
             return Err(JsValue::from_str(
-                "PA profile must be explicitly bootstrap-v1, bootstrap-v2 or bootstrap-v3",
+                "PA profile must be explicitly bootstrap-v1, bootstrap-v2, bootstrap-v3 or bootstrap-v4",
             ));
         }
         let card = match (card_rom.is_empty(), card_sram.is_empty()) {
@@ -134,6 +137,7 @@ impl Sc62015Emulator {
             _ => return Err(JsValue::from_str("PA card requires both ROM and SRAM")),
         };
         let (mut candidate, _) = match profile {
+            "bootstrap-v4" => pa9500::from_bootstrap_bundle_with_power_resume(bundle, card),
             "bootstrap-v3" => pa9500::from_bootstrap_bundle_with_observed_field_reads(bundle, card),
             "bootstrap-v2" => pa9500::from_bootstrap_bundle_with_observed_low_reads(bundle, card),
             _ => pa9500::from_bootstrap_bundle(bundle, card),

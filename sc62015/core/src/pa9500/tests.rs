@@ -2,6 +2,79 @@
 use super::*;
 
 #[test]
+fn power_input_pair_is_read_only_distinct_from_outputs_and_bounded() {
+    let (mut rt, hw) = fixture();
+    assert!(install_observed_power_pair(&mut rt, &hw, [0x12, 0x34]).is_err());
+    install_media(&mut rt, &hw, None).unwrap();
+    install_zero_data(&mut rt, &hw, 0xe0).unwrap();
+    install_observed_low_pair(&mut rt, &hw, [0xe0; 2]).unwrap();
+    install_observed_low_triad(&mut rt, &hw, [0xe0; 3]).unwrap();
+    install_observed_field_words(&mut rt, &hw, [0xe0; 4]).unwrap();
+    for address in [0xf01c, 0xf01d, 0xf01e, 0xf01f] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), None);
+    }
+    install_observed_power_pair(&mut rt, &hw, [0x12, 0x34]).unwrap();
+    assert!(install_observed_power_pair(&mut rt, &hw, [0; 2]).is_err());
+    hw.borrow().write(0xf00d, 0xaa, None);
+    hw.borrow().write(0xf00e, 0xbb, None);
+    assert_eq!(rt.memory.read_byte_for_preflight(0xf01d, None), Some(0x12));
+    assert_eq!(rt.memory.read_byte_for_preflight(0xf01e, None), Some(0x34));
+    assert_eq!(hw.borrow().startup_latches, [0xaa, 0xbb]);
+    for address in [0xf01c, 0xf01f, 0xf00d, 0xf00e] {
+        assert_eq!(rt.memory.read_byte_for_preflight(address, None), None);
+    }
+    hw.borrow().write(0xf01d, 0xff, None);
+    assert!(hw
+        .borrow()
+        .fault
+        .as_ref()
+        .unwrap()
+        .contains("unqualified PA write"));
+    assert_eq!(hw.borrow().observed_power_pair, Some([0x12, 0x34]));
+}
+
+#[test]
+fn explicit_irq_imr_policy_accepts_after_guest_reenables_master_with_stale_metadata() {
+    for candidate in [false, true] {
+        let (mut rt, hw) = fixture();
+        if candidate {
+            install_irq_imr_candidate(&mut rt, &hw).unwrap();
+            assert!(install_irq_imr_candidate(&mut rt, &hw).is_err());
+        }
+        rt.timer.enabled = false;
+        rt.set_reg("PC", 0xe0000);
+        rt.set_reg("S", 0x80020);
+        rt.timer.in_interrupt = true;
+        // Synthetic abandoned frame: the guest enables IRM | ONKM. The IRQ
+        // handler clears ISR.ONKI, then RETI restores the exact five-byte frame.
+        rt.load_rom(&[0x30, 0xcc, 0xfb, 0x88, 0, 0], 0xe0000);
+        rt.load_rom(&[0, 0x10, 0xe], 0xffffa);
+        rt.load_rom(&[0x30, 0x71, 0xfc, 0xf7, 0x01], 0xe1000);
+        rt.press_on_key();
+        rt.release_on_key();
+        rt.step_scheduler_boundaries(1).unwrap();
+        assert_eq!(rt.get_reg("PC"), 0xe0004);
+        assert_eq!(rt.timer.irq_total, 0, "IRM-off must still inhibit IRQ");
+        rt.step_scheduler_boundaries(1).unwrap();
+        if candidate {
+            assert_eq!(rt.get_reg("PC"), 0xe1004);
+            assert_eq!(rt.timer.irq_total, 1);
+            assert_eq!(rt.get_reg("S"), 0x8001b);
+            rt.step_scheduler_boundaries(1).unwrap();
+            assert_eq!(rt.get_reg("PC"), 0xe0004);
+            assert_eq!(rt.get_reg("S"), 0x80020);
+            assert_eq!(rt.memory.read_internal_byte_silent(0xfb), Some(0x88));
+            assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8, 0);
+        } else {
+            assert_eq!(rt.get_reg("PC"), 0xe0005);
+            assert_eq!(rt.timer.irq_total, 0);
+        }
+        assert!(install_irq_imr_candidate(&mut rt, &hw).is_err());
+    }
+    assert!(install_irq_imr_candidate(&mut CoreRuntime::new(), &fixture().1).is_err());
+}
+
+#[test]
 fn controller_view_observes_the_board_without_bus_routing_or_copying() {
     let (_, hw) = fixture();
     hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));

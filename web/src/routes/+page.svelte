@@ -2532,9 +2532,8 @@
 				>
 				<label
 					>Profile for next ROM load: <select bind:value={paProfile} data-testid="pa-profile">
-						<option value="bootstrap-v3">Bootstrap v3</option><option value="bootstrap-v2">Bootstrap v2</option><option
-							value="bootstrap-v1">Bootstrap v1</option
-						>
+						<option value="bootstrap-v4">Bootstrap v4 (OFF/ON)</option><option value="bootstrap-v3">Bootstrap v3</option
+						><option value="bootstrap-v2">Bootstrap v2</option><option value="bootstrap-v1">Bootstrap v1</option>
 					</select></label
 				>
 				<label

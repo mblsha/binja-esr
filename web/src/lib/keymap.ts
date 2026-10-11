@@ -87,6 +87,7 @@ const ozHost: Record<string, string> = {
 	NumpadEnter: 'ENTER',
 };
 const paHost: Record<string, string> = {
+	Pause: 'OFF',
 	PageUp: 'PREV_RECORD',
 	PageDown: 'NEXT_RECORD',
 	ContextMenu: 'EDIT_MENU',
@@ -258,6 +259,7 @@ export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'nat
 		['ENTER', 'ENTER'],
 	])
 		add(name, model === 'pa-9500' && name === 'CLEAR' ? 'CLEAR' : label);
+	if (model === 'pa-9500') add('OFF');
 	keys.push({ label: 'ON', code: 'on', testId: 'vk-on' });
 	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') add(c);
 	add('SPACE');

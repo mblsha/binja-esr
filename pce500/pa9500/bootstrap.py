@@ -45,6 +45,8 @@ class Hardware:
         self.observed_low_pair = None
         self.observed_low_triad = None
         self.observed_field_words = None
+        self.observed_power_pair = None
+        self.irq_imr_only_candidate = False
         self.scratch_candidate = None
         self.lcd_coordinate_restore_candidate = False
         self.adc_control = 0 if controller_hypothesis else None
@@ -67,6 +69,8 @@ class Hardware:
             return (self.gate[18] & ~2) | (2 if self.tablet[3] else 0)
         if address == 0x4021:
             return self.selector
+        if 0xF01D <= address <= 0xF01E and self.observed_power_pair is not None:
+            return self.observed_power_pair[address - 0xF01D]
         if 0x4000 <= address <= 0x403F:
             return self.gate[address - 0x4000]
         if address == 0x8800:

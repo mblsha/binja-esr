@@ -50,6 +50,23 @@ pub fn install_on_contact_edge_candidate(rt: &mut CoreRuntime) -> Result<(), Str
     Ok(())
 }
 
+/// E098A/E097F branches into the OFF continuation without RETI; F43D5
+/// restores IMR and the original stack. In this explicit candidate, IMR.IRM
+/// and source masks govern IRQ acceptance despite stale handler bookkeeping.
+/// Strict PA and other models retain their existing metadata guard.
+pub fn install_irq_imr_candidate(rt: &mut CoreRuntime, hw: &SharedHardware) -> Result<(), String> {
+    if rt.device_model() != DeviceModel::Pa9500
+        || rt.instruction_count() != 0
+        || rt.elapsed_timing_units() != 0
+        || rt.pa9500_irq_imr_only_candidate
+    {
+        return Err("PA IRQ IMR candidate requires a fresh PA runtime".into());
+    }
+    rt.pa9500_irq_imr_only_candidate = true;
+    hw.borrow().irq_imr_only_candidate = true;
+    Ok(())
+}
+
 /// Opt-in register-only COM transport. All OPEN/PRINT, conversion, buffering
 /// and flow control remain acquired firmware work. Nominal clock/divisor are
 /// functional hypotheses; the strict PA constructor leaves UART unavailable.
@@ -116,6 +133,8 @@ pub struct Hardware {
     pub observed_low_pair: Option<[u8; 2]>,
     pub observed_low_triad: Option<[u8; 3]>,
     pub observed_field_words: Option<[u8; 4]>,
+    pub observed_power_pair: Option<[u8; 2]>,
+    pub irq_imr_only_candidate: bool,
     /// Separate optional 4 KiB candidate inferred from F28CA/F4146. No alias
     /// wiring is established by the captured open-bus low-address data.
     pub scratch_candidate: Option<Vec<u8>>,
@@ -154,6 +173,8 @@ impl Hardware {
             observed_low_pair: None,
             observed_low_triad: None,
             observed_field_words: None,
+            observed_power_pair: None,
+            irq_imr_only_candidate: false,
             scratch_candidate: None,
             scratch_mapped_active: false,
             card: None,
@@ -192,6 +213,9 @@ impl Hardware {
                 Some(status | if self.tablet.unwrap().contact { 2 } else { 0 })
             }
             0x4021 => Some(self.selector),
+            0xf01d..=0xf01e if self.observed_power_pair.is_some() => {
+                Some(self.observed_power_pair.unwrap()[(address - 0xf01d) as usize])
+            }
             0x4000..=0x403f => Some(self.gate[(address - 0x4000) as usize]),
             0x8800 => self.adc_control,
             0x8c00 if self.adc_control.is_some() => Some(if self.adc_low_next {
@@ -644,6 +668,29 @@ pub fn install_observed_field_words(
     Ok(())
 }
 
+/// Only the two acquired power-context input bytes become readable. They
+/// remain distinct from F00D/E output latches; physical readback is unproven.
+pub fn install_observed_power_pair(
+    rt: &mut CoreRuntime,
+    hw: &SharedHardware,
+    bytes: [u8; 2],
+) -> Result<(), String> {
+    if rt.instruction_count() != 0
+        || rt.elapsed_timing_units() != 0
+        || !hw.borrow().external_media_enabled
+        || hw.borrow().observed_field_words.is_none()
+        || hw.borrow().observed_power_pair.is_some()
+    {
+        return Err("power context read pair requires a fresh field-read bootstrap".into());
+    }
+    hw.borrow().observed_power_pair = Some(bytes);
+    rt.memory.remove_overlay("pa9500_bus_0F00F");
+    add_bus_view(rt, hw, 0xf00f, 0xf01c, false, "pa9500_bus_0F00F");
+    add_bus_view(rt, hw, 0xf01d, 0xf01e, true, "pa9500_observed_power_pair");
+    add_bus_view(rt, hw, 0xf01f, 0x1ffff, false, "pa9500_bus_0F01F");
+    Ok(())
+}
+
 /// Component constructor; acquisition loading validates identity separately.
 pub fn configure(
     fixed: &[u8],
@@ -863,6 +910,18 @@ pub fn from_bootstrap_bundle_with_observed_field_reads(
     Ok((rt, hw))
 }
 
+/// bootstrap-v4 adds bounded acquired power-context reads and the explicit
+/// IMR-based IRQ candidate for the firmware's OFF continuation without RETI.
+pub fn from_bootstrap_bundle_with_power_resume(
+    image: &[u8],
+    card: Option<card::Pa9c3Card>,
+) -> Result<(CoreRuntime, SharedHardware), String> {
+    let (mut rt, hw) = from_bootstrap_bundle_with_observed_field_reads(image, card)?;
+    install_observed_power_pair(&mut rt, &hw, [0xe0; 2])?;
+    install_irq_imr_candidate(&mut rt, &hw)?;
+    Ok((rt, hw))
+}
+
 /// Read-only cross-runner observation. Native counters exclude H boundaries;
 /// legacy time is uncalibrated and is not charged as fabricated CPU cycles.
 pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
@@ -871,8 +930,8 @@ pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
         .ok_or("PA bootstrap coordinator unavailable")?;
     let hw = c.hardware.borrow();
     let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-    Ok(serde_json::json!({
-        "schema": "pa9500-bootstrap-status-1", "profile": if hw.observed_field_words.is_some() { "bootstrap-v3" } else if hw.observed_low_triad.is_some() { "bootstrap-v2" } else { "bootstrap-v1" },
+    let mut status = serde_json::json!({
+        "schema": "pa9500-bootstrap-status-1", "profile": if hw.observed_power_pair.is_some() { "bootstrap-v4" } else if hw.observed_field_words.is_some() { "bootstrap-v3" } else if hw.observed_low_triad.is_some() { "bootstrap-v2" } else { "bootstrap-v1" },
         "active_isa": if c.in_legacy { "esr-h" } else { "native" },
         "native_registers": crate::collect_registers(&rt.state),
         "native_instructions": rt.instruction_count(), "native_cycles": rt.cycle_count(),
@@ -884,7 +943,17 @@ pub fn bootstrap_status(rt: &CoreRuntime) -> Result<Value, String> {
         "selector": hw.selector, "gate": hw.gate.to_vec(),
         "card_sram_sha256": hw.card.as_ref().map(|card| hash(&card.sram)),
         "physical_switch_timing_qualified": false
-    }))
+    });
+    if hw.observed_power_pair.is_some() {
+        status["power_context"] = serde_json::json!({
+            "state":format!("{:?}", rt.state.power_state()).to_ascii_lowercase(),
+            "input_pair":hw.observed_power_pair,"output_latches":hw.startup_latches,
+            "irq_IMR_candidate":hw.irq_imr_only_candidate,
+            "elapsed_timing_units":rt.elapsed_timing_units(),
+            "physical_readback_qualified":false
+        });
+    }
+    Ok(status)
 }
 
 #[cfg(test)]

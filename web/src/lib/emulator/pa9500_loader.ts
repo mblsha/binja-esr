@@ -1,4 +1,4 @@
-export type PaProfile = 'bootstrap-v1' | 'bootstrap-v2' | 'bootstrap-v3';
+export type PaProfile = 'bootstrap-v1' | 'bootstrap-v2' | 'bootstrap-v3' | 'bootstrap-v4';
 export type PaInputMode = 'native' | 'basic';
 
 export type PaEditorAction = 'delete' | 'insert';

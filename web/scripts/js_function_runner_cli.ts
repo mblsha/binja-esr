@@ -50,7 +50,7 @@ Usage:
 Options:
   --model <iq-7000|pc-e500|oz-9600|pa-9500>   ROM preset (default: Rust runtime default)
   --rom <path>               Explicit ROM path (overrides --model)
-  --pa9500-profile <bootstrap-v1|bootstrap-v2|bootstrap-v3>  Explicit provisional mixed-ISA board profile
+  --pa9500-profile <bootstrap-v1|bootstrap-v2|bootstrap-v3|bootstrap-v4>  Explicit provisional mixed-ISA board profile
   --pa9500-card-rom <path>    Verified PA-9C3 ROM (requires SRAM)
   --pa9500-card-sram <path>   Logical PA-9C3 SRAM (requires ROM)
   --pa9500-uart              Opt in to the provisional register-UART transport

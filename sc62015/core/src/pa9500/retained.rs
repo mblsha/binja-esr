@@ -18,10 +18,14 @@ fn board(runtime: &CoreRuntime) -> Result<SharedHardware, String> {
     {
         return Err("PA retained backing requires an explicit bootstrap profile".into());
     }
-    runtime
+    let hw = runtime
         .pa9500_compatibility()
         .map(|c| c.hardware.clone())
-        .ok_or_else(|| "PA retained backing requires the shared coordinator".into())
+        .ok_or_else(|| "PA retained backing requires the shared coordinator".to_owned())?;
+    if hw.borrow().irq_imr_only_candidate != runtime.pa9500_irq_imr_only_candidate {
+        return Err("PA retained IRQ profile mismatch".into());
+    }
+    Ok(hw)
 }
 
 fn profile(hw: &Hardware) -> Result<u8, String> {
@@ -39,10 +43,25 @@ fn profile(hw: &Hardware) -> Result<u8, String> {
         hw.observed_low_pair,
         hw.observed_low_triad,
         hw.observed_field_words,
+        hw.observed_power_pair,
+        hw.irq_imr_only_candidate,
     ) {
-        (None, None, None) => Ok(1),
-        (Some([0xe0, 0xe0]), Some([0xe0, 0xe0, 0xe0]), None) => Ok(2),
-        (Some([0xe0, 0xe0]), Some([0xe0, 0xe0, 0xe0]), Some([0xe0, 0xe0, 0xe0, 0xe0])) => Ok(3),
+        (None, None, None, None, false) => Ok(1),
+        (Some([0xe0, 0xe0]), Some([0xe0, 0xe0, 0xe0]), None, None, false) => Ok(2),
+        (
+            Some([0xe0, 0xe0]),
+            Some([0xe0, 0xe0, 0xe0]),
+            Some([0xe0, 0xe0, 0xe0, 0xe0]),
+            None,
+            false,
+        ) => Ok(3),
+        (
+            Some([0xe0, 0xe0]),
+            Some([0xe0, 0xe0, 0xe0]),
+            Some([0xe0, 0xe0, 0xe0, 0xe0]),
+            Some([0xe0, 0xe0]),
+            true,
+        ) => Ok(4),
         _ => Err("PA retained backing has a noncanonical bootstrap profile".into()),
     }
 }

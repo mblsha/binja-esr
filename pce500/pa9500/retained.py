@@ -23,6 +23,14 @@ def profile(hw):
     ):
         raise ValueError("PA retained backing layout/profile mismatch")
     flags = (hw.observed_low_pair, hw.observed_low_triad, hw.observed_field_words)
+    if hw.observed_power_pair is not None or hw.irq_imr_only_candidate:
+        if (
+            flags == (bytes([0xE0] * 2), bytes([0xE0] * 3), bytes([0xE0] * 4))
+            and hw.observed_power_pair == bytes([0xE0] * 2)
+            and hw.irq_imr_only_candidate
+        ):
+            return 4
+        raise ValueError("PA retained backing has a noncanonical power profile")
     if flags == (None, None, None):
         return 1
     if flags == (bytes([0xE0] * 2), bytes([0xE0] * 3), None):
