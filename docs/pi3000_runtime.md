@@ -151,9 +151,18 @@ The browser also exposes the verified Clock contact at raw `(240,572)`.
 The ROM keeps Clock open after release and shows its Tokyo/New York views,
 time-setting dialog and daily-alarm dialog. Enabling the default daily alarm
 through normal touch input programs an ordinary next-day RTC deadline.
-Numeric hour editing and delivery of the due alarm remain under recovery;
-dialog reachability does not establish those contracts. Clock redraws can
-require several million scheduler boundaries after closing a dialog.
+Entering both hour digits `0`, `1` saves 01:00; entering `0`, `1`, `0`, `1`
+in the daily-alarm dialog saves 01:01. Native and actual browser input agree
+on the packed RTC bytes and complete visible frames. The earlier single-digit
+input leaves hour-field status bit7 set and takes the ROM's incorrect-time path.
+With the separately enabled calendar/cyclic/alarm candidate, normal input and
+scheduler advancement deliver the daily-alarm popup and reschedule its deadline
+for the next day. Calendar-only advancement does not deliver it. Raw column0,
+row0 clears the alarm, but the larger popup's restored background contains
+fragments; complete alarm dismissal and audible output remain under recovery.
+The smaller incorrect-time popup clears back to its numeric editor normally.
+Clock redraws can require several million scheduler boundaries after closing
+a dialog. These are emulator contracts, not physical timing qualification.
 
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only

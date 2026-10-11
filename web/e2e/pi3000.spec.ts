@@ -632,6 +632,68 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 			}),
 		);
 	}
+	// Ordinary numeric entry accepts both hour digits. The earlier single-digit
+	// candidate is rejected by the ROM's hour-field status check.
+	await holdTouch(219, 69, 50_000, 3_000_000);
+	await holdTouch(38, 14, 250_000, 1_500_000);
+	await holdTouch(16, 156, 50_000, 300_000);
+	await holdTouch(16, 142, 50_000, 300_000);
+	await holdTouch(219, 49, 50_000, 3_000_000);
+	const editedClock = await rpc(page, 'eval_js', {
+		source:
+			'return { capture: await e.lcd.capture(1), time: await Promise.all(Array.from({length:5}, (_,i) => e.memory.read(0x8000+i))) };',
+	});
+	expect(editedClock.error).toBeNull();
+	const editedClockResult = JSON.parse(editedClock.resultJson);
+	expect(editedClockResult.time).toEqual([0x00, 0x00, 0x09, 0xe1, 0x05]);
+	const editedClockDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					editedClockResult.capture.pixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(editedClockDigest).toBe('5e4f2ceed9b92fe52d94cb31c85f19b51145a1e62a9ac7389e750e78ca888d91');
+	await expect.poll(renderedPanelDigest).toBe(editedClockDigest);
+	await holdTouch(84, 14, 50_000, 1_500_000);
+	for (const y of [156, 142, 156, 142]) await holdTouch(16, y, 50_000, 300_000);
+	await holdTouch(82, 35, 50_000, 300_000);
+	await holdTouch(219, 49, 50_000, 3_000_000);
+	const savedAlarm = await rpc(page, 'eval_js', {
+		source:
+			'return { capture: await e.lcd.capture(1), alarm: await Promise.all(Array.from({length:6}, (_,i) => e.memory.read(0x8010+i))) };',
+	});
+	expect(savedAlarm.error).toBeNull();
+	const savedAlarmResult = JSON.parse(savedAlarm.resultJson);
+	expect(savedAlarmResult.alarm).toEqual([0x00, 0x01, 0x09, 0xe1, 0x05, 0x07]);
+	const savedAlarmDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					savedAlarmResult.capture.pixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(savedAlarmDigest).toBe('8d8413e74cf75231927455dd8bf51a81bd99d2d296d604fd67a5c7ac3e3a23bf');
+	await expect.poll(renderedPanelDigest).toBe(savedAlarmDigest);
+	expect((await rpc(page, 'pi_state')).fault).toBeNull();
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-clock-edited-alarm.png') });
+		await writeFile(
+			resolve(output, 'browser-clock-edited-alarm.json'),
+			JSON.stringify({
+				editedClockDigest,
+				time: editedClockResult.time,
+				savedAlarmDigest,
+				alarm: savedAlarmResult.alarm,
+				state: await rpc(page, 'pi_state'),
+			}),
+		);
+	}
 });
 
 test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
