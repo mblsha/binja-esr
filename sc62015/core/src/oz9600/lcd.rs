@@ -33,6 +33,9 @@ pub struct LcdController {
     pub data_writes: u64,
     pub data_reads: u64,
     pub block_operations: u64,
+    /// ROM-derived experiment: earlier non-bypass windows protect their pixels.
+    /// PI FA47E/FA592 reorder descriptors from window 2; silicon is unqualified.
+    pub ordered_window_clipping_candidate: bool,
 }
 
 impl Default for LcdController {
@@ -61,6 +64,7 @@ impl LcdController {
             data_writes: 0,
             data_reads: 0,
             block_operations: 0,
+            ordered_window_clipping_candidate: false,
         }
     }
 }
@@ -150,7 +154,24 @@ impl LcdController {
         let ymin = Self::window_coordinate(window[2], window[3], 1);
         let xmax = Self::window_coordinate(window[4], window[5], 3);
         let ymax = Self::window_coordinate(window[6], window[7], 1);
-        (xmin..=xmax).contains(&(x as i32)) && (ymin..=ymax).contains(&(y as i32))
+        if !(xmin..=xmax).contains(&(x as i32)) || !(ymin..=ymax).contains(&(y as i32)) {
+            return false;
+        }
+        if self.ordered_window_clipping_candidate {
+            for previous in &self.windows[..usize::from(self.registers[9])] {
+                if previous[7] & 2 != 0 {
+                    continue;
+                }
+                let xmin = Self::window_coordinate(previous[0], previous[1], 3);
+                let ymin = Self::window_coordinate(previous[2], previous[3], 1);
+                let xmax = Self::window_coordinate(previous[4], previous[5], 3);
+                let ymax = Self::window_coordinate(previous[6], previous[7], 1);
+                if (xmin..=xmax).contains(&(x as i32)) && (ymin..=ymax).contains(&(y as i32)) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn write_pixels(&mut self, x: u16, y: u16, value: u8) {
@@ -337,6 +358,50 @@ impl LcdController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_window_candidate_preserves_earlier_region_and_advances_masked_blocks() {
+        let mut lcd = LcdController::with_geometry(16, 8);
+        let define = |lcd: &mut LcdController, index, bounds: [u16; 4], bypass| {
+            lcd.write(9, index).unwrap();
+            for (n, value) in bounds.iter().enumerate() {
+                let [lo, hi] = value.to_le_bytes();
+                lcd.write(24 + n * 2, lo).unwrap();
+                lcd.write(25 + n * 2, hi | if n == 3 { bypass } else { 0 })
+                    .unwrap();
+            }
+        };
+        define(&mut lcd, 1, [0, 0, 15, 7], 2);
+        lcd.write(3, 255).unwrap();
+        lcd.set_word(16, 2);
+        lcd.set_word(18, 2);
+        lcd.write(2, 255).unwrap();
+        define(&mut lcd, 2, [4, 2, 6, 3], 0);
+        define(&mut lcd, 4, [8, 2, 9, 3], 0); // Later windows do not occlude.
+        define(&mut lcd, 3, [2, 1, 9, 5], 0);
+        lcd.ordered_window_clipping_candidate = true;
+        lcd.write(5, 0x10).unwrap();
+        lcd.write(2, 0).unwrap();
+        for x in 2..10 {
+            assert_eq!(lcd.pixel(x, 2), (4..=6).contains(&x));
+        }
+        assert_eq!(lcd.word(16), 3);
+        lcd.write(3, 128).unwrap();
+        lcd.set_word(16, 4);
+        lcd.set_word(18, 3);
+        lcd.set_word(6, 2);
+        lcd.write(0, 255).unwrap();
+        assert!(!lcd.pixel(4, 3) && !lcd.pixel(5, 3));
+        assert_eq!(lcd.word(16), 6); // Clipped transfers still advance.
+        lcd.write(9, 2).unwrap();
+        lcd.write(2, 255).unwrap();
+        assert!(lcd.pixel(6, 3)); // Selected earlier window can draw its edge.
+        lcd.write(9, 1).unwrap();
+        lcd.set_word(16, 4);
+        lcd.set_word(18, 2);
+        lcd.write(2, 0).unwrap();
+        assert!(!lcd.pixel(4, 2)); // Explicit bypass remains available.
+    }
 
     #[test]
     fn signed_pixel_stream_crosses_zero_on_both_axes() {

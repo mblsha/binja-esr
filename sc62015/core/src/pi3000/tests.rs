@@ -133,6 +133,36 @@ fn fixture(code: &[u8]) -> CoreRuntime {
 }
 
 #[test]
+fn ordered_window_candidate_is_pi_firmware_only_and_requires_fresh_execution() {
+    for profile in [
+        BootstrapProfile::Strict,
+        BootstrapProfile::Compatibility,
+        BootstrapProfile::AuxiliaryAbsent,
+        BootstrapProfile::AuxiliaryControl,
+        BootstrapProfile::Firmware,
+    ] {
+        let h = Hardware::new(BTreeMap::new(), profile);
+        assert_eq!(
+            h.lcd.ordered_window_clipping_candidate,
+            profile == BootstrapProfile::Firmware
+        );
+    }
+    let mut rt = fixture(&[0]);
+    rt.configure_pi3000_ordered_window_clipping_candidate(true)
+        .unwrap();
+    assert_eq!(
+        rt.pi3000_status().unwrap()["lcd_ordered_window_clipping_candidate"],
+        true
+    );
+    rt.configure_pi3000_ordered_window_clipping_candidate(false)
+        .unwrap();
+    rt.step(1).unwrap();
+    assert!(rt
+        .configure_pi3000_ordered_window_clipping_candidate(true)
+        .is_err());
+}
+
+#[test]
 fn periodic_rtc_ticks_coalesce_and_reassert_only_until_both_latches_are_acknowledged() {
     let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
     h.rtc_tick_period = Some(10);

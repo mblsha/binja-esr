@@ -297,6 +297,54 @@ def test_full_frame_owns_pixels_and_invalid_increment_is_atomic():
     assert before == (bytes(lcd.registers), lcd.pbm(), lcd.read_latch, lcd.data_writes)
 
 
+def test_ordered_window_candidate_preserves_earlier_region_and_advances_masked_blocks():
+    lcd = LcdController(16, 8)
+
+    def define(index, bounds, bypass=0):
+        lcd.write(9, index)
+        for n, value in enumerate(bounds):
+            lcd.write(24 + n * 2, value & 255)
+            lcd.write(25 + n * 2, (value >> 8) | (bypass if n == 3 else 0))
+
+    define(1, [0, 0, 15, 7], 2)
+    lcd.write(3, 255)
+    lcd.set_word(16, 2)
+    lcd.set_word(18, 2)
+    lcd.write(2, 255)
+    define(2, [4, 2, 6, 3])
+    define(4, [8, 2, 9, 3])
+    define(3, [2, 1, 9, 5])
+    lcd.ordered_window_clipping_candidate = True
+    lcd.write(5, 0x10)
+    lcd.write(2, 0)
+    assert [lcd.pixel(x, 2) for x in range(2, 10)] == [
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert lcd.word(16) == 3
+    lcd.write(3, 128)
+    lcd.set_word(16, 4)
+    lcd.set_word(18, 3)
+    lcd.set_word(6, 2)
+    lcd.write(0, 255)
+    assert not lcd.pixel(4, 3) and not lcd.pixel(5, 3)
+    assert lcd.word(16) == 6
+    lcd.write(9, 2)
+    lcd.write(2, 255)
+    assert lcd.pixel(6, 3)
+    lcd.write(9, 1)
+    lcd.set_word(16, 4)
+    lcd.set_word(18, 2)
+    lcd.write(2, 0)
+    assert not lcd.pixel(4, 2)
+
+
 @pytest.mark.parametrize("mode,data", [(1, 255), (5, 0)])
 def test_rom_highlight_operations_preserve_and_restore_mixed_pixels(mode, data):
     # Calendar's solid pattern uses mode 1/FF; Notebook uses mode 5/00.

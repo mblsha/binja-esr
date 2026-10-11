@@ -19,6 +19,7 @@ class LcdController:
         self.pixels = bytearray(width * height)
         self.read_latch = 0
         self.data_writes = self.data_reads = self.block_operations = 0
+        self.ordered_window_clipping_candidate = False
 
     def window_descriptor(self, index):
         return bytes(self.windows[index])
@@ -75,7 +76,21 @@ class LcdController:
             self.window_coordinate(window[n], window[n + 1], 3 if n in (0, 4) else 1)
             for n in (0, 2, 4, 6)
         ]
-        return coords[0] <= x <= coords[2] and coords[1] <= y <= coords[3]
+        if not (coords[0] <= x <= coords[2] and coords[1] <= y <= coords[3]):
+            return False
+        if self.ordered_window_clipping_candidate:
+            for previous in self.windows[: self.registers[9]]:
+                if previous[7] & 2:
+                    continue
+                bounds = [
+                    self.window_coordinate(
+                        previous[n], previous[n + 1], 3 if n in (0, 4) else 1
+                    )
+                    for n in (0, 2, 4, 6)
+                ]
+                if bounds[0] <= x <= bounds[2] and bounds[1] <= y <= bounds[3]:
+                    return False
+        return True
 
     def write_pixels(self, x, y, value):
         for bit in range(8):

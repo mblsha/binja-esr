@@ -154,6 +154,19 @@ equals, as established by acquired control resources and their artwork.
 The plus glyph matches its acquired artwork pixel-for-pixel. Complete
 Calculator functions and physical digitizer behavior remain open.
 
+PI Firmware enables the ordered LCD-window candidate. The original ROM inserts
+foreground contexts into an ordered list and reassigns descriptors from window
+2. Earlier non-bypass windows protect their pixels from later selected windows.
+This keeps the daily-alarm popup intact through Clock's minute refresh and
+preserves Schedule's numeric keypad when reopening a saved record. Rust and
+Python implement the same policy; shared LCD and other PI profiles retain their
+previous control. Startup and Calculator visible pixels are unchanged in the
+recorded control, while one native indicator-strip pixel is now protected.
+The policy follows ROM lifecycle and application consumers; physical register
+flags, read clipping and timing remain unqualified.
+`configure_pi3000_ordered_window_clipping_candidate(bool)` retains explicit
+controls before execution, and `pi3000_status` reports the current candidate.
+
 The browser also exposes the verified Clock contact at raw `(240,572)`.
 The ROM keeps Clock open after release and shows its Tokyo/New York views,
 time-setting dialog and daily-alarm dialog. Enabling the default daily alarm
@@ -165,10 +178,11 @@ input leaves hour-field status bit7 set and takes the ROM's incorrect-time path.
 With the separately enabled calendar/cyclic/alarm candidate, normal input and
 scheduler advancement deliver the daily-alarm popup and reschedule its deadline
 for the next day. Calendar-only advancement does not deliver it. A no-input
-counterfactual reaches the same fragmented Clock repaint after the next minute
-as the earlier contact sequence. That repaint does not establish an alarm-clear
-contact; timed refresh/modal ownership, acknowledgement and audible output
-remain under recovery.
+selected-window control reaches the same fragmented Clock repaint after the next
+minute as the earlier contact sequence. Ordered-window protection now preserves
+the popup during that refresh. Neither the old repaint nor the protected popup
+establishes an alarm-clear contact; acknowledgment and audible output remain
+under recovery.
 The browser's Clear control and Escape use column1,row6 (scanner byte1C,
 virtual contact14). They close the incorrect-time popup and clear its hour
 field through the ROM's matrix scanner, preserving RTC. Native and browser

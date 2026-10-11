@@ -85,7 +85,9 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	for (let i = 0; i < result.capture.pixels.length; i++)
 		if (result.capture.pixels[i] === 0) pbm[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
 	const digest = createHash('sha256').update(pbm).digest('hex');
-	expect(digest).toBe('e3f12a2322d3d48f158b13d8f80035ea8452d274cea7119131c2632ed4dbd39e');
+	// Ordered window protection changes one indicator-strip pixel (38,239).
+	// The visible calibration panel remains identical to the selected-only control.
+	expect(digest).toBe('609df92844a1c6b065210f0a7a8c79ddc130b2d00da167c151c502ec9f5ddde2');
 	expect(errors).toEqual([]);
 	if (output) {
 		await mkdir(output, { recursive: true });
@@ -113,7 +115,7 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	const contrastState = await rpc(page, 'pi_state');
 	const contrastDigest = await controllerDigest();
 	expect(contrastState.fault).toBeNull();
-	expect(contrastDigest).toBe('0338fff05952b2379a4c1347711fa277387ffefbc6a4bd9dfc5d36f196584fa9');
+	expect(contrastDigest).toBe('4d4e70ad6ae2204f0b4cb522acec4cefc676ef3e2c33c0d1c3f32db73da22549');
 	if (output) await canvas.screenshot({ path: resolve(output, 'browser-contrast.png') });
 	async function holdTouch(x: number, y: number, held: number, released: number) {
 		await canvas.scrollIntoViewIfNeeded();
@@ -129,7 +131,7 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	const initializationState = await rpc(page, 'pi_state');
 	const initializationDigest = await controllerDigest();
 	expect(initializationState.fault).toBeNull();
-	expect(initializationDigest).toBe('f25cdbc1bbfddf62ffcefb56f0f07dfb98ae8e9f273ee55a9014794a8a08eb4e');
+	expect(initializationDigest).toBe('c4a3195c582bd4f4bc3e65456ce5da1f07fc64d6f8ab531022f485f0c6c77dd6');
 	expect(errors).toEqual([]);
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-initialization.png') });
@@ -142,7 +144,7 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	expect(calendarState.selector).toBe(0xf1);
 	expect(calendarState.unmapped_low_read).toBe(0xe0);
 	expect(calendarState.native_instructions).toBe(5197729);
-	expect(calendarDigest).toBe('72d7fc2b314eb7d805a64a68a28e85193d5558a51e24d3083da8defa5e704138');
+	expect(calendarDigest).toBe('316007e39fb2600274c94cd7f9c0a62de8c2b1d0aa5d31c3bba837f3c4f2c4d4');
 	expect(errors).toEqual([]);
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-calendar.png') });
@@ -155,7 +157,7 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	expect(contactState.fault).toBeNull();
 	expect(contactState.tablet.slice(0, 3)).toEqual([432, 419, 0]);
 	expect(contactState.native_instructions).toBe(5463195);
-	expect(contactDigest).toBe('48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9');
+	expect(contactDigest).toBe('0e6349a75f611f12bd250111bb7097428c422a37350656844b0dfbb188d5f58e');
 	expect(errors).toEqual([]);
 	const blinkSnapshots = [{ state: contactState, digest: contactDigest }];
 	for (let i = 0; i < 32; i++) {
@@ -163,8 +165,8 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 		blinkSnapshots.push({ state: await rpc(page, 'pi_state'), digest: await controllerDigest() });
 	}
 	expect([...new Set(blinkSnapshots.map((s) => s.digest))]).toEqual([
-		'48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9',
-		'b5c34cd004f6732bb14f18c76d9e5054cdbd5719fc414b9c3c58bce696212875',
+		'0e6349a75f611f12bd250111bb7097428c422a37350656844b0dfbb188d5f58e',
+		'9dc0ca3831b5a4c12282a81bf08df071258f59fe312f1cceac40964f400ce2cf',
 	]);
 	expect(blinkSnapshots.at(-1)!.state.native_instructions).toBe(5474438);
 	expect(blinkSnapshots.every((s) => s.state.fault === null)).toBe(true);
@@ -389,7 +391,19 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 		);
 	}
 	expect(reopenedContentDigest).toBe('7a5f6055da909a1b7b9fa0da10724478f8c7575e7c8ce761f3b34489c50de0e0');
-	expect(reopenedPanelDigest).toBe('9caec32856f67c8ebffff4f202a227807917adf46451004e07aa510e817d96f5');
+	// The entry's lower-priority clear must preserve the foreground keypad.
+	// Its complete lower panel matches the independently captured numeric mode.
+	const reopenedKeypadDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 84 }, (_, i) =>
+					reopenedPixels[84 + Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(reopenedKeypadDigest).toBe('8d33de968a2f9e23e2eedf8b66b051ebcdaabacc1df9fc8ae2e78844d4a5807f');
+	expect(reopenedPanelDigest).toBe('d10f60acd356dce92b83d891794bb22e02013aa6d98186c2a80f62bc53904638');
 	expect(errors).toEqual([]);
 	await holdKey('vk-off', 200_000, 750_000);
 	const recordOffState = await rpc(page, 'pi_state');
@@ -570,7 +584,7 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 	// popup and clears the hour field through the ROM's matrix scanner.
 	await holdTouch(16, 142, 50_000, 300_000);
 	await holdTouch(219, 49, 50_000, 1_000_000);
-	await expect.poll(renderedPanelDigest).toBe('f58544d70fe253f96fd64f6b415f700b2a39264e539809beacce5833d3efb45b');
+	await expect.poll(renderedPanelDigest).toBe('59927dd08f7183fb50ceaf44296b00cad20c9289a0a0f85f666e79a32c6086af');
 	await holdKey('vk-clear', 50_000, 3_000_000);
 	const clearedClockError = await rpc(page, 'eval_js', {
 		source:

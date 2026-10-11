@@ -7,6 +7,14 @@ from pce500.pi3000.auxiliary import Auxiliary
 from pce500.pi3000.input import parse_replay
 
 
+def test_ordered_window_candidate_is_pi_firmware_only():
+    assert not Hardware({}).lcd.ordered_window_clipping_candidate
+    assert not Hardware(
+        {}, auxiliary_control=True
+    ).lcd.ordered_window_clipping_candidate
+    assert Hardware({}, firmware=True).lcd.ordered_window_clipping_candidate
+
+
 @pytest.mark.parametrize(
     "route,control,data,other",
     [

@@ -181,6 +181,11 @@ impl Hardware {
         Ok(())
     }
     pub fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
+        let mut lcd = LcdController::with_geometry(WIDTH, HEIGHT);
+        // FA47E inserts foreground contexts before existing ones; FA592
+        // removes them, and FB2BA programs descriptors in that order from 2.
+        // This candidate protects the alarm popup from Clock's minute redraw.
+        lcd.ordered_window_clipping_candidate = profile == BootstrapProfile::Firmware;
         Self {
             selector: 0xfd,
             mode: 0,
@@ -188,7 +193,7 @@ impl Hardware {
             ram: vec![0; 0x40000],
             scratch: vec![0; 0x4000],
             banks,
-            lcd: LcdController::with_geometry(WIDTH, HEIGHT),
+            lcd,
             rtc: Rtc::default(),
             tablet: Tablet::default(),
             tablet_route: None,
@@ -594,6 +599,23 @@ impl CoreRuntime {
         let h = self.pi3000_hardware.as_ref().ok_or("not a PI runtime")?;
         Ok(retained::retained_state(self, h))
     }
+    /// Ordered window exclusion inferred from PI window lifecycle and consumers.
+    /// Configure before CPU or HALT time advances; hardware flags remain open.
+    pub fn configure_pi3000_ordered_window_clipping_candidate(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), String> {
+        if self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PI LCD window policy must be configured before execution".into());
+        }
+        self.pi3000_hardware
+            .as_ref()
+            .ok_or("not a PI runtime")?
+            .borrow()
+            .lcd
+            .ordered_window_clipping_candidate = enabled;
+        Ok(())
+    }
     pub fn restore_pi3000_retained_state(&mut self, image: &[u8]) -> Result<(), String> {
         let h = self.pi3000_hardware.as_ref().ok_or("not a PI runtime")?;
         retained::restore_retained_state(self, h, image)
@@ -709,6 +731,7 @@ impl CoreRuntime {
             json!({"model":"pi-3000", "native_instructions":self.instruction_count(),
             "cycles":self.cycle_count(), "pc":self.get_reg("PC"),"selector":h.selector,"mode":h.mode,
             "BP":self.memory.read_internal_byte_silent(0xec),"lcd_writes":h.lcd_writes,
+            "lcd_ordered_window_clipping_candidate":h.lcd.ordered_window_clipping_candidate,
             "absent_auxiliary":h.absent_auxiliary,"fault":h.fault,
             "auxiliary_control":h.auxiliary.is_some(),
             "auxiliary_accepted":h.auxiliary.as_ref().map(|a|a.accepted.clone()),
