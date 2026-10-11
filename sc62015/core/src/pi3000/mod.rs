@@ -13,8 +13,10 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
 };
+pub mod auxiliary;
 pub mod bundle;
 pub mod compatibility;
+pub mod input;
 mod lcd_view;
 #[cfg(test)]
 mod tests;
@@ -40,6 +42,8 @@ pub enum BootstrapProfile {
     Compatibility,
     /// No auxiliary completion/replies; firmware must handle its own timeout.
     AuxiliaryAbsent,
+    /// Stateful startup control/ack candidate; query/recognition data pending.
+    AuxiliaryControl,
 }
 
 #[derive(Clone)]
@@ -70,12 +74,16 @@ pub struct Hardware {
     pub auxiliary_commands: Vec<Vec<u8>>,
     pub auxiliary_command_count: u64,
     pub absent_auxiliary: bool,
+    pub auxiliary: Option<auxiliary::Auxiliary>,
     pub cycle: u64,
     pub fault: Option<String>,
     pub lcd_writes: u64,
     mapped: Option<(u8, u8)>,
 }
 impl Hardware {
+    pub fn external_irq(&self) -> bool {
+        self.auxiliary.is_some() && self.gate[0x10] & self.gate[0x12] & 0x7f != 0
+    }
     pub fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
         Self {
             selector: 0xfd,
@@ -97,6 +105,8 @@ impl Hardware {
             auxiliary_commands: Vec::new(),
             auxiliary_command_count: 0,
             absent_auxiliary: profile == BootstrapProfile::AuxiliaryAbsent,
+            auxiliary: (profile == BootstrapProfile::AuxiliaryControl)
+                .then(auxiliary::Auxiliary::default),
             cycle: 0,
             fault: None,
             lcd_writes: 0,
@@ -113,6 +123,12 @@ impl Hardware {
                 Some(self.lcd.peek((address & 31) as usize, self.cycle))
             }
             0x8a00 if self.absent_auxiliary => Some(2),
+            0x8a00 => self.auxiliary.as_ref().map(|a| a.status()),
+            0x8a04 | 0x8a05 | 0x8a09 if self.auxiliary.is_some() => Some(0),
+            0x8a40..=0x8a5f => self
+                .auxiliary
+                .as_ref()
+                .and_then(|a| a.response((address - 0x8a40) as usize)),
             0x8b1b => self
                 .tablet_route
                 .map(|r| u8::from(r == TabletAdcRoute::External)),
@@ -189,7 +205,7 @@ impl Hardware {
                 }
             }
             0x8a01 | 0x8a06..=0x8a08 => self.io_8a[(address - 0x8a00) as usize] = value,
-            0x8a02..=0x8a03 if self.absent_auxiliary => {
+            0x8a02..=0x8a03 if self.absent_auxiliary || self.auxiliary.is_some() => {
                 self.io_8a[(address - 0x8a00) as usize] = value;
                 if address == 0x8a02 && value == 0x80 {
                     self.auxiliary_command_count += 1;
@@ -198,9 +214,27 @@ impl Hardware {
                             .push(self.auxiliary_request.to_vec());
                     }
                 }
+                if let Some(auxiliary) = &mut self.auxiliary {
+                    let result = if address == 0x8a02 && value == 0x80 {
+                        auxiliary.start(&self.auxiliary_request, self.cycle)
+                    } else if address == 0x8a03 {
+                        auxiliary.acknowledge(value)
+                    } else {
+                        Err(format!(
+                            "unimplemented PI auxiliary start value {value:02X}"
+                        ))
+                    };
+                    if let Err(error) = result {
+                        self.fault.get_or_insert(error);
+                    }
+                }
             }
-            0x8a20..=0x8a3f if self.absent_auxiliary => {
-                self.auxiliary_request[(address - 0x8a20) as usize] = value
+            0x8a20..=0x8a3f if self.absent_auxiliary || self.auxiliary.is_some() => {
+                let offset = (address - 0x8a20) as usize;
+                self.auxiliary_request[offset] = value;
+                if let Some(auxiliary) = &mut self.auxiliary {
+                    auxiliary.mark_written(offset);
+                }
             }
             0xf00c..=0xf00e => self.startup_latches[(address - 0xf00c) as usize] = value,
             0xf103 => self.mapping_unlock = value,
@@ -252,11 +286,14 @@ impl BoundaryDevice for Boundary {
             return Err(CoreError::Other(e.clone()));
         }
         h.cycle = c.cycles;
-        Ok(Some(false))
+        Ok(Some(h.external_irq()))
     }
     fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, _elapsed: u64) -> crate::Result<()> {
         let mut h = self.0.borrow();
         h.cycle = c.cycles;
+        if let Some(auxiliary) = &mut h.auxiliary {
+            auxiliary.advance(c.cycles);
+        }
         if let Some(e) = &h.fault {
             return Err(CoreError::Other(e.clone()));
         }
@@ -296,9 +333,20 @@ pub fn configure(
         (0x8420, 0x8437, false),
         (0x8438, 0x843f, true),
         (0x8800, 0x8800, true),
-        (0x8a00, 0x8a00, profile == BootstrapProfile::AuxiliaryAbsent),
-        (0x8a01, 0x8a08, false),
+        (
+            0x8a00,
+            0x8a00,
+            matches!(
+                profile,
+                BootstrapProfile::AuxiliaryAbsent | BootstrapProfile::AuxiliaryControl
+            ),
+        ),
+        (0x8a01, 0x8a03, false),
+        (0x8a04, 0x8a05, true),
+        (0x8a06, 0x8a08, false),
+        (0x8a09, 0x8a09, true),
         (0x8a20, 0x8a3f, false),
+        (0x8a40, 0x8a5f, true),
         (0x8b00, 0x8b11, false),
         (0x8b1a, 0x8b1b, true),
         (0x8b1c, 0x8b1d, true),
@@ -372,6 +420,7 @@ impl CoreRuntime {
     }
     /// Raw ten-bit physical samples only. Interrupt wiring is still pending;
     /// this does not inject firmware event queues or calibration coordinates.
+    /// The AuxiliaryControl candidate routes press edges through gate bit3.
     pub fn set_pi3000_raw_contact(&mut self, x: u16, y: u16, pressed: bool) -> Result<(), String> {
         let mut h = self
             .pi3000_hardware
@@ -381,7 +430,11 @@ impl CoreRuntime {
         if h.tablet_route.is_none() {
             return Err("PI tablet ADC route is unqualified; select an explicit candidate".into());
         }
-        h.tablet.set_contact(x, y, pressed)?;
+        if h.tablet.set_contact(x, y, pressed)? && h.auxiliary.is_some() {
+            // Firmware-installed source bit3 dispatches FD859's raw sampler.
+            // Edge routing remains part of the explicit auxiliary candidate.
+            h.gate[0x12] |= 8;
+        }
         Ok(())
     }
     pub fn pi3000_hardware(&self) -> Option<&SharedHardware> {
@@ -398,6 +451,9 @@ impl CoreRuntime {
             "cycles":self.cycle_count(), "pc":self.get_reg("PC"),"selector":h.selector,"mode":h.mode,
             "BP":self.memory.read_internal_byte_silent(0xec),"lcd_writes":h.lcd_writes,
             "absent_auxiliary":h.absent_auxiliary,"fault":h.fault,
+            "auxiliary_control":h.auxiliary.is_some(),
+            "auxiliary_accepted":h.auxiliary.as_ref().map(|a|a.accepted.clone()),
+            "auxiliary_accepted_count":h.auxiliary.as_ref().map(|a|a.accepted_count),
             "auxiliary_command_count":h.auxiliary_command_count,"auxiliary_commands":h.auxiliary_commands,
             "tablet_route":h.tablet_route.map(|r|format!("{r:?}")),
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],

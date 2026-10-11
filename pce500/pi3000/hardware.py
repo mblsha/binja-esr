@@ -7,12 +7,13 @@ policies. Unknown I/O and unacquired mapping combinations stay unsupported.
 from pce500.oz9600.lcd import LcdController
 from pce500.oz9600.rtc import Rtc
 from pce500.oz9600.tablet import Tablet
+from pce500.pi3000.auxiliary import Auxiliary
 
 WIDTH, HEIGHT = 240, 336
 
 
 class Hardware:
-    def __init__(self, banks, *, absent_auxiliary=False):
+    def __init__(self, banks, *, absent_auxiliary=False, auxiliary_control=False):
         self.banks = banks
         self.selector, self.mode, self.cycle = 0xFD, 0, 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
@@ -22,6 +23,7 @@ class Hardware:
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
+        self.auxiliary = Auxiliary() if auxiliary_control else None
         self.auxiliary_request = bytearray(32)
         self.auxiliary_commands = []
         self.auxiliary_command_count = 0
@@ -40,6 +42,12 @@ class Hardware:
             return self.lcd.peek(address & 31, self.cycle)
         if address == 0x8A00 and self.absent_auxiliary:
             return 2
+        if address == 0x8A00 and self.auxiliary is not None:
+            return self.auxiliary.status()
+        if address in (0x8A04, 0x8A05, 0x8A09) and self.auxiliary is not None:
+            return 0
+        if 0x8A40 <= address <= 0x8A5F and self.auxiliary is not None:
+            return self.auxiliary.response(address - 0x8A40)
         if address == 0x8B1B and self.tablet_route is not None:
             return int(self.tablet_route == "external")
         if (address, self.tablet_route) in (
@@ -114,15 +122,30 @@ class Hardware:
             ):
                 self.tablet.write_conversion_control(value)
             elif address in (0x8A01, 0x8A06, 0x8A07, 0x8A08) or (
-                self.absent_auxiliary and address in (0x8A02, 0x8A03)
+                (self.absent_auxiliary or self.auxiliary is not None)
+                and address in (0x8A02, 0x8A03)
             ):
                 self.io_8a[address - 0x8A00] = value
                 if address == 0x8A02 and value == 0x80:
                     self.auxiliary_command_count += 1
                     if len(self.auxiliary_commands) < 256:
                         self.auxiliary_commands.append(bytes(self.auxiliary_request))
-            elif self.absent_auxiliary and 0x8A20 <= address < 0x8A40:
-                self.auxiliary_request[address - 0x8A20] = value
+                if self.auxiliary is not None and address in (0x8A02, 0x8A03):
+                    if address == 0x8A02 and value == 0x80:
+                        self.auxiliary.start(self.auxiliary_request, self.cycle)
+                    elif address == 0x8A03:
+                        self.auxiliary.acknowledge(value)
+                    else:
+                        raise ValueError(
+                            f"unimplemented PI auxiliary start value {value:02X}"
+                        )
+            elif (
+                self.absent_auxiliary or self.auxiliary is not None
+            ) and 0x8A20 <= address < 0x8A40:
+                offset = address - 0x8A20
+                self.auxiliary_request[offset] = value
+                if self.auxiliary is not None:
+                    self.auxiliary.mark_written(offset)
             elif 0xF00C <= address <= 0xF00E:
                 self.startup_latches[address - 0xF00C] = value
             elif address == 0xF103:
@@ -148,4 +171,15 @@ class Hardware:
             raise ValueError(
                 "PI tablet ADC route is unqualified; select an explicit candidate"
             )
-        self.tablet.set_contact(x, y, pressed)
+        if self.tablet.set_contact(x, y, pressed) and self.auxiliary is not None:
+            self.gate[0x12] |= 8
+
+    def advance(self, cycle):
+        self.cycle = cycle
+        if self.auxiliary is not None:
+            self.auxiliary.advance(cycle)
+
+    def external_irq(self):
+        return self.auxiliary is not None and bool(
+            self.gate[0x10] & self.gate[0x12] & 0x7F
+        )

@@ -3,6 +3,8 @@
 import pytest
 
 from pce500.pi3000.hardware import Hardware
+from pce500.pi3000.auxiliary import Auxiliary
+from pce500.pi3000.input import parse_replay
 
 
 @pytest.mark.parametrize(
@@ -53,3 +55,51 @@ def test_auxiliary_absence_retains_request_without_claiming_completion():
     first = h.fault
     h.write(0x8801, 3)
     assert h.fault == first
+
+
+def test_auxiliary_completion_is_timed_acknowledged_and_status_only():
+    a = Auxiliary()
+    request = b"\xfe\x01" + bytes(30)
+    assert a.status() == 2
+    a.mark_written(0)
+    a.mark_written(1)
+    a.start(request, 100)
+    assert a.status() == 0x82 and a.response(0) is None
+    a.advance(131)
+    assert a.status() == 0x82
+    a.advance(132)
+    assert a.status() == 0x42 and a.response(0) == 1 and a.response(1) is None
+    with pytest.raises(ValueError, match="prior completion"):
+        a.start(request, 132)
+    with pytest.raises(ValueError, match="acknowledgment"):
+        a.acknowledge(255)
+    assert a.status() == 0x42
+    a.acknowledge(0xBF)
+    assert a.status() == 2 and a.response(0) is None
+    a.mark_written(0)
+    with pytest.raises(ValueError, match="exactly two"):
+        a.start(request, 133)
+    a.mark_written(1)
+    with pytest.raises(ValueError, match="14FB"):
+        a.start(b"\xfb\x14" + bytes(30), 133)
+    assert a.status() == 2 and a.accepted_count == 1
+
+
+def test_raw_press_uses_candidate_gate_and_replay_rejects_all_invalid_data_first():
+    h = Hardware({}, auxiliary_control=True)
+    h.configure_tablet_route("integrated")
+    h.set_raw_contact(403, 601, True)
+    assert h.gate[0x12] == 8 and not h.external_irq()
+    h.gate[0x10] = 8
+    assert h.external_irq()
+    h.gate[0x12] = 0
+    h.set_raw_contact(404, 602, True)
+    assert h.gate[0x12] == 0
+    for data in [
+        '{"steps":[{"boundaries":1},{"boundaries":1,"tablet":{"raw_x":1024,"raw_y":0,"pressed":true}}]}',
+        '{"steps":[{"boundaries":1,"tablet":{"raw_x":2,"raw_y":3,"pressed":1}}]}',
+        '{"steps":[{"boundaries":1,"native_ram_event":2}]}',
+        '{"steps":[]}',
+    ]:
+        with pytest.raises(ValueError):
+            parse_replay(data)

@@ -106,3 +106,26 @@ fn tablet_route_is_explicit_and_samples_are_held_across_peeks() {
             .is_err());
     }
 }
+
+#[test]
+fn raw_press_uses_only_the_candidate_gate_edge_and_invalid_inputs_are_atomic() {
+    let mut rt = fixture(&[0]);
+    rt.pi3000_hardware().unwrap().borrow().auxiliary = Some(auxiliary::Auxiliary::default());
+    rt.configure_pi3000_tablet_route(TabletAdcRoute::Integrated)
+        .unwrap();
+    rt.set_pi3000_raw_contact(403, 601, true).unwrap();
+    let mut h = rt.pi3000_hardware().unwrap().borrow();
+    assert_eq!(h.gate[0x12], 8);
+    assert!(!h.external_irq());
+    h.gate[0x10] = 8;
+    assert!(h.external_irq());
+    h.gate[0x12] = 0;
+    drop(h);
+    rt.set_pi3000_raw_contact(404, 602, true).unwrap();
+    assert_eq!(rt.pi3000_hardware().unwrap().borrow().gate[0x12], 0);
+    assert!(rt.set_pi3000_raw_contact(1024, 2, false).is_err());
+    assert!(rt.pi3000_hardware().unwrap().borrow().tablet.pressed);
+    rt.set_pi3000_raw_contact(404, 602, false).unwrap();
+    rt.set_pi3000_raw_contact(404, 602, true).unwrap();
+    assert_eq!(rt.pi3000_hardware().unwrap().borrow().gate[0x12], 8);
+}

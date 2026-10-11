@@ -29,6 +29,13 @@ Restart constructs a new board; v4 snapshots do not represent its devices.
 without completion or response bytes. The firmware can take its own timeout
 path; this does not implement the auxiliary device.
 
+`AuxiliaryControl` is a separate stateful candidate for startup control headers
+01FE,30FB,02FE. It requires exactly two freshly written request bytes, enters
+busy, completes after 32 native timing units, exposes status01 and requires BF
+acknowledgment before another request. Unknown commands and query bytes stay
+unsupported. Its idle auxiliary event ports return zero; physical protocol,
+device identity, timing and recognition behavior remain unqualified.
+
 The default ISR replacement policy currently triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only
 ISR experiment reaches a four-cross calibration frame after two million
@@ -38,11 +45,18 @@ semantics remain unqualified; model selection does not infer that experiment.
 `configure_pi3000_tablet_route` selects one of the two ADC branches in
 FE:DBE41. `Integrated` routes control/data to 08B80/08BC0; `External` routes
 to 08800/08C00. `set_pi3000_raw_contact` supplies ten-bit samples and contact
-state. It neither populates firmware event queues nor asserts an unqualified
-interrupt. The route cannot change once selected. Both original ROM branches
+state. It never populates firmware event queues. Strict/absence profiles supply
+only samples; the auxiliary-control candidate routes press edges through gate
+bit3 and the normal EX interrupt. The route cannot change once selected. Both original ROM branches
 return independently chosen raw coordinates with balanced stacks.
 
 ADC completion-on-first-read, held split-byte samples, binary contact pressure,
 LCD sampling sync and physical route selection remain provisional. The
 controller frame is 240×336 native storage; the physical panel specification
 is 239×168 and scan orientation is still being recovered.
+
+`pi3000::input::Replay` validates raw tablet/ON contacts and boundary budgets
+before execution. The current startup replays deliver their hardware interrupt
+and acknowledgment, but BFF20.bit7 remains clear and the ROM takes its
+disabled-sampling branch. Timers and an initial-BP experiment do not resolve
+that mode-enable gap; ordinary foreground touch and GUI support remain open.
