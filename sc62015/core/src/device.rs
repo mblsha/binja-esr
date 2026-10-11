@@ -473,7 +473,7 @@ impl DeviceModel {
             {
                 *rt = crate::pi3000::bundle::from_rom_bundle(
                     rom,
-                    crate::pi3000::BootstrapProfile::Strict,
+                    crate::pi3000::BootstrapProfile::Firmware,
                 )
                 .map_err(crate::CoreError::Other)?;
                 return Ok(());

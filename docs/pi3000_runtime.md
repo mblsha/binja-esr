@@ -17,13 +17,18 @@ cargo run --manifest-path sc62015/core/Cargo.toml --features pi3000 \
   --bin pce500 -- --model pi-3000 --rom /path/to/pi-3000.pirom --steps 20
 ```
 
-The factory starts fresh scratch/high RAM and leaves periodic timers disabled
-pending calibration. Unsupported bus operations stop and poison the runtime.
+The normal model factory starts fresh scratch/high RAM with the `Firmware`
+startup candidate. It combines initial BP=D0, clear-only ISR writes, coupled
+predecrement transfers, nominal organizer timer periods, the LCC.bit7/HALT
+main-clock candidate, integrated ADC and Gate1 press edges. These settings are
+supported by ROM consumers; physical reset state and timing remain unqualified.
+Unsupported bus operations stop and poison the runtime.
 An unknown instruction mapping fails preflight; an unknown data access stops
 after its committed instruction. Generic card overlays are not applied.
 Restart constructs a new board; v4 snapshots do not represent its devices.
 
-`BootstrapProfile::Strict` is the default native-only/unknown-auxiliary control.
+`BootstrapProfile::Strict` retains the native-only/unknown-auxiliary control
+through the explicit bundle API; periodic timers stay disabled in that profile.
 `Compatibility` opts into the firmware-derived gate/page handoff.
 `AuxiliaryAbsent` additionally supplies status02 and retains auxiliary requests
 without completion or response bytes. The firmware can take its own timeout
@@ -84,6 +89,20 @@ set the ON input bit. With explicit initial BP=D0, clear-only ISR writes,
 coupled transfers, nominal clocks, the HALT clock candidate and Gate1, repeated
 raw contacts rearm and advance the calibration screen. The preserved four-point
 consumer reaches 455 ADC reads without a bus fault or the earlier OFF stop.
-Calibration completion, physical reset CPU state, scan orientation and
+Calibration dialog confirmation, physical reset CPU state, scan orientation and
 organizer GUI support remain open. Model selection does not enable these
-experiments automatically.
+controls independently; `Firmware` selects the tested combination.
+
+The recovered calibration requires ten held samples per target. The initial
+quarter-pixel acceptance bounds are X=[64,192]/[620,1020] and
+Y=[64,192]/[340,740]. Raw inputs (340,240), (700,240), (340,700), (700,700)
+with sufficient holds complete all four targets and produce the ROM's
+calibration-complete message. A shorter third hold collected only nine samples.
+Confirmation/ordinary key mapping and entry into the organizer remain open.
+
+Raw replay also accepts `contact` with `column`, `row` and `pressed`, validated
+for the shared 11-column/eight-row matrix before any input runs. This supplies
+electrical contacts only; no PI key-name table or C/CE mapping is asserted.
+The browser Rust bridge builds with PI support, raw tablet contact and status
+APIs, and avoids a second reset. Browser model selection, panel presentation
+and input UI are still pending.

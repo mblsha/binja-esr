@@ -13,20 +13,22 @@ WIDTH, HEIGHT = 240, 336
 
 
 class Hardware:
-    def __init__(self, banks, *, absent_auxiliary=False, auxiliary_control=False):
+    def __init__(
+        self, banks, *, absent_auxiliary=False, auxiliary_control=False, firmware=False
+    ):
         self.banks = banks
         self.selector, self.mode, self.cycle = 0xFD, 0, 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.gate, self.gpio = bytearray(64), bytearray(18)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
-        self.tablet, self.tablet_route = Tablet(), None
-        self.tablet_interrupt_source = "gate3"
-        self.halt_main_timer_candidate = False
+        self.tablet, self.tablet_route = Tablet(), "integrated" if firmware else None
+        self.tablet_interrupt_source = "gate1" if firmware else "gate3"
+        self.halt_main_timer_candidate = firmware
         self.halt_main_timer_units = 0
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
-        self.auxiliary = Auxiliary() if auxiliary_control else None
+        self.auxiliary = Auxiliary() if auxiliary_control or firmware else None
         self.auxiliary_request = bytearray(32)
         self.auxiliary_commands = []
         self.auxiliary_command_count = 0

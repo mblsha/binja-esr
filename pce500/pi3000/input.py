@@ -14,6 +14,7 @@ def parse_replay(data):
         if not isinstance(step, dict) or set(step) - {
             "boundaries",
             "tablet",
+            "contact",
             "on_key",
             "label",
         }:
@@ -27,6 +28,22 @@ def parse_replay(data):
             raise ValueError("PI ON contact must be boolean")
         if step.get("label") is not None and not isinstance(step["label"], str):
             raise ValueError("PI replay label must be text")
+        matrix = step.get("contact")
+        if matrix is not None:
+            if not isinstance(matrix, dict) or set(matrix) != {
+                "column",
+                "row",
+                "pressed",
+            }:
+                raise ValueError("PI matrix contact fields mismatch")
+            if (
+                type(matrix["column"]) is not int
+                or not 0 <= matrix["column"] < 11
+                or type(matrix["row"]) is not int
+                or not 0 <= matrix["row"] < 8
+                or type(matrix["pressed"]) is not bool
+            ):
+                raise ValueError("PI matrix contact out of range")
         contact = step.get("tablet")
         if contact is not None:
             if not isinstance(contact, dict) or set(contact) != {

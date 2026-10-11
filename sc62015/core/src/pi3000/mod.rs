@@ -54,6 +54,8 @@ pub enum BootstrapProfile {
     AuxiliaryAbsent,
     /// Stateful startup control/ack candidate; query/recognition data pending.
     AuxiliaryControl,
+    /// Runnable firmware-derived startup candidate, retaining strict unknown I/O.
+    Firmware,
 }
 
 #[derive(Clone)]
@@ -121,8 +123,11 @@ impl Hardware {
             auxiliary_commands: Vec::new(),
             auxiliary_command_count: 0,
             absent_auxiliary: profile == BootstrapProfile::AuxiliaryAbsent,
-            auxiliary: (profile == BootstrapProfile::AuxiliaryControl)
-                .then(auxiliary::Auxiliary::default),
+            auxiliary: matches!(
+                profile,
+                BootstrapProfile::AuxiliaryControl | BootstrapProfile::Firmware
+            )
+            .then(auxiliary::Auxiliary::default),
             cycle: 0,
             fault: None,
             lcd_writes: 0,
@@ -431,7 +436,29 @@ pub fn configure(
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
     rt.pi3000_hardware = Some(hardware.clone());
     if profile != BootstrapProfile::Strict {
-        rt.pi3000_compatibility = Some(compatibility::Coordinator::new(hardware));
+        rt.pi3000_compatibility = Some(compatibility::Coordinator::new(hardware.clone()));
+    }
+    if profile == BootstrapProfile::Firmware {
+        use crate::llama::state::{BlockTransferPolicy, IsrSoftwareWritePolicy};
+        rt.memory.write_internal_byte(0xec, 0xd0);
+        rt.state
+            .set_isr_software_write_policy(IsrSoftwareWritePolicy::ClearOnly);
+        rt.state
+            .set_block_transfer_policy(BlockTransferPolicy::CoupledPredecrement);
+        let timing = DeviceModel::Pi3000.timer_profile();
+        rt.timer.enabled = true;
+        rt.timer.configure_scr_periods(
+            timing.mti_period,
+            timing.mti_long_period,
+            timing.sti_period,
+            timing.sti_long_period,
+            rt.memory.read_internal_byte_silent(0xfd).unwrap(),
+            rt.cycle_count(),
+        );
+        let mut h = hardware.borrow();
+        h.tablet_route = Some(TabletAdcRoute::Integrated);
+        h.tablet_interrupt_source = TabletInterruptSource::Gate1;
+        h.halt_main_timer_candidate = true;
     }
     Ok(rt)
 }

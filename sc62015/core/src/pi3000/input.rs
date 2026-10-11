@@ -11,6 +11,14 @@ pub struct Contact {
     pub pressed: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixContact {
+    pub column: u8,
+    pub row: u8,
+    pub pressed: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -21,6 +29,8 @@ mod tests {
             r#"{"steps":[{"boundaries":1,"tablet":{"raw_x":2,"raw_y":3,"pressed":1}}]}"#,
             r#"{"steps":[{"boundaries":1,"native_ram_event":2}]}"#,
             r#"{"steps":[]}"#,
+            r#"{"steps":[{"boundaries":1,"contact":{"column":11,"row":0,"pressed":true}}]}"#,
+            r#"{"steps":[{"boundaries":1,"contact":{"column":0,"row":8,"pressed":true}}]}"#,
         ] {
             assert!(Replay::parse(data.as_bytes()).is_err());
         }
@@ -36,6 +46,7 @@ mod tests {
 pub struct Step {
     pub boundaries: u32,
     pub tablet: Option<Contact>,
+    pub contact: Option<MatrixContact>,
     pub on_key: Option<bool>,
     pub label: Option<String>,
 }
@@ -55,6 +66,9 @@ impl Replay {
                     || s.tablet
                         .as_ref()
                         .is_some_and(|c| c.raw_x > 1023 || c.raw_y > 1023)
+                    || s.contact
+                        .as_ref()
+                        .is_some_and(|c| c.column >= 11 || c.row >= 8)
             })
         {
             return Err(CoreError::Other(
@@ -87,6 +101,11 @@ impl Replay {
                     runtime.press_on_key();
                 } else {
                     runtime.release_on_key();
+                }
+            }
+            if let Some(c) = &step.contact {
+                if !runtime.set_physical_matrix_key(c.column * 8 + c.row, c.pressed) {
+                    return Err(CoreError::Other("PI matrix contact is unavailable".into()));
                 }
             }
             runtime.step_scheduler_boundaries(step.boundaries as usize)?;

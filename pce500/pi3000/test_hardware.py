@@ -140,3 +140,28 @@ def test_mapper_readbacks_follow_saved_output_latches():
         h.write(0xF00C + i, value)
         assert h.read(0xF01C + i) == value
     assert h.startup_latches == bytes((0x12, 0x34, 0x56))
+
+
+@pytest.mark.parametrize(
+    "contact",
+    [
+        {"column": 11, "row": 0, "pressed": True},
+        {"column": 0, "row": 8, "pressed": True},
+        {"column": 0, "row": 7, "pressed": 1},
+    ],
+)
+def test_matrix_replay_rejects_bad_late_contacts_before_execution(contact):
+    import json
+
+    with pytest.raises(ValueError):
+        parse_replay(
+            json.dumps(
+                {"steps": [{"boundaries": 10}, {"boundaries": 1, "contact": contact}]}
+            )
+        )
+    assert (
+        parse_replay(
+            '{"steps":[{"boundaries":0,"contact":{"column":0,"row":7,"pressed":true}}]}'
+        )[0]["contact"]["row"]
+        == 7
+    )

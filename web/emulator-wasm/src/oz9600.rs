@@ -21,7 +21,9 @@ impl Sc62015Emulator {
         }
         let error = |e: sc62015_core::CoreError| JsValue::from_str(&e.to_string());
         let mut candidate = CoreRuntime::for_model(model, rom).map_err(error)?;
-        candidate.power_on_reset().map_err(error)?;
+        if model != DeviceModel::Pi3000 {
+            candidate.power_on_reset().map_err(error)?;
+        }
         if model == DeviceModel::Oz9600 {
             if !retained.is_empty() {
                 candidate

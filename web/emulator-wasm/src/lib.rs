@@ -524,7 +524,7 @@ impl Sc62015Emulator {
     pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
         let model = DeviceModel::parse(model).ok_or_else(|| {
             JsValue::from_str(&format!(
-                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600|pa-9500)"
+                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600|pa-9500|pi-3000)"
             ))
         })?;
         self.install_rom(rom, model, Default::default(), &[])
@@ -540,6 +540,28 @@ impl Sc62015Emulator {
     pub fn clear_iq7000_rtc(&mut self) {
         self.iq7000_rtc_seed = None;
         self.runtime.clear_iq7000_clock_seed();
+    }
+
+    pub fn set_pi3000_tablet_contact(
+        &mut self,
+        x: u16,
+        y: u16,
+        pressed: bool,
+    ) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        self.runtime
+            .set_pi3000_raw_contact(x, y, pressed)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn pi3000_state(&self) -> Result<JsValue, JsValue> {
+        let state = self
+            .runtime
+            .pi3000_status()
+            .map_err(|e| JsValue::from_str(&e))?;
+        state
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Advance the deterministic IQ-7000 RTC independently of CPU execution.
@@ -1004,9 +1026,9 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_chip_pixels(&self) -> Result<Uint8Array, JsValue> {
-        if self.model == DeviceModel::Oz9600 {
+        if matches!(self.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
             return Err(JsValue::from_str(
-                "OZ LCD has no HD61202 chip view; use lcd_capture",
+                "This LCD has no HD61202 chip view; use lcd_capture",
             ));
         }
         let rows = LCD_CHIP_ROWS;
@@ -1039,9 +1061,9 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
-        if self.model == DeviceModel::Oz9600 {
+        if matches!(self.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
             return Err(JsValue::from_str(
-                "OZ typed LCD write traces are not available",
+                "Typed LCD write traces are not available for this model",
             ));
         }
         let Some(lcd) = self.runtime.lcd.as_deref() else {
