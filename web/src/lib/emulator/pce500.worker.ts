@@ -38,6 +38,7 @@ type WorkerRequest =
 			paProfile?: PaProfile;
 			paCardRom?: Uint8Array;
 			paCardSram?: Uint8Array;
+			paUart?: boolean;
 	  }
 	| { id: number; type: 'oz_retained_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
@@ -184,7 +185,8 @@ function resetSerial() {
 	self.postMessage({ type: 'serial_reset', ...serial.reset(machineGeneration) });
 }
 function pumpSerial() {
-	if (romModel === 'oz-9600' && emulator?.has_rom()) serial.pump(() => emulator.sio_drain_tx_bytes());
+	if ((romModel === 'oz-9600' || romModel === 'pa-9500') && emulator?.has_rom())
+		serial.pump(() => emulator.sio_drain_tx_bytes());
 }
 
 function syncAudio(force = false) {
@@ -303,6 +305,7 @@ async function evalScript(source: string, signal?: AbortSignal): Promise<any> {
 				return createEvalApi({
 					pa9500Status: () => runWithError('pa9500.status()', () => emulator.pa9500_status()),
 					pa9500CardSram: () => runWithError('pa9500.cardSram()', () => emulator.pa9500_card_sram()),
+					pa9500TakeSerial: () => runWithError('pa9500.takeSerial()', () => emulator.pa9500_take_serial()),
 					callFunction: async (
 						address: number,
 						maxInstructions: number,
@@ -665,7 +668,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'serial_send': {
 				if (msg.generation !== machineGeneration) throw new Error('Stale serial generation');
 				if (operations.busy) throw new Error('Wait for the current replay or step to finish before sending');
-				if (romModel !== 'oz-9600' || !emulator?.has_rom()) throw new Error('Requires a loaded OZ-9600');
+				if (!['oz-9600', 'pa-9500'].includes(romModel) || !emulator?.has_rom())
+					throw new Error('Requires a loaded serial-capable model');
 				replyOk(msg.id, { queued: queueSerialInput(emulator, msg.bytes) });
 				return;
 			}
@@ -678,7 +682,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (operations.busy) throw new Error('Wait for the current replay or step to finish');
 				replyOk(msg.id, {
 					delivery: serial.snapshot(),
-					uart: romModel === 'oz-9600' && emulator?.has_rom() ? emulator.sio_uart_report() : null,
+					uart: ['oz-9600', 'pa-9500'].includes(romModel) && emulator?.has_rom() ? emulator.sio_uart_report() : null,
 				});
 				return;
 			}
@@ -724,7 +728,14 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (model === 'oz-9600')
 					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
 				else if (model === 'pa-9500')
-					loadPa9500(emu, msg.bytes, msg.paProfile ?? 'bootstrap-v3', msg.paCardRom, msg.paCardSram);
+					loadPa9500(
+						emu,
+						msg.bytes,
+						msg.paProfile ?? 'bootstrap-v3',
+						msg.paCardRom,
+						msg.paCardSram,
+						msg.paUart === true,
+					);
 				else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
 					emu.load_rom_with_model(msg.bytes, model);

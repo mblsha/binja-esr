@@ -48,6 +48,7 @@ impl Sc62015Emulator {
         // Commit only after bundle, reset, retained identity and profile validation.
         self.pa9500_bootstrap = None;
         self.pa9500_card_rom.clear();
+        self.pa9500_uart_candidate = false;
         self.runtime = candidate;
         self.rom_image = rom.to_vec();
         self.model = model;

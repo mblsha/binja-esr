@@ -121,6 +121,11 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		69: 'Enter',
 		43: 'Backspace',
 		18: 'Space',
+		0: 'ArrowLeft',
+		15: 'ArrowRight',
+		14: 'ArrowUp',
+		8: 'ArrowDown',
+		5: 'Delete',
 	};
 	const maps = JSON.parse(await readFile(resolve('src/lib/pa9500_keys.json'), 'utf8'));
 	const letters: Record<number, string> = {};
@@ -133,6 +138,7 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		...new Set<number>([
 			...spec.checkpoints.filter((n: number) => n >= 64),
 			...spec.contacts.map((row: number[]) => row[0]),
+			...(spec.on ?? []).map((row: number[]) => row[0]),
 		]),
 	].sort((a, b) => a - b);
 	const snapshots = [],
@@ -144,6 +150,16 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		if (basic && boundary >= 11_000_000 && !basicSelected) {
 			await page.getByTestId('pa-input').selectOption('basic');
 			basicSelected = true;
+		}
+		for (const [at, down] of spec.on ?? []) {
+			if (at !== boundary) continue;
+			if (down) {
+				await page.getByTestId('keyboard-target').locator('canvas').click();
+				await page.keyboard.down('F12');
+			} else await page.keyboard.up('F12');
+			const state = await request(page, 'input_state');
+			expect(state.rust.on).toBe(down);
+			deliveries.push({ boundary, code: 'on', down, rust: state.rust });
 		}
 		for (const [at, code, down] of spec.contacts) {
 			if (at !== boundary) continue;
@@ -159,7 +175,8 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		}
 		if (spec.checkpoints.includes(boundary)) {
 			const observed = await observation(page);
-			snapshots.push({ boundary, ...observed });
+			const serial = spec.capture_serial ? (await request(page, 'serial_status')).uart : undefined;
+			snapshots.push({ boundary, ...observed, ...(spec.capture_serial ? { uart: serial } : {}) });
 			await canvasMatches(page, observed.capture.pixels);
 			if (output)
 				await page.getByTestId('keyboard-target').screenshot({ path: resolve(output, `${label}-${boundary}.png`) });
@@ -187,6 +204,100 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 			expect(actual.capture.pixels).toEqual(target.capture.pixels);
 			expect(actual.card_sram).toEqual(target.card_sram);
 		}
+	}
+});
+
+test('PA ordinary BASIC navigation and ON BREAK through host DOM keys', async ({ page }) => {
+	test.skip(!cardRom || !cardSram || !replayPath, 'Supply paired card images and a frozen BASIC replay');
+	test.setTimeout(240_000);
+	await openPa(page);
+	await page.getByTestId('advanced-panel').locator('> summary').click();
+	await page.getByTestId('pa-card-rom').setInputFiles(cardRom!);
+	await page.getByTestId('pa-card-sram').setInputFiles(cardSram!);
+	await page.getByTestId('pa-card-load').click();
+	await expect(page.getByTestId('pa-card-load')).toBeEnabled();
+	await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	const spec = JSON.parse(await readFile(replayPath!, 'utf8'));
+	const result = await replay(page, spec, true);
+	if (output) {
+		await mkdir(output, { recursive: true });
+		await writeFile(resolve(output, 'browser-replay.json'), JSON.stringify(result));
+	}
+	if (expectedPath) {
+		const expected = JSON.parse(await readFile(expectedPath, 'utf8')).checkpoints;
+		for (const actual of result.snapshots) {
+			const target = expected.find((item: any) => item.boundary === actual.boundary);
+			expect(actual.status).toEqual(target.status);
+			expect(actual.capture.pixels).toEqual(target.capture.pixels);
+			expect(actual.card_sram).toEqual(target.card_sram);
+		}
+	}
+});
+
+test('PA serial TEST through ordinary BASIC and browser transport', async ({ page }) => {
+	test.skip(
+		!cardRom || !cardSram || !replayPath || !expectedPath,
+		'Supply paired serial TEST media and native control',
+	);
+	test.setTimeout(240_000);
+	await openPa(page);
+	const spec = JSON.parse(await readFile(replayPath!, 'utf8'));
+	await page.getByTestId('advanced-panel').locator('> summary').click();
+	await page.getByTestId('pa-uart').setChecked(spec.uart_candidate);
+	await page.getByTestId('pa-card-rom').setInputFiles(cardRom!);
+	await page.getByTestId('pa-card-sram').setInputFiles(cardSram!);
+	await page.getByTestId('pa-card-load').click();
+	await expect(page.getByTestId('pa-card-load')).toBeEnabled();
+	await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	const result = await replay(page, spec, true);
+	const expected = JSON.parse(await readFile(expectedPath!, 'utf8')).checkpoints;
+	for (const actual of result.snapshots) {
+		const target = expected.find((item: any) => item.boundary === actual.boundary);
+		expect(actual.status).toEqual(target.status);
+		expect(actual.capture.pixels).toEqual(target.capture.pixels);
+		expect(actual.card_sram).toEqual(target.card_sram);
+		expect(actual.uart).toEqual(target.serial.uart);
+	}
+	const bytes = expected.flatMap((cp: any) => cp.serial.bytes);
+	await page.getByTestId('serial-panel').locator('> summary').click();
+	await expect(page.getByTestId('serial-count')).toContainText(`${bytes.length} bytes received`);
+	let raw = Buffer.alloc(0);
+	if (bytes.length) {
+		const download = page.waitForEvent('download');
+		await page.getByTestId('serial-download').click();
+		const file = await download;
+		expect(file.suggestedFilename()).toBe('pa-9500-serial.raw');
+		raw = await readFile((await file.path())!);
+		expect([...raw]).toEqual(bytes);
+	} else await expect(page.getByTestId('serial-download')).toBeDisabled();
+	const before = await observation(page);
+	await page.getByRole('button', { name: 'More options' }).click();
+	await page.getByTestId('reset-session').click();
+	await expect(page.getByTestId('pause-resume')).toBeEnabled();
+	const reset = await observation(page);
+	expect(reset.card_sram).toEqual(before.card_sram);
+	expect(reset.status.native_instructions).toBe(64);
+	const uartReset = (await request(page, 'serial_status')).uart;
+	expect(Boolean(uartReset)).toBe(spec.uart_candidate);
+	await expect(page.getByTestId('serial-count')).toContainText('0 bytes received');
+	const recovered = await replay(page, spec, true, 'serial-recovered');
+	await expect(page.getByTestId('serial-count')).toContainText(`${bytes.length} bytes received`);
+	let recoveredRaw = Buffer.alloc(0);
+	if (bytes.length) {
+		const download = page.waitForEvent('download');
+		await page.getByTestId('serial-download').click();
+		recoveredRaw = await readFile((await (await download).path())!);
+		expect([...recoveredRaw]).toEqual(bytes);
+	}
+	if (output) {
+		await mkdir(output, { recursive: true });
+		await writeFile(
+			resolve(output, 'browser-serial.json'),
+			JSON.stringify({ result, before, reset, uartReset, recovered }),
+		);
+		await writeFile(resolve(output, 'browser-serial.raw'), raw);
+		await writeFile(resolve(output, 'browser-serial-recovered.raw'), recoveredRaw);
+		await writeFile(resolve(output, 'browser-retained-card.bin'), Uint8Array.from(before.card_sram));
 	}
 });
 

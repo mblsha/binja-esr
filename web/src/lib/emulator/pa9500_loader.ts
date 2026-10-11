@@ -8,8 +8,10 @@ export function loadPa9500(
 	profile: PaProfile,
 	cardRom: Uint8Array = new Uint8Array(),
 	cardSram: Uint8Array = new Uint8Array(),
+	uartCandidate = false,
 ) {
-	emulator.load_pa9500(bundle, cardRom, cardSram, profile);
+	if (uartCandidate) emulator.load_pa9500_with_uart(bundle, cardRom, cardSram, profile);
+	else emulator.load_pa9500(bundle, cardRom, cardSram, profile);
 	emulator.step(64);
 	emulator.release_on_key();
 }

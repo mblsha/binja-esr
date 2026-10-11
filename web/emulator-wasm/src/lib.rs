@@ -310,6 +310,7 @@ pub struct Sc62015Emulator {
     oz9600_profile: sc62015_core::oz9600::ExecutionProfile,
     pa9500_bootstrap: Option<String>,
     pa9500_card_rom: Vec<u8>,
+    pa9500_uart_candidate: bool,
     call_session: Option<function_call::FunctionCallSession>,
     next_call_id: u32,
     last_lcd_source: Option<LcdSource>,
@@ -366,6 +367,7 @@ impl Sc62015Emulator {
             oz9600_profile: Default::default(),
             pa9500_bootstrap: None,
             pa9500_card_rom: Vec::new(),
+            pa9500_uart_candidate: false,
             call_session: None,
             next_call_id: 0,
             last_lcd_source: None,
@@ -558,11 +560,12 @@ impl Sc62015Emulator {
         self.require_no_active_call()?;
         if let Some(profile) = self.pa9500_bootstrap.clone() {
             let sram = self.pa9500_card_sram()?;
-            return self.load_pa9500(
+            return self.install_pa9500_candidate(
                 &self.rom_image.clone(),
                 &self.pa9500_card_rom.clone(),
                 &sram,
                 &profile,
+                self.pa9500_uart_candidate,
             );
         }
         let retained = if self.model == DeviceModel::Oz9600 {

@@ -29,6 +29,7 @@ type RunnerArgs = {
 	pa9500Profile: string | null;
 	pa9500CardRom: string | null;
 	pa9500CardSram: string | null;
+	pa9500Uart: boolean;
 	bnidaPath: string | null;
 	disableBnida: boolean;
 	requireBnida: boolean;
@@ -52,6 +53,7 @@ Options:
   --pa9500-profile <bootstrap-v1|bootstrap-v2|bootstrap-v3>  Explicit provisional mixed-ISA board profile
   --pa9500-card-rom <path>    Verified PA-9C3 ROM (requires SRAM)
   --pa9500-card-sram <path>   Logical PA-9C3 SRAM (requires ROM)
+  --pa9500-uart              Opt in to the provisional register-UART transport
   --bnida <path>             BNIDA export for function trace labels
   --no-bnida                 Disable auto-loading BNIDA symbols
   --require-bnida            Fail if BNIDA symbols cannot be loaded
@@ -484,6 +486,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 	let pa9500Profile: string | null = null;
 	let pa9500CardRom: string | null = null;
 	let pa9500CardSram: string | null = null;
+	let pa9500Uart = false;
 	let bnidaPath: string | null = null;
 	let disableBnida = false;
 	let requireBnida = false;
@@ -519,6 +522,10 @@ function parseArgs(argv: string[]): RunnerArgs {
 			if (arg === '--pa9500-profile') pa9500Profile = next;
 			else if (arg === '--pa9500-card-rom') pa9500CardRom = next;
 			else pa9500CardSram = next;
+			continue;
+		}
+		if (arg === '--pa9500-uart') {
+			pa9500Uart = true;
 			continue;
 		}
 		if (arg === '--bnida') {
@@ -568,6 +575,7 @@ function parseArgs(argv: string[]): RunnerArgs {
 		pa9500Profile,
 		pa9500CardRom,
 		pa9500CardSram,
+		pa9500Uart,
 		bnidaPath,
 		disableBnida,
 		requireBnida,
@@ -624,9 +632,10 @@ async function main() {
 		const cardSram = args.pa9500CardSram
 			? new Uint8Array(await readFile(resolve(args.pa9500CardSram)))
 			: new Uint8Array();
-		emulator.load_pa9500(romBytes, cardRom, cardSram, args.pa9500Profile);
+		if (args.pa9500Uart) emulator.load_pa9500_with_uart(romBytes, cardRom, cardSram, args.pa9500Profile);
+		else emulator.load_pa9500(romBytes, cardRom, cardSram, args.pa9500Profile);
 	} else {
-		if (args.pa9500Profile || args.pa9500CardRom || args.pa9500CardSram)
+		if (args.pa9500Profile || args.pa9500CardRom || args.pa9500CardSram || args.pa9500Uart)
 			die('error: PA media requires --model pa-9500 and an explicit --pa9500-profile');
 		if (typeof emulator.load_rom_with_model === 'function') emulator.load_rom_with_model(romBytes, model);
 		else emulator.load_rom(romBytes);
@@ -735,6 +744,7 @@ async function main() {
 			runWithError(`write8(0x${addr.toString(16).toUpperCase()}, ${value})`, () => emulator.write_u8?.(addr, value)),
 		pa9500Status: () => emulator.pa9500_status(),
 		pa9500CardSram: () => emulator.pa9500_card_sram(),
+		pa9500TakeSerial: () => emulator.pa9500_take_serial(),
 		lcdText: () => runWithError('lcd.text()', () => emulator.lcd_text?.() ?? null),
 		lcdPixels: () => runWithError('lcd.pixels()', () => emulator.lcd_pixels?.() ?? null),
 		lcdCapture: (scale) => runWithError('lcd.capture()', () => emulator.lcd_capture(scale)),

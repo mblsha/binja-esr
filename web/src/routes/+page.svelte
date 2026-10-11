@@ -102,6 +102,8 @@
 	let ozLoadedProfile: OzProfile = 'strict';
 	let paProfile: PaProfile = 'bootstrap-v3';
 	let paLoadedProfile: PaProfile | null = null;
+	let paUart = false;
+	let paLoadedUart = false;
 	let paInput: PaInputMode = 'native';
 	let paCardRom = new Uint8Array();
 	let paCardSram = new Uint8Array();
@@ -139,7 +141,7 @@
 		serialNotice = serialError = '';
 	}
 	function pumpFallbackSerial() {
-		if (!worker && romModel === 'oz-9600' && emulator?.has_rom())
+		if (!worker && ['oz-9600', 'pa-9500'].includes(romModel) && emulator?.has_rom())
 			fallbackSerial.pump(() => emulator.sio_drain_tx_bytes());
 	}
 	async function sendSerial() {
@@ -173,7 +175,7 @@
 		const bytes = serialCapture.bytes();
 		downloadBlob(
 			new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }),
-			'oz-9600-serial.raw',
+			`${romModel}-serial.raw`,
 		);
 	}
 	const audioPlayback = new AudioPlayback();
@@ -1085,7 +1087,9 @@
 						model,
 						generation,
 						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
-						...(model === 'pa-9500' ? { paProfile, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice() } : {}),
+						...(model === 'pa-9500'
+							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice() }
+							: {}),
 					},
 					[bytes.buffer],
 				);
@@ -1096,7 +1100,7 @@
 					return;
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
-				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram);
+				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1123,7 +1127,10 @@
 					: 'Automatic saving is off; export backups to keep records';
 		}
 		if (model === 'oz-9600') ozLoadedProfile = ozProfile;
-		if (model === 'pa-9500') paLoadedProfile = paProfile;
+		if (model === 'pa-9500') {
+			paLoadedProfile = paProfile;
+			paLoadedUart = paUart;
+		}
 		ozReplayReport = null;
 		ozReplayStatus = '';
 		fallbackTablet.discard();
@@ -2287,6 +2294,8 @@
 				data or changing computers. Sudden closure can lose changes since the last save.
 			</p>
 		</section>
+	{/if}
+	{#if romModel === 'oz-9600' || romModel === 'pa-9500'}
 		<details class="serial-panel" data-testid="serial-panel">
 			<summary>Serial</summary>
 			<label
@@ -2337,8 +2346,10 @@
 				}}>Clear display</button
 			>
 			<p class="hint">
-				Open Terminal and choose Connect on the device. Send at most 4096 bytes at once. The preview shows the last 2048
-				bytes; downloads retain up to 4 MiB. Device time is frozen while paused.
+				{romModel === 'pa-9500'
+					? 'Enable serial on the next PA load, then OPEN COM in BASIC.'
+					: 'Open Terminal and choose Connect on the device.'} Send at most 4096 bytes at once. The preview shows the last
+				2048 bytes; downloads retain up to 4 MiB. Device time is frozen while paused.
 			</p>
 		</details>
 	{/if}
@@ -2433,6 +2444,12 @@
 		{#if romModel === 'pa-9500'}
 			<section aria-label="PA configuration" data-testid="pa-configuration">
 				<p class="hint">Loaded profile: {paLoadedProfile ?? 'none'}.</p>
+				<p class="hint" data-testid="pa-uart-loaded">
+					Loaded serial transport: {paLoadedUart ? 'enabled' : 'disabled'}.
+				</p>
+				<label
+					><input type="checkbox" bind:checked={paUart} data-testid="pa-uart" />Enable experimental serial on next load</label
+				>
 				<label
 					>Profile for next ROM load: <select bind:value={paProfile} data-testid="pa-profile">
 						<option value="bootstrap-v3">Bootstrap v3</option><option value="bootstrap-v2">Bootstrap v2</option><option

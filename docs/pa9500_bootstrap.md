@@ -92,10 +92,46 @@ observations includes actual controller pixels, exposed machine state and card
 bytes. Browser proofs match42 native checkpoints, independently check22 glyph/
 bitmap regions, and recover the guest-created10 PRINT2 through normal firmware
 LIST/RUN after reset. Every captured UI canvas matches its controller bytes.
-Organizer/RTC/OFF retention, shared PA serial and complete text/navigation/
-modifier coverage remain open. Default PA bootstrap still leaves UART disabled.
+Organizer/RTC/OFF retention and complete text/navigation/modifier coverage
+remain open. Default PA bootstrap still leaves UART disabled.
 
 The private companion preserves exact input closures, compiled WASM/Vite
 artifacts, normal DOM replays, raw frames and inspected screenshots. Earlier
 proof capsules retain their historical source versions. All171 web unit tests
 and five existing PC/IQ browser regressions pass for this browser integration.
+
+
+## Serial and ON/BREAK consumers
+
+F12 now has a normal foreground GOTO-loop consumer: ON/BREAK displays
+`Break in 10`, Enter dismisses it, and PRO/LIST reconstructs the guest's cached
+line. The private proof compares native, Function Runner and browser states
+and independently checks every main-area pixel at the running/break/list points.
+
+For PA serial, select **Enable experimental serial on next load** before
+Import card and restart or loading the bundle. BASIC owns `OPEN COM`, `PRINT`
+and `CLOSE`. The existing Serial panel captures output and Save raw bytes
+exports it. Fresh Reset preserves the loaded transport choice and logical
+card bytes, starts new organizer/CPU backing and clears host capture.
+
+The explicit WASM API is `load_pa9500_with_uart(bundle, rom, sram, profile)`;
+ordinary `load_pa9500` leaves UART unavailable and clears a previous choice.
+Invalid replacements preserve the running model, media and transport. Other
+model loads clear PA configuration. Function Runner accepts `--pa9500-uart`
+with an explicit PA profile; `e.pa9500.takeSerial()` drains completed output
+without advancing guest time. No firmware workspace or software ring is patched.
+
+The authored serial TEST requests9600, even parity,8 data bits and1 stop bit.
+Its271-byte payload equals the independent physical TEST capture; CLOSE adds
+EOF1A. Native, Function Runner and browser captures agree. The enabled browser
+captures272 bytes and repeats them after fresh reset; the disabled control
+emits nothing even though firmware reaches DONE. The byte device uses nominal
+clock/divisor assumptions and does not establish physical parity waveforms.
+Receive/flow-control behavior remains a separate qualification target.
+
+This checkpoint has62 source-bound comparisons, seven independent complete
+main-display fixtures,14 loader/reset guards,33 actual Node/WASM tests,
+18 acquired-ROM component tests,171 web tests and five existing PC/IQ browser
+regressions. The companion repository retains raw PNG/PBM, actual UI images,
+compiled artifacts and exact replay/source hashes. Native cargo tests alone
+run no wasm-bindgen tests and are not counted as the WASM regression gate.

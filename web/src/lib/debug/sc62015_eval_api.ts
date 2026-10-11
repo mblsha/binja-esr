@@ -228,6 +228,7 @@ export interface EmulatorAdapter {
 	write8(addr: number, value: number): void;
 	pa9500Status?(): unknown;
 	pa9500CardSram?(): Uint8Array | number[];
+	pa9500TakeSerial?(): unknown;
 	lcdText?(): string[] | null;
 	lcdPixels?(): Uint8Array | number[] | null;
 	lcdCapture?(scale?: number): Omit<LcdCapture, 'pixels'> & { pixels: number[] | Uint8Array };
@@ -266,7 +267,7 @@ export interface EvalApi {
 		read(address: number, size?: 1 | 2 | 3): Promise<number>;
 		write(address: number, size: 1 | 2 | 3, value: number): Promise<void>;
 	};
-	pa9500: { status(): unknown; cardSram(): number[] };
+	pa9500: { status(): unknown; cardSram(): number[]; takeSerial(): unknown };
 	lcd: {
 		text(): Promise<string[]>;
 		textString(): Promise<string>;
@@ -912,6 +913,10 @@ export function createEvalApi(adapter: EmulatorAdapter, _options?: EvalApiOption
 			},
 		},
 		pa9500: {
+			takeSerial: () => {
+				if (!adapter.pa9500TakeSerial) throw new Error('PA serial observation unavailable');
+				return adapter.pa9500TakeSerial();
+			},
 			status: () => {
 				if (!adapter.pa9500Status) throw new Error('PA status unavailable');
 				return adapter.pa9500Status();

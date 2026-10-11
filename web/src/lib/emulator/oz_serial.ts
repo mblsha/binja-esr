@@ -44,7 +44,7 @@ export function queueSerialInput(device: SerialDevice, bytes: Uint8Array): numbe
 		throw new Error('Send between 1 and 4096 bytes');
 	const uart = device.sio_uart_report();
 	if (!uart || !uart.baud || device.power_state() === 'off')
-		throw new Error('The UART is disabled. Open Terminal and choose Connect first');
+		throw new Error('The UART is disabled. Open a device COM connection first');
 	if (
 		!Number.isInteger(uart.pending_rx) ||
 		uart.pending_rx < 0 ||

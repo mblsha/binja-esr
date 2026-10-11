@@ -20,6 +20,7 @@ export const SYNC_SCRIPT_METHODS = [
 	'stub.read8',
 	'pa9500.status',
 	'pa9500.cardSram',
+	'pa9500.takeSerial',
 ] as const;
 export const ASYNC_SCRIPT_METHODS = [
 	'reset',
