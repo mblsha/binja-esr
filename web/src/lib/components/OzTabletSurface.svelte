@@ -5,6 +5,8 @@
 	export let disabled = false;
 	export let label: string;
 	export let fixed: readonly [number, number] | null = null;
+	export let coordinates = ozLcdTablet;
+	export let testPrefix = 'oz-tablet';
 	export let onContact: (contact: TabletContact, owner: string, cancel: boolean) => void;
 	let held: { x: number; y: number; owner: string; pointer?: number } | null = null;
 	let element: HTMLDivElement;
@@ -25,7 +27,7 @@
 		if (event.button !== 0 || disabled || held) return;
 		event.preventDefault();
 		const box = element.getBoundingClientRect();
-		const [x, y] = fixed ?? ozLcdTablet((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+		const [x, y] = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
 		press(`tablet:${label}:${event.pointerId}`, x, y, event.pointerId);
 		element.setPointerCapture?.(event.pointerId);
 	}
@@ -54,7 +56,7 @@
 	aria-label={label}
 	title={label === 'Clock' ? 'Hold to view Clock; release to close' : undefined}
 	aria-disabled={disabled}
-	data-testid={`oz-tablet-${label.toLowerCase().replaceAll(' ', '-')}`}
+	data-testid={`${testPrefix}-${label.toLowerCase().replaceAll(' ', '-')}`}
 	class="surface"
 	on:pointerdown={down}
 	on:lostpointercapture={() => release(true)}

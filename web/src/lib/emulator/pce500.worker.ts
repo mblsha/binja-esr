@@ -11,6 +11,7 @@ import { applyContact, HostInputs, InputBufferOverflow, type InputContact } from
 import { LatestFrame } from './latest_frame';
 import { planPaste } from './paste_plan';
 import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from './oz9600_replay';
+import { piPanelCapture } from '$lib/pi3000_panel';
 import { TabletInputs } from './tablet_inputs';
 import { AudioDelivery } from './oz_audio';
 import { SerialDelivery, queueSerialInput } from './oz_serial';
@@ -51,6 +52,7 @@ type WorkerRequest =
 	| { id: number; type: 'oz_retained_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'oz_state' }
+	| { id: number; type: 'pi_state' }
 	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
 	| { id: number; type: 'audio_consumed'; generation: number; epoch: number; sequence: number }
 	| { id: number; type: 'audio_status' }
@@ -63,7 +65,14 @@ type WorkerRequest =
 	| { id: number; type: 'pa_retained_export'; generation: number }
 	| { id: number; type: 'pa_observe'; generation: number }
 	| { id: number; type: 'oz_retained_restore'; bytes: Uint8Array }
-	| { id: number; type: 'oz_tablet'; contact: TabletContact; owner: string; cancel?: boolean; generation: number }
+	| {
+			id: number;
+			type: 'oz_tablet' | 'pi_tablet';
+			contact: TabletContact;
+			owner: string;
+			cancel?: boolean;
+			generation: number;
+	  }
 	| { id: number; type: 'oz_replay'; document: string }
 	| { id: number; type: 'get_model' }
 	| { id: number; type: 'step'; instructions: number }
@@ -175,7 +184,13 @@ let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
 const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
-const tabletInputs = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+const tabletInputs = new TabletInputs(
+	(c) =>
+		romModel === 'pi-3000'
+			? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+			: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+	() => (romModel === 'pi-3000' ? 200_000 : 40_000),
+);
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
 	advance: (n: number) => {
@@ -515,8 +530,9 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 		const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 		const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 		const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-		const fifoAddresses =
-			romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+		const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+			? null
+			: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 		const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
 		const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
 		const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -542,7 +558,8 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 }
 
 function captureFrame(forceText: boolean, forceDisplay = false): Frame {
-	const geometry = emulator.lcd_capture_if_changed(forceDisplay);
+	const rawGeometry = emulator.lcd_capture_if_changed(forceDisplay);
+	const geometry = rawGeometry && romModel === 'pi-3000' ? piPanelCapture(rawGeometry) : rawGeometry;
 	// Rust returns an owned JS Uint8Array, safe to transfer without another copy.
 	const pixels = geometry?.pixels as Uint8Array | undefined;
 	const lcdCols = geometry?.cols;
@@ -550,7 +567,8 @@ function captureFrame(forceText: boolean, forceDisplay = false): Frame {
 	const lcdKind = normalizeLcdKind(geometry?.kind) ?? undefined;
 	const annunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? new Uint8Array(4);
 	const annunciatorBytesCopy = new Uint8Array(annunciatorBytes);
-	const chipPixels = debugOptions.lcdChipsOpen && romModel !== 'oz-9600' ? emulator.lcd_chip_pixels() : undefined;
+	const chipPixels =
+		debugOptions.lcdChipsOpen && !['oz-9600', 'pi-3000'].includes(romModel) ? emulator.lcd_chip_pixels() : undefined;
 	const nowMs = performance.now();
 
 	const pc = (() => {
@@ -793,6 +811,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id, emulator.oz9600_state());
 				return;
 			}
+			case 'pi_state': {
+				if (!emulator?.has_rom() || romModel !== 'pi-3000') throw new Error('Requires loaded PI');
+				replyOk(msg.id, emulator.pi3000_state());
+				return;
+			}
 			case 'pa_observe': {
 				if (romModel !== 'pa-9500' || operations.busy) throw new Error('Requires paused PA model');
 				if (msg.generation !== machineGeneration) throw new Error('Stale PA observation generation');
@@ -841,8 +864,10 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id);
 				return;
 			}
-			case 'oz_tablet': {
-				if (!emulator || romModel !== 'oz-9600') throw new Error('Requires loaded OZ');
+			case 'oz_tablet':
+			case 'pi_tablet': {
+				const expected = msg.type === 'pi_tablet' ? 'pi-3000' : 'oz-9600';
+				if (!emulator || romModel !== expected) throw new Error('Tablet model mismatch');
 				if (msg.generation !== machineGeneration) throw new Error('Stale tablet generation');
 				if (ozReplayActive) throw new Error('Physical replay owns input until it finishes or Stop is acknowledged');
 				tabletInputs.set(msg.owner, msg.contact, msg.cancel);
@@ -994,7 +1019,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== undefined && msg.generation !== machineGeneration)
 					throw new Error('Stale input generation');
 				if (ozReplayActive) throw new Error('Physical replay owns input');
-				if (romModel === 'oz-9600' && msg.code !== 'on' && (msg.code < 0 || msg.code >= 88))
+				if (['oz-9600', 'pi-3000'].includes(romModel) && msg.code !== 'on' && (msg.code < 0 || msg.code >= 88))
 					throw new Error('Unqualified OZ contact');
 				// ON is a priority power contact, never stuck behind a typing backlog.
 				if (msg.code === 'on' && msg.down) inputs.clearTyping();
@@ -1028,7 +1053,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					throw new Error('Stale input generation');
 				if (msg.source !== 'physical' && msg.source !== 'virtual') throw new Error('Invalid host input source');
 				inputs.releaseSource(msg.source);
-				if (msg.source === 'virtual' && romModel === 'oz-9600' && !ozReplayActive) tabletInputs.clear();
+				if (msg.source === 'virtual' && ['oz-9600', 'pi-3000'].includes(romModel) && !ozReplayActive)
+					tabletInputs.clear();
 				(self as any).postMessage({
 					type: 'input_status',
 					generation: machineGeneration,

@@ -4,8 +4,9 @@ The `pi3000` Cargo feature adds a PI-3000 board adapter to the shared
 CoreRuntime. It reuses the native CPU, matrix LCD controller, RTC reference
 and bounded ESR-H interpreter. PI ROM mapping, controller geometry and input
 ports come from the acquired PI firmware. This is an implementation in
-progress; foreground calibration, ordinary input, RTC/power, cards and browser
-integration remain open.
+progress. ROM calibration completes through native and browser raw input;
+dialog confirmation, ordinary input, RTC/power, cards and organizer navigation
+remain open.
 
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM
 and 32 complete selector views (00..0F and F0..FF). It does not accept a mapped
@@ -41,11 +42,12 @@ acknowledgment before another request. Unknown commands and query bytes stay
 unsupported. Its idle auxiliary event ports return zero; physical protocol,
 device identity, timing and recognition behavior remain unqualified.
 
-The default ISR replacement policy currently triggers an early IRQ before
+The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only
 ISR experiment reaches a four-cross calibration frame after two million
 scheduler boundaries, including 29 legacy instructions. Initial CPU and ISR
-semantics remain unqualified; model selection does not infer that experiment.
+semantics remain unqualified. The normal model explicitly uses the combined
+`Firmware` candidate described above.
 
 `configure_pi3000_tablet_route` selects one of the two ADC branches in
 FE:DBE41. `Integrated` routes control/data to 08B80/08BC0; `External` routes
@@ -79,7 +81,8 @@ calibration instructions. This policy remains an explicit firmware experiment.
 `configure_pi3000_halt_main_timer_candidate(true)` is a separate clock
 experiment: while HALTed with LCC.bit7 set, the main timer keeps its deadline
 and advances through the ordinary timer/interrupt path. It never advances the
-main timer in OFF. The default retains the shared CPU's frozen main clock.
+main timer in OFF. Strict retains the shared CPU's frozen main clock; `Firmware` enables the
+candidate.
 The F01C..F01E readbacks retain the F00C..F00E output latch values used by
 F8DC4..F8DD2's save and F9106..F9111's restore sequence; electrical behavior
 and mapping meanings remain unqualified.
@@ -103,6 +106,16 @@ Confirmation/ordinary key mapping and entry into the organizer remain open.
 Raw replay also accepts `contact` with `column`, `row` and `pressed`, validated
 for the shared 11-column/eight-row matrix before any input runs. This supplies
 electrical contacts only; no PI key-name table or C/CE mapping is asserted.
-The browser Rust bridge builds with PI support, raw tablet contact and status
-APIs, and avoids a second reset. Browser model selection, panel presentation
-and input UI are still pending.
+The browser accepts the bundle through PI-3000 model selection or
+`PI3000_ROM_PATH`. It presents a 239×168 crop/transposition of native storage;
+IOCS extents and legible Japanese support this orientation, while the physical
+scan mapping remains unqualified. LCD clicks map to a virtual digitizer whose
+four endpoints pass the recovered calibration. A short tap stays pressed for
+200,000 scheduler boundaries; blur/cancellation releases immediately.
+
+Worker and no-Worker browser paths both reproduce the native ten-sample
+calibration result from fresh RAM. They do not seed firmware queues or
+coefficients. The browser exposes only ON as a named key until the PI button
+mapping is recovered. The completion dialog currently remains open. Native
+`lcd_capture` and the Function Runner retain the full controller geometry;
+the presentation transform applies only to UI frames.

@@ -3,7 +3,10 @@ import type { TabletContact } from './oz9600_replay';
 /** One physical pen owns the ADC contact; assisted release uses CPU boundaries. */
 export class TabletInputs {
 	private held: { owner: string; contact: TabletContact; remaining: number; release: boolean } | null = null;
-	constructor(private apply: (contact: TabletContact) => void) {}
+	constructor(
+		private apply: (contact: TabletContact) => void,
+		private minimumHold: () => number = () => 40_000,
+	) {}
 	set(owner: string, contact: TabletContact, cancel = false) {
 		if (
 			!Number.isInteger(contact.raw_x) ||
@@ -16,7 +19,7 @@ export class TabletInputs {
 			throw new Error('Tablet contact outside ten-bit ADC range');
 		if (contact.pressed) {
 			if (this.held && this.held.owner !== owner) return;
-			this.held = { owner, contact, remaining: this.held?.remaining ?? 40_000, release: false };
+			this.held = { owner, contact, remaining: this.held?.remaining ?? this.minimumHold(), release: false };
 			this.apply(contact);
 		} else if (this.held?.owner === owner) {
 			if (cancel || this.held.remaining === 0) this.clear();

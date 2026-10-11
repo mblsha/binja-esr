@@ -26,6 +26,7 @@
 	import { WorkerRequests } from '$lib/emulator/worker_requests';
 	import { HostInputs, InputBufferOverflow, applyContact, type InputContact } from '$lib/emulator/host_inputs';
 	import { runOzPhysicalReplay, type OzProfile, type TabletContact } from '$lib/emulator/oz9600_replay';
+	import { piPanelCapture } from '$lib/pi3000_panel';
 	import { TabletInputs } from '$lib/emulator/tablet_inputs';
 	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
 	import { AudioPlayback, AudioDelivery } from '$lib/emulator/oz_audio';
@@ -253,7 +254,13 @@
 	let lcdOnly = false;
 	const pendingVirtualRelease = new Map<number, number>();
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
-	const fallbackTablet = new TabletInputs((c) => emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed));
+	const fallbackTablet = new TabletInputs(
+		(c) =>
+			romModel === 'pi-3000'
+				? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+		() => (romModel === 'pi-3000' ? 200_000 : 40_000),
+	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
 		advance: (n: number) => {
@@ -701,7 +708,7 @@
 			});
 		else if (emulator) {
 			fallbackInputs.releaseSource(source);
-			if (source === 'virtual' && romModel === 'oz-9600') fallbackTablet.clear();
+			if (source === 'virtual' && ['oz-9600', 'pi-3000'].includes(romModel)) fallbackTablet.clear();
 			typingStatus = fallbackInputs.typingStatus();
 			pasteStatus = fallbackInputs.pasteStatus();
 			updateDeliveredContacts(emulator.input_contacts());
@@ -1165,7 +1172,8 @@
 		pasteStatus = fallbackInputs.pasteStatus();
 		pacingStatus = emulator.pacing_status?.() ?? null;
 		try {
-			const geometry = emulator.lcd_capture_if_changed(false);
+			const rawGeometry = emulator.lcd_capture_if_changed(false);
+			const geometry = rawGeometry && romModel === 'pi-3000' ? piPanelCapture(rawGeometry) : rawGeometry;
 			if (geometry && typeof geometry === 'object') {
 				const kind = normalizeLcdKind((geometry as any).kind);
 				const cols = (geometry as any).cols;
@@ -1181,7 +1189,7 @@
 			// ignore
 		}
 		lcdAnnunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? null;
-		if (lcdChipsOpen && romModel !== 'oz-9600') lcdChipPixels = emulator.lcd_chip_pixels();
+		if (lcdChipsOpen && !['oz-9600', 'pi-3000'].includes(romModel)) lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
 		} catch {
@@ -1244,8 +1252,9 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-			const fifoAddresses =
-				romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+				? null
+				: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
 			const fifoTail = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoTail) ?? null) : null;
 			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -1288,8 +1297,9 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0);
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1);
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2);
-			const fifoAddresses =
-				romModel === 'oz-9600' ? null : resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
+			const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+				? null
+				: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoHead) : undefined;
 			const fifoTail = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoTail) : undefined;
 			const fifo = Array.from({ length: PCE500_KEY_FIFO_CAPACITY }, (_, i) =>
@@ -1850,9 +1860,14 @@
 		}
 	}
 	function tabletContact(contact: TabletContact, owner: string, cancel: boolean) {
-		if (!romLoaded || romModel !== 'oz-9600' || functionRunnerBusy) return;
+		if (!romLoaded || !['oz-9600', 'pi-3000'].includes(romModel) || functionRunnerBusy) return;
 		if (worker)
-			void workerCall('oz_tablet', { contact, owner, cancel, generation: romLoadGeneration }).catch((error) => {
+			void workerCall(romModel === 'pi-3000' ? 'pi_tablet' : 'oz_tablet', {
+				contact,
+				owner,
+				cancel,
+				generation: romLoadGeneration,
+			}).catch((error) => {
 				lastError = String(error);
 			});
 		else {
@@ -2204,26 +2219,33 @@
 		<section class="quick-options" aria-label="Keyboard shortcuts" data-testid="keyboard-shortcuts">
 			<strong>Keyboard shortcuts</strong>
 			<button on:click={() => (shortcutsOpen = false)}>Close shortcuts</button>
-			<p class="hint">
-				Click the device to type. F9 = device SHIFT · F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel ===
-				'oz-9600'
-					? 'F11 = 2nd · F12 = ON'
-					: 'F12 = ON'}. Device CAPS controls letter case; host Shift selects mapped punctuation.
-			</p>
-			<p class="hint">
-				{romModel === 'iq-7000'
-					? 'F1–F8: Calendar, Schedule, TEL, MEMO, Calc, Card, World, Home. Enter stores; F11 or Shift+Enter inserts a newline. Page Up/Down searches.'
-					: romModel === 'oz-9600'
-						? 'F1: New Entry. F2: Edit. F11: 2nd. Escape: Cancel. Page Up/Down: Prev/Next. Printed mode labels use the tablet.'
-						: romModel === 'pa-9500'
-							? 'F1–F7: Calendar, Phonebook, Memo, Business, Handwrite, Calculator, Clock. F8: kana. F10: input mode. F11: BASIC Run/Pro. Tap F9 then N for Special or K for SECRET in native bindings.'
-							: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
-			</p>
-			<p class="hint">
-				Letters, digits, Space, arrows, Backspace, Delete and Insert use device keys. Hover a key for its host binding.
-				Depressed keys show delivered contacts; cyan outlines show host-held keys, not ROM acknowledgement. Browser
-				shortcuts and text fields stay with the host.
-			</p>
+			{#if romModel === 'pi-3000'}
+				<p class="hint">
+					Tap the LCD targets while Resume is active. F12 sends ON. Confirmation and other key mappings remain under
+					recovery.
+				</p>
+			{:else}
+				<p class="hint">
+					Click the device to type. F9 = device SHIFT · F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel ===
+					'oz-9600'
+						? 'F11 = 2nd · F12 = ON'
+						: 'F12 = ON'}. Device CAPS controls letter case; host Shift selects mapped punctuation.
+				</p>
+				<p class="hint">
+					{romModel === 'iq-7000'
+						? 'F1–F8: Calendar, Schedule, TEL, MEMO, Calc, Card, World, Home. Enter stores; F11 or Shift+Enter inserts a newline. Page Up/Down searches.'
+						: romModel === 'oz-9600'
+							? 'F1: New Entry. F2: Edit. F11: 2nd. Escape: Cancel. Page Up/Down: Prev/Next. Printed mode labels use the tablet.'
+							: romModel === 'pa-9500'
+								? 'F1–F7: Calendar, Phonebook, Memo, Business, Handwrite, Calculator, Clock. F8: kana. F10: input mode. F11: BASIC Run/Pro. Tap F9 then N for Special or K for SECRET in native bindings.'
+								: 'F1–F5: PF1–PF5. F6: BASIC. F7: MENU. F8: Clear. F11: device CTRL. Enter: ENTER.'}
+				</p>
+				<p class="hint">
+					Letters, digits, Space, arrows, Backspace, Delete and Insert use device keys. Hover a key for its host
+					binding. Depressed keys show delivered contacts; cyan outlines show host-held keys, not ROM acknowledgement.
+					Browser shortcuts and text fields stay with the host.
+				</p>
+			{/if}
 		</section>
 	{/if}
 	{#if !romLoaded || !running || controlPending || functionRunnerBusy || stepBusy || workerHealth !== 'ready' || powerState === 'off'}
@@ -2510,13 +2532,19 @@
 						<option value="iq-7000">IQ-7000</option>
 						<option value="pc-e500">PC-E500</option>
 						<option value="oz-9600">OZ-9600 (experimental hardware)</option>
+						<option value="pi-3000">PI-3000 (experimental hardware)</option>
 						<option value="pa-9500">PA-9500 / DB-Z (experimental hardware)</option>
 					</select>
 				</label>
 
 				<label>
 					Load ROM file:
-					<input type="file" accept=".bin,.rom,.img,.ozrom,.parom" data-testid="rom-file" on:change={onSelectRom} />
+					<input
+						type="file"
+						accept=".bin,.rom,.img,.ozrom,.parom,.pirom"
+						data-testid="rom-file"
+						on:change={onSelectRom}
+					/>
 				</label>
 			</div>
 		</header>
@@ -2753,43 +2781,50 @@
 			{#if typingCatchUp}Catch-up advances emulated time/RTC faster during buffered input; paused and deterministic
 				execution are unchanged.{/if}
 		</p>
-		<p class="hint" id="keyboard-help">
-			Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT ·
-			F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel === 'oz-9600'
-				? 'F11 = 2nd · F12 = ON'
-				: 'F12 = ON'} (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the browser. Hover
-			a device key for its host bindings.
-		</p>
-		<details class="keyboard-help">
-			<summary>Keyboard mappings & letter case</summary>
-			<p class="hint">
-				{#if romModel === 'iq-7000'}
-					F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
-					Store; F11 = newline (also Shift+Enter in Letters & symbols).
-				{:else if romModel === 'oz-9600'}
-					F1 = New Entry; F2 = Edit; Escape = Cancel; Page Up/Down = Prev/Next. Printed application labels and the LCD
-					send tablet contacts.
-				{:else if romModel === 'pa-9500'}
-					F1–F7 = Calendar / Phonebook / Memo / Business / Handwrite / Calculator / Clock. F8 = kana, F10 = input mode,
-					F11 = BASIC Run/Pro. Native-app and BASIC English bindings are selected in PA configuration. Tap F9 then
-					native N for Special or K for SECRET.
-				{:else}
-					F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
-				{/if}
-				Letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
+		{#if romModel === 'pi-3000'}
+			<p class="hint" id="keyboard-help">
+				Tap the LCD calibration targets while Run is active. F12 sends ON. Confirmation-key wiring is still under
+				recovery.
 			</p>
-			<p class="hint">
-				Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
-				operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9 for
-				device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is not
-				mapped. Unsupported punctuation is reported, not substituted. Paste opens a preview and supports only qualified
-				key sequences; IME and automatic case conversion are not supported.
+		{:else}
+			<p class="hint" id="keyboard-help">
+				Click “Type on device”, then Run for live typing. Paused input does not advance the machine. F9 = device SHIFT ·
+				F10 = {romModel === 'pa-9500' ? 'input mode' : 'CAPS'} · {romModel === 'oz-9600'
+					? 'F11 = 2nd · F12 = ON'
+					: 'F12 = ON'} (your keyboard may require Fn). Text fields and Ctrl/Cmd/Alt shortcuts stay with the browser. Hover
+				a device key for its host bindings.
 			</p>
-			<p class="hint">
-				Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
-				belong to the organizer, not your desktop keyboard. Use the numeric keypad or on-screen keys for operators.
-			</p>
-		</details>
+			<details class="keyboard-help">
+				<summary>Keyboard mappings & letter case</summary>
+				<p class="hint">
+					{#if romModel === 'iq-7000'}
+						F1–F5 = Calendar / Schedule / TEL / MEMO / Calc; F6–F8 = Card / World / Home. Page Up/Down = Search; Enter =
+						Store; F11 = newline (also Shift+Enter in Letters & symbols).
+					{:else if romModel === 'oz-9600'}
+						F1 = New Entry; F2 = Edit; Escape = Cancel; Page Up/Down = Prev/Next. Printed application labels and the LCD
+						send tablet contacts.
+					{:else if romModel === 'pa-9500'}
+						F1–F7 = Calendar / Phonebook / Memo / Business / Handwrite / Calculator / Clock. F8 = kana, F10 = input
+						mode, F11 = BASIC Run/Pro. Native-app and BASIC English bindings are selected in PA configuration. Tap F9
+						then native N for Special or K for SECRET.
+					{:else}
+						F1–F5 = PF1–PF5; F6 = BASIC; F7 = MENU; F8 = Clear; F11 = device CTRL.
+					{/if}
+					Letters, digits, Space, arrows, Backspace, Delete, Insert, Escape (Clear), numeric keypad; keypad Enter = equals.
+				</p>
+				<p class="hint">
+					Letters & symbols follows your host keyboard layout: +, − (minus key), *, /, = and decimal point use device
+					operator keys, including symbols typed with Shift. Device CAPS controls letter case, not host Shift. Use F9
+					for device functions (IQ: F9 then A = EDIT). For IQ comma, press F9, release it, then K; a direct comma key is
+					not mapped. Unsupported punctuation is reported, not substituted. Paste opens a preview and supports only
+					qualified key sequences; IME and automatic case conversion are not supported.
+				</p>
+				<p class="hint">
+					Device keycaps uses physical host key positions and maps host Shift directly to device SHIFT: shifted legends
+					belong to the organizer, not your desktop keyboard. Use the numeric keypad or on-screen keys for operators.
+				</p>
+			</details>
+		{/if}
 		{#if romLoaded}<p class="hint lcd-meta">
 				LCD: {lcdKind ?? '—'} ({lcdCols}×{lcdRows}) · Case proportions, materials and key legends are provisional.
 			</p>{/if}

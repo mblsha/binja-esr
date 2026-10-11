@@ -10,13 +10,15 @@ type Candidate = {
 
 function romCandidates(model: RomModel): Candidate[] {
 	const envName =
-		model === 'pa-9500'
-			? 'PA9500_ROM_PATH'
-			: model === 'oz-9600'
-				? 'OZ9600_ROM_PATH'
-				: model === 'pc-e500'
-					? 'PCE500_ROM_PATH'
-					: 'IQ7000_ROM_PATH';
+		model === 'pi-3000'
+			? 'PI3000_ROM_PATH'
+			: model === 'pa-9500'
+				? 'PA9500_ROM_PATH'
+				: model === 'oz-9600'
+					? 'OZ9600_ROM_PATH'
+					: model === 'pc-e500'
+						? 'PCE500_ROM_PATH'
+						: 'IQ7000_ROM_PATH';
 	const env = process.env[envName] ?? (model === 'iq-7000' ? process.env.IQ_7000_ROM_PATH : undefined);
 	const candidates: Candidate[] = env ? [{ path: env, source: `env:${envName}` }] : [];
 

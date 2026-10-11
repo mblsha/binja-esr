@@ -65,6 +65,18 @@ export function deviceLayout(model: RomModel, paInput: PaInputMode = 'native'): 
 		});
 	};
 
+	if (model === 'pi-3000') {
+		add('ON', 26, 380, 80, 32);
+		return {
+			version: 1,
+			model,
+			width: 560,
+			height: 430,
+			lcd: { x: 26, y: 25, w: 508, h: (508 * 168) / 239 },
+			keys,
+			provenance: 'functional-input-layout',
+		};
+	}
 	if (model === 'pa-9500') {
 		// Functional controls for ROM-derived contacts, not a physical case scan.
 		existing.forEach((key, index) =>

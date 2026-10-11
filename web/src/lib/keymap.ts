@@ -208,6 +208,7 @@ export const KEY_TO_MATRIX_CODE: Record<string, InputContact> = Object.fromEntri
 );
 
 export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'native'): VirtualKey[] {
+	if (model === 'pi-3000') return [{ label: 'ON', code: 'on', testId: 'vk-on' }];
 	const keys: VirtualKey[] = [];
 	const add = (name: string, label = name, id = name.toLowerCase().replaceAll('_', '-')) => {
 		const code = physicalKey(model, name, paInput);

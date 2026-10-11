@@ -3,6 +3,7 @@
 	import type { InputContact } from '../emulator/host_inputs';
 	import { deviceLayout, rectStyle } from '../device_layout';
 	import OzTabletSurface from './OzTabletSurface.svelte';
+	import { piLcdTablet } from '../pi3000_panel';
 	import { OZ_PANEL } from '../oz9600_panel';
 	import type { TabletContact } from '../emulator/oz9600_replay';
 	import VirtualKeyboard from './VirtualKeyboard.svelte';
@@ -37,7 +38,9 @@
 			data-layout-version={layout.version}
 			style={`aspect-ratio:${layout.width}/${layout.height};`}
 		>
-			{#if model === 'pa-9500'}
+			{#if model === 'pi-3000'}
+				<div class="pi-brand">SHARP PI-3000</div>
+			{:else if model === 'pa-9500'}
 				<div class="pa-brand" style={`top:${((layout.lcd.y + layout.lcd.h + 25) / layout.height) * 100}%;`}>
 					SHARP PA-9500 / DB-Z <small>ROM input layout · physical geometry unqualified</small>
 				</div>
@@ -80,6 +83,12 @@
 			{/if}
 			<div class="lcd-window" style={rectStyle(layout.lcd, layout)}>
 				{#if model === 'oz-9600'}<OzTabletSurface label="LCD" {disabled} onContact={onTablet}><slot /></OzTabletSurface
+					>{:else if model === 'pi-3000'}<OzTabletSurface
+						label="LCD"
+						coordinates={piLcdTablet}
+						testPrefix="pi-tablet"
+						{disabled}
+						onContact={onTablet}><slot /></OzTabletSurface
 					>{:else}<slot />{/if}
 			</div>
 			<VirtualKeyboard
@@ -99,6 +108,20 @@
 </section>
 
 <style>
+	.pi-3000 {
+		width: 100%;
+		min-width: 360px;
+		max-width: 760px;
+		background: #555a51;
+		border: 3px solid #26332c;
+		border-radius: 12px;
+	}
+	.pi-brand {
+		position: absolute;
+		bottom: 5%;
+		right: 5%;
+		font: bold 2.4cqw Arial;
+	}
 	.pa-9500 {
 		width: 100%;
 		min-width: 640px;

@@ -414,6 +414,7 @@ impl Sc62015Emulator {
                 DeviceModel::Iq7000 => "IQ-7000 PC compatibility fallback; not hardware calibrated",
                 DeviceModel::Oz9600 => "OZ-9600 uncalibrated timing experiment",
                 DeviceModel::Pa9500 => "PA-9500 uncalibrated bootstrap",
+                DeviceModel::Pi3000 => "PI-3000 uncalibrated firmware candidate",
                 _ => "PC-E500 compatibility timebase; not hardware calibrated",
             },
             dropped_host_ns: self.pacer.dropped_host_ns(),

@@ -38,6 +38,20 @@ npm run test
 npm run wasm:test
 ```
 
+## PI-3000 startup candidate
+
+Open `/?model=pi-3000` and load a verified `.pirom` bundle, or set
+`PI3000_ROM_PATH` to its absolute path before starting the server. The public
+source tree does not distribute ROM data. Resume and tap the four LCD targets
+to run the original firmware calibration. ON is available through its button
+or F12; the completion dialog's confirmation mapping is still under recovery.
+
+The browser uses the shared native core and `Firmware` candidate. Its 239×168
+panel crop/orientation and virtual digitizer remain provisional hardware
+mappings. Browser worker and fallback paths reproduce native calibration;
+full organizer navigation, RTC/power and cards remain in progress. See
+[the runtime contract](../docs/pi3000_runtime.md).
+
 ## OZ-9600 v1
 
 Advanced model selection accepts a verified `OZROM01` bundle and explicit
