@@ -80,6 +80,7 @@ const recoveryPath = process.env.PA9500_RECOVERY_CASE;
 const recoveryExpected = process.env.PA9500_RECOVERY_EXPECTED;
 const editedPath = process.env.PA9500_EDITED_CASE;
 const editedExpected = process.env.PA9500_EDITED_EXPECTED;
+const retainedInput = process.env.PA9500_RETAINED_INPUT;
 
 async function observation(page: Page) {
 	const generation = (await request(page, 'input_state')).generation;
@@ -209,7 +210,20 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 	test.setTimeout(240_000);
 	await openPa(page);
 	const spec = JSON.parse(await readFile(replayPath!, 'utf8'));
-	if (spec.input_bindings === 'basic') await page.getByTestId('advanced-panel').locator('> summary').click();
+	if (spec.input_bindings === 'basic' || retainedInput)
+		await page.getByTestId('advanced-panel').locator('> summary').click();
+	if (cardRom && cardSram) {
+		await page.getByTestId('pa-card-rom').setInputFiles(cardRom);
+		await page.getByTestId('pa-card-sram').setInputFiles(cardSram);
+		await page.getByTestId('pa-card-load').click();
+		await expect(page.getByTestId('pa-card-load')).toBeEnabled();
+		await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	}
+	if (retainedInput) {
+		await page.getByTestId('pa-retained-file').setInputFiles(retainedInput);
+		await expect(page.getByTestId('pa-retained-file')).toBeEnabled();
+		await expect(page.getByTestId('pa-card-error')).toHaveCount(0);
+	}
 	const result = await replay(page, spec, spec.input_bindings === 'basic');
 	if (output) {
 		await mkdir(output, { recursive: true });
@@ -223,6 +237,16 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 			expect(actual.capture.pixels).toEqual(target.capture.pixels);
 			expect(actual.card_sram).toEqual(target.card_sram);
 		}
+	}
+	if (process.env.PA9500_CAPTURE_RETAINED && output && expectedPath) {
+		const pending = page.waitForEvent('download');
+		await page.getByTestId('pa-retained-export').click();
+		const file = await pending;
+		const bytes = await readFile((await file.path())!);
+		const final = JSON.parse(await readFile(expectedPath, 'utf8')).checkpoints.at(-1);
+		const record = final.backing.find((b: any) => b.kind === 'retained');
+		expect(bytes).toEqual(await readFile(resolve(expectedPath, '..', record.file)));
+		await writeFile(resolve(output, 'browser-retained.bin'), bytes);
 	}
 });
 
