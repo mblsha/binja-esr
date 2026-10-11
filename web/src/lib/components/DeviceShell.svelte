@@ -38,7 +38,9 @@
 			style={`aspect-ratio:${layout.width}/${layout.height};`}
 		>
 			{#if model === 'pa-9500'}
-				<div class="pa-brand">SHARP PA-9500 / DB-Z <small>ROM input layout · physical geometry unqualified</small></div>
+				<div class="pa-brand" style={`top:${((layout.lcd.y + layout.lcd.h + 25) / layout.height) * 100}%;`}>
+					SHARP PA-9500 / DB-Z <small>ROM input layout · physical geometry unqualified</small>
+				</div>
 			{:else if model === 'oz-9600'}
 				<div class="oz-brand" aria-hidden="true">SHARP <small>OZ-9600 · WIZARD 256KB</small></div>
 				<div class="oz-panel" aria-label="Fixed printed tablet panel; artwork outside LCD">
@@ -107,7 +109,6 @@
 	}
 	.pa-brand {
 		position: absolute;
-		top: 54%;
 		left: 4%;
 		font-weight: 600;
 		color: #344038;
