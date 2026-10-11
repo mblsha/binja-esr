@@ -162,6 +162,48 @@ fn guest_cannot_write_device_owned_eport_inputs() {
 }
 
 #[test]
+fn unmapped_read_candidate_is_bounded_and_does_not_create_ram_or_allow_writes() {
+    let code = [0x88, 0x44, 0x58, 0]; // MV A,[05844], the startup filename failure
+    let mut strict = fixture(&code);
+    assert!(strict
+        .step(1)
+        .unwrap_err()
+        .to_string()
+        .contains("unqualified PI read 05844"));
+    for value in [0, 0xe0, 0xff] {
+        let mut rt = fixture(&code);
+        rt.configure_pi3000_unmapped_low_read_candidate(value)
+            .unwrap();
+        {
+            let h = rt.pi3000_hardware().unwrap().borrow();
+            for address in [0x5000, 0x5844, 0x7fff] {
+                for _ in 0..10 {
+                    assert_eq!(h.read(address), Some(value));
+                }
+            }
+            assert_eq!(h.read(0x4fff), None);
+            assert_eq!(h.read(0x8000), Some(0)); // adjacent qualified RTC
+            assert!(h.ram.iter().chain(&h.scratch).all(|v| *v == 0));
+            assert!(h.fault.is_none());
+        }
+        rt.step(1).unwrap();
+        assert_eq!(rt.get_reg("A"), u32::from(value));
+        assert!(rt
+            .configure_pi3000_unmapped_low_read_candidate(value)
+            .is_err());
+        let mut h = rt.pi3000_hardware().unwrap().borrow();
+        h.write(0x5844, 0x55, None);
+        assert!(h
+            .fault
+            .as_ref()
+            .unwrap()
+            .contains("unqualified PI write 05844"));
+        assert_eq!(h.read(0x5844), Some(value));
+        assert!(h.ram.iter().chain(&h.scratch).all(|v| *v == 0));
+    }
+}
+
+#[test]
 fn unknown_bus_accesses_poison_the_committed_boundary() {
     let mut rt = fixture(&[0x88, 0, 0x8a, 0]);
     assert!(rt

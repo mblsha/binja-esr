@@ -9,7 +9,7 @@ test.skip(!bundlePath, 'Supply verified private PI bundle with PI3000_ROM_PATH')
 const rpc = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__piRpc(type, payload), { type, payload });
 
-test('PI fresh browser input passes calibration and reaches initialization', async ({ page }) => {
+test('PI fresh browser touch completes initialization and enters the calendar', async ({ page }) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);
 	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
@@ -113,11 +113,17 @@ test('PI fresh browser input passes calibration and reaches initialization', asy
 	expect(contrastState.fault).toBeNull();
 	expect(contrastDigest).toBe('0338fff05952b2379a4c1347711fa277387ffefbc6a4bd9dfc5d36f196584fa9');
 	if (output) await canvas.screenshot({ path: resolve(output, 'browser-contrast.png') });
-	await canvas.scrollIntoViewIfNeeded();
-	const finishBox = (await canvas.boundingBox())!;
-	await page.mouse.click(finishBox.x + (219.5 / 239) * finishBox.width, finishBox.y + (155.5 / 168) * finishBox.height);
-	await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
-	await rpc(page, 'step', { instructions: 1_250_000 });
+	async function holdTouch(x: number, y: number, held: number, released: number) {
+		await canvas.scrollIntoViewIfNeeded();
+		const box = (await canvas.boundingBox())!;
+		await page.mouse.move(box.x + ((x + 0.5) / 239) * box.width, box.y + ((y + 0.5) / 168) * box.height);
+		await page.mouse.down();
+		await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
+		await rpc(page, 'step', { instructions: held });
+		await page.mouse.up();
+		await rpc(page, 'step', { instructions: released });
+	}
+	await holdTouch(219, 155, 250_000, 1_000_000);
 	const initializationState = await rpc(page, 'pi_state');
 	const initializationDigest = await controllerDigest();
 	expect(initializationState.fault).toBeNull();
@@ -125,9 +131,44 @@ test('PI fresh browser input passes calibration and reaches initialization', asy
 	expect(errors).toEqual([]);
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-initialization.png') });
+	}
+	// Confirm fresh emulated RAM initialization using the actual Yes control.
+	await holdTouch(74, 112, 250_000, 6_500_000);
+	const calendarState = await rpc(page, 'pi_state');
+	const calendarDigest = await controllerDigest();
+	expect(calendarState.fault).toBeNull();
+	expect(calendarState.selector).toBe(0xf1);
+	expect(calendarState.unmapped_low_read).toBe(0xe0);
+	expect(calendarState.native_instructions).toBe(5127802);
+	expect(calendarDigest).toBe('72d7fc2b314eb7d805a64a68a28e85193d5558a51e24d3083da8defa5e704138');
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-calendar.png') });
+	}
+	// Normal pointer input reaches a numeric entry response. The physical and
+	// application hit mapping remains a recovery gap; this does not select day16.
+	await holdTouch(76, 72, 250_000, 500_000);
+	const contactState = await rpc(page, 'pi_state');
+	const contactDigest = await controllerDigest();
+	expect(contactState.fault).toBeNull();
+	expect(contactState.tablet.slice(0, 3)).toEqual([432, 419, 0]);
+	expect(contactState.native_instructions).toBe(5378834);
+	expect(contactDigest).toBe('48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9');
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-calendar-contact.png') });
 		await writeFile(
 			resolve(output, 'browser-startup.json'),
-			JSON.stringify({ contrastState, contrastDigest, initializationState, initializationDigest }),
+			JSON.stringify({
+				contrastState,
+				contrastDigest,
+				initializationState,
+				initializationDigest,
+				calendarState,
+				calendarDigest,
+				contactState,
+				contactDigest,
+			}),
 		);
 	}
 });

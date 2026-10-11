@@ -193,6 +193,22 @@ def test_calendar_candidate_crosses_year_and_hold_freezes_only_calendar_phase():
     assert not any(h.ram)
 
 
+def test_unmapped_read_candidate_is_bounded_readonly_and_keeps_default_strict():
+    h = Hardware({})
+    assert h.read(0x5844) is None
+    for value in (0, 0xE0, 0xFF):
+        h = Hardware({})
+        h.unmapped_low_read = value
+        for address in (0x5000, 0x5844, 0x7FFF):
+            for _ in range(10):
+                assert h.read(address) == value
+        assert h.read(0x4FFF) is None and h.read(0x8000) == 0
+        assert not any(h.ram) and not any(h.scratch) and h.fault is None
+        h.write(0x5844, 0x55)
+        assert "unqualified PI write 05844" in h.fault
+        assert h.read(0x5844) == value and not any(h.ram) and not any(h.scratch)
+
+
 def test_auxiliary_initialization_control_matches_single_byte_acknowledgment():
     from pce500.pi3000.auxiliary import Auxiliary
 

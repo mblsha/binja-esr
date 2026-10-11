@@ -5,7 +5,7 @@ CoreRuntime. It reuses the native CPU, matrix LCD controller, RTC reference
 and bounded ESR-H interpreter. PI ROM mapping, controller geometry and input
 ports come from the acquired PI firmware. This is an implementation in
 progress. Native and browser raw input complete calibration, pass contrast
-setup and reach the fresh-memory initialization prompt. Organizer navigation,
+setup, initialize fresh memory and enter the organizer calendar. Complete organizer navigation,
 complete keyboard/RTC/power behavior and cards remain open.
 
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM
@@ -22,9 +22,18 @@ The normal model factory starts fresh scratch/high RAM with the `Firmware`
 startup candidate. It combines initial BP=D0, clear-only ISR writes, coupled
 predecrement transfers, nominal organizer timer periods, the LCC.bit7/HALT
 main-clock candidate, the periodic RTC A2 candidate, integrated ADC and Gate1
-press edges. These settings are
+press edges, plus the capture-derived E0 read candidate for 05000..07FFF. These settings are
 supported by ROM consumers; physical reset state and timing remain unqualified.
 Unsupported bus operations stop and poison the runtime.
+The sequential physical acquisition returned E0 at all 12288 bytes in that
+unmapped window. The read-only candidate supplies that value without creating
+RAM or permitting writes. Firmware initialization makes ignored cleanup calls
+with invalid filename pointers; allowing the resolver to return its ordinary
+error21 lets startup proceed. E0 and FF controls produce identical complete
+calendar states. Electrical bus-hold behavior in other execution contexts is
+not qualified. `Strict` and the explicit configuration API retain the trap
+control; `configure_pi3000_unmapped_low_read_candidate(value)` selects the
+candidate before execution, and `pi3000_status` reports its value.
 `configure_pi3000_rtc_calendar_candidate(period)` separately opts into packed
 calendar advancement before execution. It uses independent scheduler time in
 running, HALT and OFF states, freezes calendar phase under CONTROL.HOLD, and

@@ -29,6 +29,7 @@ class Hardware:
         self.rtc_tick_phase = self.rtc_ticks = 0
         self.rtc_second_period = None
         self.rtc_second_phase = self.rtc_seconds = self.rtc_held_units = 0
+        self.unmapped_low_read = 0xE0 if firmware else None
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
@@ -41,6 +42,8 @@ class Hardware:
     def read(self, address):
         if 0 <= address < 0x4000:
             return self.scratch[address]
+        if 0x5000 <= address < 0x8000:
+            return self.unmapped_low_read
         if address == 0x4021:
             return self.selector
         if 0x4000 <= address < 0x4040:

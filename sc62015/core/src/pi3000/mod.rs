@@ -89,6 +89,9 @@ pub struct Hardware {
     pub rtc_second_phase: u64,
     pub rtc_seconds: u64,
     pub rtc_held_units: u64,
+    /// Explicit read-only hypothesis for the unmapped 05000..07FFF bus window.
+    /// A sequential hardware capture returned E0; electrical behavior is open.
+    pub unmapped_low_read: Option<u8>,
     pub gpio: [u8; 18],
     pub clock_control: u8,
     pub startup_latches: [u8; 3],
@@ -168,6 +171,7 @@ impl Hardware {
             rtc_second_phase: 0,
             rtc_seconds: 0,
             rtc_held_units: 0,
+            unmapped_low_read: (profile == BootstrapProfile::Firmware).then_some(0xe0),
             gpio: [0; 18],
             clock_control: 0,
             startup_latches: [0; 3],
@@ -191,6 +195,7 @@ impl Hardware {
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0..=0x3fff => Some(self.scratch[address as usize]),
+            0x5000..=0x7fff => self.unmapped_low_read,
             0x4021 => Some(self.selector),
             0x4000..=0x403f => Some(self.gate[(address - 0x4000) as usize]),
             0x8000..=0x801f => Some(self.rtc.read((address - 0x8000) as usize)),
@@ -549,6 +554,20 @@ impl CoreRuntime {
             .rtc_second_period = Some(period);
         Ok(())
     }
+    pub fn configure_pi3000_unmapped_low_read_candidate(
+        &mut self,
+        value: u8,
+    ) -> Result<(), String> {
+        if self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PI unmapped read candidate must be selected before execution".into());
+        }
+        self.pi3000_hardware
+            .as_ref()
+            .ok_or("not a PI runtime")?
+            .borrow()
+            .unmapped_low_read = Some(value);
+        Ok(())
+    }
     pub fn configure_pi3000_halt_main_timer_candidate(
         &mut self,
         enabled: bool,
@@ -631,6 +650,7 @@ impl CoreRuntime {
             "rtc_tick_period":h.rtc_tick_period,"rtc_ticks":h.rtc_ticks,"rtc_tick_phase":h.rtc_tick_phase,
             "rtc_second_period":h.rtc_second_period,"rtc_second_phase":h.rtc_second_phase,
             "rtc_seconds":h.rtc_seconds,"rtc_held_units":h.rtc_held_units,
+            "unmapped_low_read":h.unmapped_low_read,
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),
         )
