@@ -53,6 +53,8 @@ type WorkerRequest =
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'oz_state' }
 	| { id: number; type: 'pi_state' }
+	| { id: number; type: 'pi_retained_export'; generation?: number }
+	| { id: number; type: 'pi_retained_restore'; bytes: Uint8Array }
 	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
 	| { id: number; type: 'audio_consumed'; generation: number; epoch: number; sequence: number }
 	| { id: number; type: 'audio_status' }
@@ -816,6 +818,24 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id, emulator.pi3000_state());
 				return;
 			}
+			case 'pi_retained_export': {
+				if (!emulator?.has_rom() || romModel !== 'pi-3000' || operations.busy)
+					throw new Error('Requires paused PI model');
+				if (msg.generation !== undefined && msg.generation !== machineGeneration)
+					throw new Error('Stale saved-record generation');
+				replyOk(msg.id, emulator.export_pi3000_retained());
+				return;
+			}
+			case 'pi_retained_restore': {
+				if (!emulator?.has_rom() || romModel !== 'pi-3000') throw new Error('Requires loaded PI');
+				emulator.restore_pi3000_retained(msg.bytes);
+				inputs.clear();
+				tabletInputs.discard();
+				resetSerial();
+				requestFrame(true, true);
+				replyOk(msg.id);
+				return;
+			}
 			case 'pa_observe': {
 				if (romModel !== 'pa-9500' || operations.busy) throw new Error('Requires paused PA model');
 				if (msg.generation !== machineGeneration) throw new Error('Stale PA observation generation');
@@ -1115,6 +1135,7 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'start',
 			'set_execution_mode',
 			'oz_retained_restore',
+			'pi_retained_restore',
 			'oz_reset',
 			'pa_reset',
 			'oz_replay',

@@ -18,6 +18,7 @@ pub mod bundle;
 pub mod compatibility;
 pub mod input;
 mod lcd_view;
+pub mod retained;
 #[cfg(test)]
 mod tests;
 
@@ -579,6 +580,14 @@ pub fn configure(
 }
 
 impl CoreRuntime {
+    pub fn pi3000_retained_state(&self) -> Result<Vec<u8>, String> {
+        let h = self.pi3000_hardware.as_ref().ok_or("not a PI runtime")?;
+        Ok(retained::retained_state(self, h))
+    }
+    pub fn restore_pi3000_retained_state(&mut self, image: &[u8]) -> Result<(), String> {
+        let h = self.pi3000_hardware.as_ref().ok_or("not a PI runtime")?;
+        retained::restore_retained_state(self, h, image)
+    }
     /// A2 periodic source candidate. Physical crystal/period remain unqualified.
     /// Configure before execution. Strict leaves it off; Firmware uses the
     /// related board's nominal half-second period (512,000 timing units).

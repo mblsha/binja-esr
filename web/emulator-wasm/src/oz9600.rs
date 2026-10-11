@@ -2,6 +2,7 @@
 // PY_SOURCE: pce500/oz9600/input.py
 // PY_SOURCE: pce500/oz9600/retained.py
 // PY_SOURCE: pce500/oz9600/audio.py
+// PY_SOURCE: pce500/pi3000/retained.py
 //! Browser model replacement is atomic; retained backing is not a CPU snapshot.
 use super::*;
 use js_sys::{Int16Array, Reflect};
@@ -24,7 +25,13 @@ impl Sc62015Emulator {
         if model != DeviceModel::Pi3000 {
             candidate.power_on_reset().map_err(error)?;
         }
-        if model == DeviceModel::Oz9600 {
+        if model == DeviceModel::Pi3000 {
+            if !retained.is_empty() {
+                candidate
+                    .restore_pi3000_retained_state(retained)
+                    .map_err(|e| JsValue::from_str(&e))?;
+            }
+        } else if model == DeviceModel::Oz9600 {
             if !retained.is_empty() {
                 candidate
                     .restore_oz9600_retained_state(retained)

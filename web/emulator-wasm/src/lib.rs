@@ -2,6 +2,7 @@
 // PY_SOURCE: pce500/run_pce500.py
 // PY_SOURCE: pce500/display/text_decoder.py:decode_display_text
 // PY_SOURCE: pce500/display/font.py
+// PY_SOURCE: pce500/pi3000/retained.py
 
 use js_sys::Uint8Array;
 use serde::{Deserialize, Serialize};
@@ -563,6 +564,29 @@ impl Sc62015Emulator {
         state
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    pub fn export_pi3000_retained(&self) -> Result<Uint8Array, JsValue> {
+        let bytes = self
+            .runtime
+            .pi3000_retained_state()
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(Uint8Array::from(bytes.as_slice()))
+    }
+
+    pub fn restore_pi3000_retained(&mut self, retained: &[u8]) -> Result<(), JsValue> {
+        if self.model != DeviceModel::Pi3000 {
+            return Err(JsValue::from_str("PI restore requires PI model"));
+        }
+        if retained.is_empty() {
+            return Err(JsValue::from_str("PI saved image is empty"));
+        }
+        self.install_rom(
+            &self.rom_image.clone(),
+            self.model,
+            self.oz9600_profile,
+            retained,
+        )
     }
 
     /// Advance the deterministic IQ-7000 RTC independently of CPU execution.

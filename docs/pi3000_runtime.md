@@ -116,7 +116,30 @@ The saved record also survives OFF/ON. Wake returns to Calendar; selecting
 January 1, opening its weekly view, choosing the Saturday day row and then
 selecting the record enables Edit. Native and actual browser contacts reopen
 the same content with identical visible pixels. Complete application coverage,
-persisted restart images and handwriting recognition remain open.
+handwriting recognition remain open.
+
+The PI browser now provides Save backup and Restore backup. A backup contains
+the separate 256 KiB main RAM, 16 KiB scratch RAM and 32 raw RTC registers.
+`PIRAM01` binds the fixed ROM, sorted bank inventory, PI backing layout and
+payload SHA-256. Restore validates every identity and length before copying
+backing, and the core API accepts it only before the first CPU boundary,
+including elapsed HALT time. This layout describes emulator persistence;
+physical battery-backed regions remain unqualified.
+
+`CoreRuntime::pi3000_retained_state()` reads backing without mapped reads,
+acknowledgments or execution. `restore_pi3000_retained_state(image)` restores
+it into a fresh runtime. CPU, LCD, mapper, auxiliary device, gate, GPIO, input
+ownership and clock phases stay fresh. The browser validates a candidate
+before replacing the running machine; corrupt imports leave its state intact.
+Worker and no-Worker backup controls use the same WASM/core implementation.
+
+The actual-ROM restart consumer completes touch calibration, returns to
+Calendar without the erase-data prompt, selects the saved day and record,
+and reopens content `1` through Edit. Native and browser visible pixels match
+the original saved-record panel. The private native CLI exposes
+`--retained-out <path>` and `--retained-in <path>`; the Python reference
+restores and re-exports a native-produced image byte-identically. Complete
+application, clock/alarm, card and serial coverage remain open.
 
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only

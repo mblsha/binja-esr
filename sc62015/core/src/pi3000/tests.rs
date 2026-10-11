@@ -1,5 +1,102 @@
 // PY_SOURCE: pce500/pi3000/hardware.py
+// PY_SOURCE: pce500/pi3000/test_retained.py
 use super::*;
+use sha2::Digest;
+
+#[test]
+fn retained_backing_round_trip_keeps_raw_rtc_and_fresh_devices() {
+    let source = fixture(&[0; 8]);
+    {
+        let mut h = source.pi3000_hardware().unwrap().borrow();
+        h.ram[0] = 0x12;
+        h.ram[retained::MAIN_RAM_SIZE - 1] = 0x34;
+        h.scratch[0] = 0x56;
+        h.scratch[retained::SCRATCH_SIZE - 1] = 0x78;
+        h.rtc.write(12, 0x80);
+        h.rtc.write(13, 0);
+        h.rtc.write(10, 4);
+        h.gate[0x12] = 0x40;
+        h.gpio[0] = 0x91;
+    }
+    let image = source.pi3000_retained_state().unwrap();
+    assert_eq!(image.len(), retained::IMAGE_SIZE);
+    assert_eq!(&image[..8], b"PIRAM01\0");
+    assert_eq!(
+        format!("{:x}", sha2::Sha256::digest(&image)),
+        "7c2d76d7983487b93dfd076b2410a0e5561780f6eed09c688e23e57b25625118"
+    );
+    assert_eq!(source.instruction_count(), 0);
+    assert_eq!(source.elapsed_timing_units(), 0);
+    assert_eq!(source.pi3000_hardware().unwrap().borrow().gate[0x12], 0x40);
+    let mut restored = fixture(&[0; 8]);
+    restored.restore_pi3000_retained_state(&image).unwrap();
+    assert_eq!(restored.pi3000_retained_state().unwrap(), image);
+    let h = restored.pi3000_hardware().unwrap().borrow();
+    assert_eq!((h.ram[0], h.ram[retained::MAIN_RAM_SIZE - 1]), (0x12, 0x34));
+    assert_eq!(
+        (h.scratch[0], h.scratch[retained::SCRATCH_SIZE - 1]),
+        (0x56, 0x78)
+    );
+    assert_eq!(h.rtc.retained_registers()[13], 0);
+    assert_eq!(h.rtc.read(13), 0x80);
+    assert_eq!(h.gate[0x12], 0);
+    assert_eq!(h.gpio[0], 0);
+    assert_eq!(h.selector, 0xfd);
+    assert_eq!(h.tablet.data_reads, 0);
+}
+
+#[test]
+fn retained_backing_rejects_corruption_and_cross_rom_bank_identity_atomically() {
+    let source = fixture(&[0; 8]);
+    let image = source.pi3000_retained_state().unwrap();
+    let mut target = fixture(&[0; 8]);
+    target.pi3000_hardware().unwrap().borrow().ram[7] = 0x93;
+    let before = target.pi3000_retained_state().unwrap();
+    for offset in [0, 8, 40, 72, retained::IMAGE_SIZE - 1] {
+        let mut bad = image.clone();
+        bad[offset] ^= 1;
+        assert!(target.restore_pi3000_retained_state(&bad).is_err());
+        assert_eq!(target.pi3000_retained_state().unwrap(), before);
+    }
+    assert!(target
+        .restore_pi3000_retained_state(&image[..image.len() - 1])
+        .is_err());
+    let mut extended = image.clone();
+    extended.push(0);
+    assert!(target.restore_pi3000_retained_state(&extended).is_err());
+    assert_eq!(target.pi3000_retained_state().unwrap(), before);
+    let mut different = fixture(&[1; 8]);
+    assert!(different.restore_pi3000_retained_state(&image).is_err());
+    target
+        .pi3000_hardware()
+        .unwrap()
+        .borrow()
+        .banks
+        .insert(3, vec![0xa5; 0x20000]);
+    let bank_before = target.pi3000_retained_state().unwrap();
+    assert!(target.restore_pi3000_retained_state(&image).is_err());
+    assert_eq!(target.pi3000_retained_state().unwrap(), bank_before);
+}
+
+#[test]
+fn retained_backing_rejects_running_and_elapsed_halt_restore() {
+    use crate::llama::state::PowerState;
+    for halted in [false, true] {
+        let mut rt = fixture(&[0; 8]);
+        let image = rt.pi3000_retained_state().unwrap();
+        if halted {
+            rt.state.set_power_state(PowerState::Halted);
+        }
+        rt.step_scheduler_boundaries(1).unwrap();
+        assert_eq!(rt.instruction_count(), if halted { 0 } else { 1 });
+        let before = rt.pi3000_retained_state().unwrap();
+        assert!(rt.restore_pi3000_retained_state(&image).is_err());
+        assert_eq!(rt.pi3000_retained_state().unwrap(), before);
+    }
+    let mut other = CoreRuntime::new();
+    assert!(other.pi3000_retained_state().is_err());
+    assert!(other.restore_pi3000_retained_state(&[]).is_err());
+}
 
 #[test]
 fn auxiliary_sample_irq_is_explicit_and_requires_active_capture() {

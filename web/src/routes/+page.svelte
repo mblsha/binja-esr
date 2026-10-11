@@ -119,6 +119,8 @@
 	let paCardError = '';
 	let ozReplayReport: any = null;
 	let ozReplayStatus = '';
+	let piBackupError = '';
+	let piBackupStatus = '';
 	let running = false;
 	let soundEnabled = false;
 	let soundBusy = false;
@@ -1800,6 +1802,47 @@
 			lastError = String(error);
 		}
 	}
+	async function exportPiBackup() {
+		if (!romLoaded || romModel !== 'pi-3000' || !(await stop())) return;
+		try {
+			const bytes = worker
+				? await workerCall('pi_retained_export', { generation: romLoadGeneration })
+				: emulator.export_pi3000_retained();
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pi-3000.piram');
+			piBackupError = '';
+			piBackupStatus = 'Backup saved';
+		} catch (error) {
+			piBackupError = String(error);
+		}
+	}
+	async function importPiBackup(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !romLoaded || romModel !== 'pi-3000' || loadingRom || !(await stop())) return;
+		loadingRom = true;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (worker) await workerCall('pi_retained_restore', { bytes }, [bytes.buffer]);
+			else {
+				emulator.restore_pi3000_retained(bytes);
+				fallbackInputs.clear();
+				fallbackTablet.discard();
+				resetFallbackSerial();
+				refreshAllNow();
+			}
+			deliveredContacts = new Set();
+			physicalHeldCodes.clear();
+			physicalHighlights = new Set();
+			piBackupError = '';
+			piBackupStatus = `Restored ${file.name}; complete touch calibration to continue`;
+			lastError = null;
+		} catch (error) {
+			piBackupError = String(error);
+		} finally {
+			loadingRom = false;
+		}
+	}
 	async function importOzRetained(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
@@ -2352,6 +2395,27 @@
 		</div>
 	{/if}
 	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
+	{#if romModel === 'pi-3000'}
+		<section class="serial-panel" aria-label="Saved records" data-testid="pi-saved-records">
+			<button
+				data-testid="pi-backup-export"
+				on:click={exportPiBackup}
+				disabled={!romLoaded || loadingRom || functionRunnerBusy || stepBusy || !!controlPending}>Save backup</button
+			>
+			<label
+				>Restore backup <input
+					type="file"
+					accept=".piram,.bin"
+					data-testid="pi-backup-file"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy || stepBusy || !!controlPending}
+					on:change={importPiBackup}
+				/></label
+			>
+			<p class="hint">Restoring restarts the organizer and returns to touch calibration.</p>
+			{#if piBackupStatus}<p role="status" data-testid="pi-backup-status">{piBackupStatus}</p>{/if}
+			{#if piBackupError}<p class="error" role="alert" data-testid="pi-backup-error">{piBackupError}</p>{/if}
+		</section>
+	{/if}
 	{#if romModel === 'oz-9600'}
 		<section class="serial-panel" aria-label="Saved records" data-testid="oz-saved-records">
 			<label

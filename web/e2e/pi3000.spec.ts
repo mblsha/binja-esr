@@ -9,7 +9,9 @@ test.skip(!bundlePath, 'Supply verified private PI bundle with PI3000_ROM_PATH')
 const rpc = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__piRpc(type, payload), { type, payload });
 
-test('PI browser initializes, handles input and power, and reopens a saved Schedule record', async ({ page }) => {
+test('PI browser initializes and reopens a saved Schedule record after power and restart', async ({
+	page,
+}, testInfo) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);
 	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
@@ -435,6 +437,84 @@ test('PI browser initializes, handles input and power, and reopens a saved Sched
 	expect(retainedPanelDigest).toBe(reopenedPanelDigest);
 	await expect.poll(renderedPanelDigest).toBe(retainedPanelDigest);
 	expect(errors).toEqual([]);
+	const downloadPromise = page.waitForEvent('download');
+	await page.getByTestId('pi-backup-export').click();
+	const download = await downloadPromise;
+	const backupPath = output ? resolve(output, 'browser-record.piram') : testInfo.outputPath('browser-record.piram');
+	await download.saveAs(backupPath);
+	const backup = await readFile(backupPath);
+	expect(backup.length).toBe(104 + 0x40000 + 0x4000 + 32);
+	expect(backup.subarray(0, 8)).toEqual(Buffer.from('PIRAM01\0'));
+	const beforeInvalidRestore = await rpc(page, 'pi_state');
+	const corrupt = Buffer.from(backup);
+	corrupt[corrupt.length - 1] ^= 1;
+	await page
+		.getByTestId('pi-backup-file')
+		.setInputFiles({ name: 'corrupt.piram', mimeType: 'application/octet-stream', buffer: corrupt });
+	await expect(page.getByTestId('pi-backup-error')).toContainText('checksum');
+	expect(await rpc(page, 'pi_state')).toEqual(beforeInvalidRestore);
+	await expect.poll(renderedPanelDigest).toBe(retainedPanelDigest);
+	await page
+		.getByTestId('pi-backup-file')
+		.setInputFiles({ name: 'saved.piram', mimeType: 'application/octet-stream', buffer: backup });
+	await expect(page.getByTestId('pi-backup-status')).toContainText('Restored saved.piram');
+	const restoredState = await rpc(page, 'pi_state');
+	expect(restoredState.native_instructions).toBe(0);
+	expect(restoredState.cycles).toBe(0);
+	expect(restoredState.fault).toBeNull();
+	await rpc(page, 'step', { instructions: 400_000 });
+	for (const [x, y] of [
+		[32, 32],
+		[205, 32],
+		[32, 135],
+		[205, 135],
+	])
+		await holdTouch(x, y, 200_000, 100_000);
+	await rpc(page, 'step', { instructions: 3_000_000 });
+	await holdTouch(219, 155, 250_000, 1_000_000);
+	await rpc(page, 'step', { instructions: 5_000_000 });
+	await holdTouch(222, 34, 50_000, 300_000);
+	await holdTouch(222, 34, 50_000, 1_000_000);
+	await holdTouch(14, 146, 50_000, 1_000_000);
+	await holdTouch(100, 70, 50_000, 300_000);
+	await holdTouch(198, 7, 50_000, 1_000_000);
+	const restartedRecordState = await rpc(page, 'pi_state');
+	expect(restartedRecordState.fault).toBeNull();
+	expect(restartedRecordState.pc).toBe(0xf06ba);
+	const restartedCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(restartedCapture.error).toBeNull();
+	const restartedPixels = JSON.parse(restartedCapture.resultJson).pixels;
+	const restartedPanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					restartedPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(restartedPanelDigest).toBe(retainedPanelDigest);
+	await expect.poll(renderedPanelDigest).toBe(restartedPanelDigest);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-schedule-restarted.png') });
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < restartedPixels.length; i++)
+			if (restartedPixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		await writeFile(resolve(output, 'browser-restarted-controller.pbm'), frame);
+		await writeFile(
+			resolve(output, 'browser-restart-diagnostic.json'),
+			JSON.stringify({
+				beforeInvalidRestore,
+				restoredState,
+				restartedRecordState,
+				restartedPanelDigest,
+				backupSha256: createHash('sha256').update(backup).digest('hex'),
+				invalidRestorePreservedState: true,
+			}),
+		);
+	}
+	expect(errors).toEqual([]);
 	if (output) {
 		await writeFile(
 			resolve(output, 'browser-startup.json'),
@@ -473,7 +553,7 @@ test('PI browser initializes, handles input and power, and reopens a saved Sched
 	}
 });
 
-test('PI no-Worker browser fallback shares panel and assisted contact behavior', async ({ page }) => {
+test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);
 	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
@@ -528,4 +608,34 @@ test('PI no-Worker browser fallback shares panel and assisted contact behavior',
 			}),
 		);
 	}
+	const downloadPromise = page.waitForEvent('download');
+	await page.getByTestId('pi-backup-export').click();
+	const download = await downloadPromise;
+	const backupPath = output ? resolve(output, 'browser-fallback.piram') : testInfo.outputPath('browser-fallback.piram');
+	await download.saveAs(backupPath);
+	const backup = await readFile(backupPath);
+	expect(backup.subarray(0, 8)).toEqual(Buffer.from('PIRAM01\0'));
+	const beforeInvalidRestore = await page.getByTestId('emu-status').innerText();
+	const bad = Buffer.from(backup);
+	bad[bad.length - 1] ^= 1;
+	await page
+		.getByTestId('pi-backup-file')
+		.setInputFiles({ name: 'bad.piram', mimeType: 'application/octet-stream', buffer: bad });
+	await expect(page.getByTestId('pi-backup-error')).toContainText('checksum');
+	expect(await page.getByTestId('emu-status').innerText()).toBe(beforeInvalidRestore);
+	await page
+		.getByTestId('pi-backup-file')
+		.setInputFiles({ name: 'fallback.piram', mimeType: 'application/octet-stream', buffer: backup });
+	await expect(page.getByTestId('pi-backup-status')).toContainText('Restored fallback.piram');
+	await expect(page.getByTestId('emu-status')).toContainText('Instr: 0');
+	expect(errors).toEqual([]);
+	if (output)
+		await writeFile(
+			resolve(output, 'browser-fallback-restore.json'),
+			JSON.stringify({
+				backupSha256: createHash('sha256').update(backup).digest('hex'),
+				invalidRestorePreservedState: true,
+				restoredNativeInstructions: 0,
+			}),
+		);
 });
