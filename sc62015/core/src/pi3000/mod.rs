@@ -503,7 +503,9 @@ pub fn configure(
         rt.pi3000_compatibility = Some(compatibility::Coordinator::new(hardware.clone()));
     }
     if profile == BootstrapProfile::Firmware {
-        use crate::llama::state::{BlockTransferPolicy, IsrSoftwareWritePolicy};
+        use crate::llama::state::{
+            BlockTransferPolicy, ByteArithmeticSourcePolicy, IsrSoftwareWritePolicy,
+        };
         rt.memory.write_internal_byte(0xec, 0xd0);
         // F06CA requests ISR.MTI after its masked keyboard HALT. F13A9/
         // F1BC5 dispatch that request to F1BEB and the ordinary matrix scanner.
@@ -513,6 +515,11 @@ pub fn configure(
             .set_isr_software_write_policy(IsrSoftwareWritePolicy::ClearOnlyExceptMti);
         rt.state
             .set_block_transfer_policy(BlockTransferPolicy::CoupledPredecrement);
+        // FD:CECA9 uses SUB A,I when constructing Schedule's entry controls.
+        // Reuse the existing ESR-P low-byte source hypothesis; Strict retains
+        // the mixed-width decode rejection and silicon semantics remain open.
+        rt.state
+            .set_byte_arithmetic_source_policy(ByteArithmeticSourcePolicy::LowByte);
         let timing = DeviceModel::Pi3000.timer_profile();
         rt.timer.enabled = true;
         rt.timer.configure_scr_periods(

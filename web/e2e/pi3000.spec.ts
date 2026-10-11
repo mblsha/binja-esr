@@ -212,8 +212,57 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 		'a67f66c45f0b535d6a65b68f69fdab0778591b647992bc618f080aee9e5c64d8',
 	]).toContain(resumedPanelDigest);
 	expect(errors).toEqual([]);
+	await holdTouch(159, 7, 250_000, 1_000_000);
+	const scheduleState = await rpc(page, 'pi_state');
+	expect(scheduleState.fault).toBeNull();
+	expect(scheduleState.pc).toBe(0xf06ba);
+	const scheduleCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(scheduleCapture.error).toBeNull();
+	const scheduleNativePixels = JSON.parse(scheduleCapture.resultJson).pixels;
+	const scheduleNativePanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					scheduleNativePixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	const scheduleHeaderDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 16 }, (_, i) =>
+					scheduleNativePixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
 	if (output) {
-		await canvas.screenshot({ path: resolve(output, 'browser-calendar-contact.png') });
+		await writeFile(
+			resolve(output, 'browser-schedule-diagnostic.json'),
+			JSON.stringify({ scheduleState, scheduleNativePanelDigest, scheduleHeaderDigest }),
+		);
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < scheduleNativePixels.length; i++)
+			if (scheduleNativePixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		await writeFile(resolve(output, 'browser-schedule-controller.pbm'), frame);
+	}
+	// The entry header is invariant across cursor/input phases. Retain the whole
+	// body for recovery; this check does not qualify a stored Schedule record.
+	expect(scheduleHeaderDigest).toBe('0ca64e87f424d98f24da564986b95555c20ac2082fff988c5a7b630366c8cf2b');
+	async function renderedPanelDigest() {
+		const pixels = await canvas.evaluate((node: HTMLCanvasElement) => {
+			const rgba = node.getContext('2d')!.getImageData(0, 0, node.width, node.height).data;
+			return Array.from({ length: node.width * node.height }, (_, i) => (rgba[i * 4] === 0 ? 1 : 0));
+		});
+		return createHash('sha256').update(Buffer.from(pixels)).digest('hex');
+	}
+	await expect.poll(renderedPanelDigest).toBe(scheduleNativePanelDigest);
+	const schedulePanelDigest = await renderedPanelDigest();
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-schedule-entry.png') });
 		await writeFile(
 			resolve(output, 'browser-startup.json'),
 			JSON.stringify({
@@ -233,6 +282,10 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 				stillOff,
 				resumedState,
 				resumedPanelDigest,
+				scheduleState,
+				schedulePanelDigest,
+				scheduleNativePanelDigest,
+				scheduleHeaderDigest,
 			}),
 		);
 	}

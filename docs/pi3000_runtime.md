@@ -13,6 +13,17 @@ input opens the date dialog and context menu, changes months and reaches OFF;
 ON resumes the calendar after its normal redraw. Complete organizer navigation,
 keyboard/RTC/power qualification and cards remain open.
 
+The calendar's New Entry control also opens the Schedule editor. FD:CECA9
+executes `SUB A,I` (`4E03`) directly while constructing its controls. The
+normal Firmware profile uses the existing ESR-P `LowByte` arithmetic-source
+hypothesis: wider sources are truncated before byte arithmetic and flags.
+Strict decoding remains available and rejects this form before commit.
+This reuses the shared CPU policy without changing other device defaults;
+the silicon contract remains unqualified. Native fresh-entry output has an
+exact full-frame regression. The browser checks the invariant Schedule header
+and retains the entire body, whose cursor/input phases still need recovery.
+Schedule content input, validation and stored-record workflows remain open.
+
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM
 and 32 complete selector views (00..0F and F0..FF). It does not accept a mapped
 1 MiB dump as startup RAM. The private acquisition tool packs the bundle;
