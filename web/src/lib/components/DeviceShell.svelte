@@ -113,6 +113,9 @@
 			<OzTabletSurface label="Phonebook" fixed={[200, 276]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
 				><span>Phonebook</span></OzTabletSurface
 			>
+			<OzTabletSurface label="Calculator" fixed={[200, 424]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
+				><span>Calculator</span></OzTabletSurface
+			>
 			<OzTabletSurface label="Clock" fixed={[240, 572]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
 				><span>Clock</span></OzTabletSurface
 			>
@@ -123,6 +126,7 @@
 <style>
 	.pi-app-controls {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 12px;
 		margin-top: 8px;
 	}

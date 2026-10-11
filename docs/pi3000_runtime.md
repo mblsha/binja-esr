@@ -147,6 +147,13 @@ the original saved-record panel. The private native CLI exposes
 restores and re-exports a native-produced image byte-identically. Complete
 application, clock/alarm, card and serial coverage remain open.
 
+The browser exposes Calculator at raw `(200,424)`. Ordinary LCD contacts
+compute `2 + 3 = 5`; native and browser checks compare the complete visible
+panel. The tall middle button is plus, and the tall button to its right is
+equals, as established by acquired control resources and their artwork.
+The plus glyph matches its acquired artwork pixel-for-pixel. Complete
+Calculator functions and physical digitizer behavior remain open.
+
 The browser also exposes the verified Clock contact at raw `(240,572)`.
 The ROM keeps Clock open after release and shows its Tokyo/New York views,
 time-setting dialog and daily-alarm dialog. Enabling the default daily alarm

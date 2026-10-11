@@ -723,6 +723,82 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 			}),
 		);
 	}
+	// Resource-backed Calculator controls: the tall middle button is plus,
+	// and the tall button to its right is equals. Ordinary contacts compute 5.
+	await holdApplication('pi-tablet-calculator');
+	await rpc(page, 'step', { instructions: 500_000 });
+	await expect.poll(renderedPanelDigest).toBe('7de4ae38df39c618ff54687e14a373736ba39bf1ba4ef2fa0c425b49536ffbc6');
+	for (const [x, y] of [
+		[87, 118],
+		[156, 118],
+		[116, 118],
+		[187, 132],
+	])
+		await holdTouch(x, y, 50_000, 300_000);
+	const calculatorState = await rpc(page, 'pi_state');
+	expect(calculatorState.fault).toBeNull();
+	const calculatorCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(calculatorCapture.error).toBeNull();
+	const calculatorPixels = JSON.parse(calculatorCapture.resultJson).pixels;
+	const calculatorPanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					calculatorPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	expect(calculatorPanelDigest).toBe('7cd4db8f68fdb0eaa7211a85986bb333c7e849dc701d08f49327401b44a48d15');
+	await expect.poll(renderedPanelDigest).toBe(calculatorPanelDigest);
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-calculator-add.png') });
+		await writeFile(
+			resolve(output, 'browser-calculator-add.json'),
+			JSON.stringify({ calculatorState, calculatorPanelDigest, expression: '2 + 3 = 5' }),
+		);
+	}
+	const calculatorContacts: Record<string, [number, number]> = {
+		'0': [71, 146],
+		'2': [86, 118],
+		'3': [116, 118],
+		'4': [56, 90],
+		'6': [116, 90],
+		'7': [56, 62],
+		'8': [86, 62],
+		'9': [116, 62],
+		C: [218, 62],
+		'-': [188, 90],
+		'*': [158, 62],
+		'/': [188, 62],
+		'=': [188, 132],
+		T: [20, 62],
+		R: [20, 90],
+		M: [20, 146],
+	};
+	const calculatorOperations = [
+		{ keys: 'C9-4=', result: '5', digest: '7cd4db8f68fdb0eaa7211a85986bb333c7e849dc701d08f49327401b44a48d15' },
+		{ keys: 'C6*7=', result: '42', digest: 'e1b01d24183f8fc56da380dab938a1ea9016429c097d6c435149f3f474cd4d41' },
+		{ keys: 'C8/2=', result: '4', digest: 'c7e7baeff84d46cf59e2e208208a5cf94bca9e7c3f52d8b0d40dc27bce51eba7' },
+		{ keys: 'C2/0=', result: '0 E', digest: '45c3306cc66d2638650fd8c9f710340ea6036f9002aa117d2a0c9fb10b81a203' },
+		{ keys: 'C', result: '0', digest: '7de4ae38df39c618ff54687e14a373736ba39bf1ba4ef2fa0c425b49536ffbc6' },
+		{ keys: 'T2MC3MCR', result: '5 M', digest: '37a365544627c8a797797b95c52bcaab78e9dca8fc17ab22829f8e2a85bc0d53' },
+	];
+	for (const operation of calculatorOperations) {
+		for (const key of operation.keys) {
+			const [x, y] = calculatorContacts[key];
+			await holdTouch(x, y, 50_000, 300_000);
+		}
+		expect((await rpc(page, 'pi_state')).fault).toBeNull();
+		await expect.poll(renderedPanelDigest).toBe(operation.digest);
+	}
+	expect(errors).toEqual([]);
+	if (output)
+		await writeFile(
+			resolve(output, 'browser-calculator-operations.json'),
+			JSON.stringify({ calculatorOperations, state: await rpc(page, 'pi_state') }),
+		);
 });
 
 test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
