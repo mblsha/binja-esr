@@ -71,8 +71,8 @@ impl CoreRuntime {
             return Err(CoreError::Other("OZ card already attached".into()));
         }
         // Executable card bytes are a static, epoch-bound view, just like the
-        // banked system ROM. Callback-backed fetches cannot safely cross the
-        // shared scheduler's decode/execution boundary.
+        // banked system ROM. SRAM below has a separate passive-backing contract;
+        // general device callbacks remain quarantined across scheduler ticks.
         self.memory
             .add_rom_overlay(0x40000, &rom.repeat(2), "oz9600_card_rom");
         let reader = hw.clone();
@@ -94,6 +94,13 @@ impl CoreRuntime {
             })),
             perfetto_thread: None,
         });
+        // This SRAM has no autonomous device writes or selector-dependent
+        // mapping: ticks advance UART/LCD/RTC/tablet state only. Both readers
+        // resolve the same card backing; only CPU stores change these bytes.
+        // Keep callback routing so execution, self-modification, mirrors and
+        // media export all observe actual mutable SRAM rather than a code copy.
+        self.memory
+            .declare_passive_instruction_ram("oz9600_card_sram")?;
         hw.borrow_mut().card = Some(card);
         Ok(())
     }

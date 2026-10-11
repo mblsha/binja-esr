@@ -2,8 +2,8 @@
 
 use crate::{llama::eval::perfetto_last_pc, CoreError, Result};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 type ImrIsrHook = Rc<dyn Fn(u32, u8, u8)>;
@@ -266,6 +266,9 @@ pub struct MemoryImage {
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
     overlays: Vec<MemoryOverlay>,
+    /// Model-declared passive RAM: callbacks share owned backing, and device
+    /// ticks cannot change its bytes. Ordinary guest stores remain live.
+    passive_instruction_ram: HashSet<String>,
     overlay_span: Option<(u32, u32)>,
     /// No overlay or host range intersects the upper ROM window
     /// 0xC0000..=0xFFFFF (kept exact by `refresh_upper_rom_plain`).
@@ -321,6 +324,7 @@ impl MemoryImage {
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
             overlays: Vec::new(),
+            passive_instruction_ram: HashSet::new(),
             overlay_span: None,
             upper_rom_plain: true,
             memory_card_state: MemoryCardState::Unconfigured,
@@ -519,6 +523,7 @@ impl MemoryImage {
     }
 
     fn add_overlay_internal(&mut self, overlay: MemoryOverlay) {
+        self.passive_instruction_ram.remove(&overlay.name);
         self.overlay_span = Some(match self.overlay_span {
             Some((start, end)) => (start.min(overlay.start), end.max(overlay.end)),
             None => (overlay.start, overlay.end),
@@ -530,6 +535,7 @@ impl MemoryImage {
     }
 
     fn remove_overlay_internal(&mut self, name: &str) -> bool {
+        self.passive_instruction_ram.remove(name);
         let previous_len = self.overlays.len();
         self.overlays.retain(|ov| ov.name != name);
         self.overlay_span = self.overlays.iter().fold(None, |span, overlay| {
@@ -591,8 +597,34 @@ impl MemoryImage {
         (self as *const Self as usize, self.overlay_epoch)
     }
 
-    /// Whether a scheduled instruction byte has one static, callback-free
-    /// view across a host timer/device tick.
+    /// Declare a model-owned passive RAM view. The model must guarantee that
+    /// timer/device ticks never modify this backing or its mapping, that silent
+    /// reads equal architectural reads, and that neither read has side effects
+    /// on the bytes. Guest instruction writes remain ordinary mutable RAM.
+    /// This crate-private contract is not available to arbitrary host overlays.
+    /// Replacing/removing the overlay revokes the declaration.
+    pub(crate) fn declare_passive_instruction_ram(&mut self, name: &str) -> Result<()> {
+        let mut matches = self.overlays.iter().filter(|overlay| overlay.name == name);
+        let valid = matches.next().is_some_and(|overlay| {
+            !overlay.read_only
+                && overlay.data.is_none()
+                && overlay.read_handler.is_some()
+                && overlay.preflight_read_handler.is_some()
+                && overlay.write_handler.is_some()
+        }) && matches.next().is_none();
+        if !valid {
+            return Err(CoreError::Other(
+                "passive instruction RAM requires one complete callback-backed RAM view".into(),
+            ));
+        }
+        self.advance_overlay_epoch();
+        self.passive_instruction_ram.insert(name.to_owned());
+        Ok(())
+    }
+
+    /// Whether a scheduled instruction byte has one stable view across a host
+    /// timer/device tick. General callbacks remain quarantined; a model may
+    /// explicitly declare owned passive RAM under the contract above.
     pub fn instruction_byte_is_stable(&self, address: u32) -> bool {
         let address = canonical_address(address);
         if self.requires_python(address) {
@@ -603,7 +635,7 @@ impl MemoryImage {
                 continue;
             }
             if overlay.read_handler.is_some() || overlay.preflight_read_handler.is_some() {
-                return false;
+                return self.passive_instruction_ram.contains(&overlay.name);
             }
             if overlay
                 .data
@@ -2345,6 +2377,62 @@ mod tests {
         assert_eq!(mem.load(0xe1234, 8), Some(0x12));
         mem.remove_overlay("fetch-override");
         assert_eq!(mem.fetch_plain_rom_byte(0xe1234), Some(0x99));
+    }
+
+    #[test]
+    fn passive_callback_ram_executes_live_writes_and_revokes_on_replacement() {
+        let mut rt = crate::CoreRuntime::new();
+        let backing = Rc::new(RefCell::new(vec![0x08, 0x11])); // MV A,imm8
+        let make_overlay = |backing: Rc<RefCell<Vec<u8>>>| {
+            let reader = backing.clone();
+            let peeker = backing.clone();
+            MemoryOverlay {
+                start: 0x50000,
+                end: 0x50001,
+                name: "owned-ram".into(),
+                data: None,
+                read_only: false,
+                read_handler: Some(Box::new(move |address, _| {
+                    Some(reader.borrow()[(address - 0x50000) as usize])
+                })),
+                preflight_read_handler: Some(Box::new(move |address, _| {
+                    Some(peeker.borrow()[(address - 0x50000) as usize])
+                })),
+                write_handler: Some(Box::new(move |address, value, _| {
+                    backing.borrow_mut()[(address - 0x50000) as usize] = value;
+                    true
+                })),
+                perfetto_thread: None,
+            }
+        };
+        rt.memory.add_overlay(make_overlay(backing.clone()));
+        rt.state.set_pc(0x50000);
+        let before = rt.memory.vector_transfer_provenance();
+        assert!(!rt.memory.instruction_byte_is_stable(0x50000));
+        assert!(rt
+            .step(1)
+            .unwrap_err()
+            .to_string()
+            .contains("callback-backed instruction bytes"));
+        assert_eq!(rt.instruction_count(), 0);
+        rt.memory
+            .declare_passive_instruction_ram("owned-ram")
+            .unwrap();
+        assert_ne!(before, rt.memory.vector_transfer_provenance());
+        rt.step(1).unwrap();
+        assert_eq!(rt.get_reg("A"), 0x11);
+        rt.memory.store(0x50001, 8, 0x22);
+        rt.state.set_pc(0x50000);
+        rt.step(1).unwrap();
+        assert_eq!(rt.get_reg("A"), 0x22);
+        assert_eq!(*backing.borrow(), vec![0x08, 0x22]);
+        rt.memory.remove_overlay("owned-ram");
+        rt.memory.add_overlay(make_overlay(backing));
+        assert!(!rt.memory.instruction_byte_is_stable(0x50000));
+        assert!(rt
+            .memory
+            .declare_passive_instruction_ram("missing")
+            .is_err());
     }
 
     #[test]
