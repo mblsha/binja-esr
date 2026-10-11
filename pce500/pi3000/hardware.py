@@ -25,6 +25,8 @@ class Hardware:
         self.tablet_interrupt_source = "gate1" if firmware else "gate3"
         self.halt_main_timer_candidate = firmware
         self.halt_main_timer_units = 0
+        self.rtc_tick_period = 512_000 if firmware else None
+        self.rtc_tick_phase = self.rtc_ticks = 0
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
         self.absent_auxiliary = absent_auxiliary
@@ -202,6 +204,17 @@ class Hardware:
         return None
 
     def external_irq(self):
-        return self.auxiliary is not None and bool(
-            self.gate[0x10] & self.gate[0x12] & 0x7F
-        )
+        # F15C4 RTC dispatch uses gate bit0, independently of the auxiliary.
+        if self.rtc.interrupt_asserted():
+            self.gate[0x12] |= 1
+        return bool(self.gate[0x10] & self.gate[0x12] & 0x7F)
+
+    def advance_rtc_ticks(self, elapsed):
+        """Explicit A2 timing candidate; does not advance calendar or guest RAM."""
+        if self.rtc_tick_period is not None:
+            ticks, self.rtc_tick_phase = divmod(
+                self.rtc_tick_phase + elapsed, self.rtc_tick_period
+            )
+            if ticks:
+                self.rtc_ticks = (self.rtc_ticks + ticks) & (2**64 - 1)
+                self.rtc.raise_causes(4, 0)

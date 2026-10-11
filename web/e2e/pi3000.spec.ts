@@ -9,7 +9,7 @@ test.skip(!bundlePath, 'Supply verified private PI bundle with PI3000_ROM_PATH')
 const rpc = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__piRpc(type, payload), { type, payload });
 
-test('PI fresh browser reset and LCD clicks complete ROM calibration', async ({ page }) => {
+test('PI fresh browser input passes calibration and reaches initialization', async ({ page }) => {
 	test.setTimeout(180_000);
 	const bundle = await readFile(bundlePath!);
 	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
@@ -67,8 +67,8 @@ test('PI fresh browser reset and LCD clicks complete ROM calibration', async ({ 
 	const state = snapshots.at(-1);
 	expect(state.fault).toBeNull();
 	expect(state.tablet.slice(0, 3)).toEqual([700, 700, 0]);
-	expect(state.tablet[5]).toBe(971);
-	expect(state.native_instructions).toBe(1053134);
+	expect(state.tablet[5]).toBe(995);
+	expect(state.native_instructions).toBe(1071065);
 	const observed = await rpc(page, 'eval_js', {
 		source:
 			'return { capture: await e.lcd.capture(1), completed: await Promise.all(Array.from({length:4}, (_,i) => e.memory.read(0xBB294 + 0x21E + i))), result: await e.memory.read(0xBB294 + 0x222) };',
@@ -83,7 +83,7 @@ test('PI fresh browser reset and LCD clicks complete ROM calibration', async ({ 
 	for (let i = 0; i < result.capture.pixels.length; i++)
 		if (result.capture.pixels[i] === 0) pbm[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
 	const digest = createHash('sha256').update(pbm).digest('hex');
-	expect(digest).toBe('b45a13065798fa5f454fabf1cd073041eab62b8b663a54f0390ac22006cceabe');
+	expect(digest).toBe('e3f12a2322d3d48f158b13d8f80035ea8452d274cea7119131c2632ed4dbd39e');
 	expect(errors).toEqual([]);
 	if (output) {
 		await mkdir(output, { recursive: true });
@@ -94,6 +94,41 @@ test('PI fresh browser reset and LCD clicks complete ROM calibration', async ({ 
 		await canvas.screenshot({ path: resolve(output, 'browser-calibration.png') });
 		await rpc(page, 'step', { instructions: 500_000 });
 		await canvas.screenshot({ path: resolve(output, 'browser-completion.png') });
+	}
+	// The ROM waits four A2 ticks after completing calibration. Keyboard input
+	// cannot close that wait; exercise the real periodic RTC and next touch UI.
+	await rpc(page, 'step', { instructions: output ? 2_500_000 : 3_000_000 });
+	async function controllerDigest() {
+		const observed = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+		expect(observed.error).toBeNull();
+		const pixels = JSON.parse(observed.resultJson).pixels;
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < pixels.length; i++)
+			if (pixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		return createHash('sha256').update(frame).digest('hex');
+	}
+	const contrastState = await rpc(page, 'pi_state');
+	const contrastDigest = await controllerDigest();
+	expect(contrastState.fault).toBeNull();
+	expect(contrastDigest).toBe('0338fff05952b2379a4c1347711fa277387ffefbc6a4bd9dfc5d36f196584fa9');
+	if (output) await canvas.screenshot({ path: resolve(output, 'browser-contrast.png') });
+	await canvas.scrollIntoViewIfNeeded();
+	const finishBox = (await canvas.boundingBox())!;
+	await page.mouse.click(finishBox.x + (219.5 / 239) * finishBox.width, finishBox.y + (155.5 / 168) * finishBox.height);
+	await expect.poll(() => rpc(page, 'pi_state').then((s) => s.tablet[2])).toBe(1);
+	await rpc(page, 'step', { instructions: 1_250_000 });
+	const initializationState = await rpc(page, 'pi_state');
+	const initializationDigest = await controllerDigest();
+	expect(initializationState.fault).toBeNull();
+	expect(initializationDigest).toBe('f25cdbc1bbfddf62ffcefb56f0f07dfb98ae8e9f273ee55a9014794a8a08eb4e');
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-initialization.png') });
+		await writeFile(
+			resolve(output, 'browser-startup.json'),
+			JSON.stringify({ contrastState, contrastDigest, initializationState, initializationDigest }),
+		);
 	}
 });
 
@@ -130,13 +165,13 @@ test('PI no-Worker browser fallback shares panel and assisted contact behavior',
 		await page.mouse.click(box.x + ((x + 0.5) / 239) * box.width, box.y + ((y + 0.5) / 168) * box.height);
 		await advance(15);
 	}
-	await expect(page.getByTestId('emu-status')).toContainText('1053134');
+	await expect(page.getByTestId('emu-status')).toContainText('1071065');
 	const pixels = await canvas.evaluate((node: HTMLCanvasElement) => {
 		const rgba = node.getContext('2d')!.getImageData(0, 0, node.width, node.height).data;
 		return Array.from({ length: node.width * node.height }, (_, i) => (rgba[i * 4] === 0 ? 1 : 0));
 	});
 	expect(createHash('sha256').update(Buffer.from(pixels)).digest('hex')).toBe(
-		'c150e9de6c0c9b27791666071fa061524f9d313aafac6b558122c8f6706417d8',
+		'f8e11c6e47532440c3d1bd6fa97d3ced9cb657e083837beec7a3d432c75616bc',
 	);
 	expect(errors).toEqual([]);
 	if (output) {
@@ -146,8 +181,8 @@ test('PI no-Worker browser fallback shares panel and assisted contact behavior',
 			resolve(output, 'browser-fallback.json'),
 			JSON.stringify({
 				boundaries: 1_600_000,
-				native_instructions: 1053134,
-				panel_sha256: 'c150e9de6c0c9b27791666071fa061524f9d313aafac6b558122c8f6706417d8',
+				native_instructions: 1071065,
+				panel_sha256: 'f8e11c6e47532440c3d1bd6fa97d3ced9cb657e083837beec7a3d432c75616bc',
 				errors,
 			}),
 		);

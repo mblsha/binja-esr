@@ -142,6 +142,42 @@ def test_mapper_readbacks_follow_saved_output_latches():
     assert h.startup_latches == bytes((0x12, 0x34, 0x56))
 
 
+def test_periodic_rtc_candidate_coalesces_and_requires_device_and_gate_ack():
+    h = Hardware({})
+    h.rtc_tick_period = 10
+    h.advance_rtc_ticks(9)
+    assert h.rtc.read(10) == 0
+    h.advance_rtc_ticks(21)
+    assert (h.rtc_ticks, h.rtc_tick_phase) == (3, 0)
+    assert h.rtc.read(10) == 4 and not h.external_irq()
+    assert h.gate[0x12] == 0
+    h.rtc.write(8, 4)
+    assert not h.external_irq() and h.gate[0x12] == 1
+    h.gate[0x10] = 1
+    assert h.external_irq()
+    h.gate[0x12] = 0
+    assert h.external_irq()
+    h.rtc.write(10, 0)
+    assert h.external_irq()
+    h.gate[0x12] = 0
+    assert not h.external_irq()
+    assert not any(h.ram) and h.rtc.registers()[:5] == bytes(5)
+
+
+def test_auxiliary_initialization_control_matches_single_byte_acknowledgment():
+    from pce500.pi3000.auxiliary import Auxiliary
+
+    a = Auxiliary()
+    a.mark_written(0)
+    a.mark_written(1)
+    a.start(b"\xfe\x00" + bytes(30), 40)
+    assert a.status() == 0x82
+    a.advance(72)
+    assert a.response(0) == 1 and a.response(1) is None
+    a.acknowledge(0xBF)
+    assert a.status() == 2 and a.accepted == [0x00FE]
+
+
 @pytest.mark.parametrize(
     "contact",
     [

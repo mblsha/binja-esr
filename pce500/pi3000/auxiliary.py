@@ -17,7 +17,7 @@ class Auxiliary:
                 "PI auxiliary start before prior completion acknowledgment"
             )
         header = int.from_bytes(request[:2], "little")
-        if header not in (0x01FE, 0x30FB, 0x02FE):
+        if header not in (0x00FE, 0x01FE, 0x30FB, 0x02FE):
             raise ValueError(
                 f"unimplemented PI auxiliary command {header:04X}, written mask {self.written:08X}"
             )

@@ -4,9 +4,9 @@ The `pi3000` Cargo feature adds a PI-3000 board adapter to the shared
 CoreRuntime. It reuses the native CPU, matrix LCD controller, RTC reference
 and bounded ESR-H interpreter. PI ROM mapping, controller geometry and input
 ports come from the acquired PI firmware. This is an implementation in
-progress. ROM calibration completes through native and browser raw input;
-dialog confirmation, ordinary input, RTC/power, cards and organizer navigation
-remain open.
+progress. Native and browser raw input complete calibration, pass contrast
+setup and reach the fresh-memory initialization prompt. Organizer navigation,
+complete keyboard/RTC/power behavior and cards remain open.
 
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM
 and 32 complete selector views (00..0F and F0..FF). It does not accept a mapped
@@ -21,7 +21,8 @@ cargo run --manifest-path sc62015/core/Cargo.toml --features pi3000 \
 The normal model factory starts fresh scratch/high RAM with the `Firmware`
 startup candidate. It combines initial BP=D0, clear-only ISR writes, coupled
 predecrement transfers, nominal organizer timer periods, the LCC.bit7/HALT
-main-clock candidate, integrated ADC and Gate1 press edges. These settings are
+main-clock candidate, the periodic RTC A2 candidate, integrated ADC and Gate1
+press edges. These settings are
 supported by ROM consumers; physical reset state and timing remain unqualified.
 Unsupported bus operations stop and poison the runtime.
 An unknown instruction mapping fails preflight; an unknown data access stops
@@ -36,7 +37,9 @@ without completion or response bytes. The firmware can take its own timeout
 path; this does not implement the auxiliary device.
 
 `AuxiliaryControl` is a separate stateful candidate for startup control headers
-01FE,30FB,02FE. It requires exactly two freshly written request bytes, enters
+00FE,01FE,30FB,02FE. FE:DE211's 00FE initialization control shares DE219's
+single-byte acknowledgment path with 01FE. The model requires exactly two
+freshly written request bytes, enters
 busy, completes after 32 native timing units, exposes status01 and requires BF
 acknowledgment before another request. Unknown commands and query bytes stay
 unsupported. Its idle auxiliary event ports return zero; physical protocol,
@@ -92,8 +95,8 @@ set the ON input bit. With explicit initial BP=D0, clear-only ISR writes,
 coupled transfers, nominal clocks, the HALT clock candidate and Gate1, repeated
 raw contacts rearm and advance the calibration screen. The preserved four-point
 consumer reaches 455 ADC reads without a bus fault or the earlier OFF stop.
-Calibration dialog confirmation, physical reset CPU state, scan orientation and
-organizer GUI support remain open. Model selection does not enable these
+Physical reset CPU state, scan orientation and organizer GUI support remain
+open. Model selection does not enable these
 controls independently; `Firmware` selects the tested combination.
 
 The recovered calibration requires ten held samples per target. The initial
@@ -101,7 +104,26 @@ quarter-pixel acceptance bounds are X=[64,192]/[620,1020] and
 Y=[64,192]/[340,740]. Raw inputs (340,240), (700,240), (340,700), (700,700)
 with sufficient holds complete all four targets and produce the ROM's
 calibration-complete message. A shorter third hold collected only nine samples.
-Confirmation/ordinary key mapping and entry into the organizer remain open.
+The completion message is followed by a timed wait, not a confirmation-key
+requirement. F3:CC527 passes four ticks to IOCS14 command49; F7E43 waits for
+BFE32 to advance. Ordinary key mapping and entry into the organizer remain open.
+
+`configure_pi3000_rtc_tick_candidate(period)` explicitly configures the RTC
+A2 periodic source before execution. `Firmware` uses the related board's
+nominal 512,000 timing-unit half-second period; `Strict` leaves it disabled.
+Each native/HALT/OFF boundary advances its independent phase. Ticks coalesce
+in CAUSE_A.A2 (bit2); masks do not prevent latching. The RTC interrupt reasserts
+gate bit0 until the ROM clears the cause and then the gate latch. This matches
+F15C4/F1655 -> BFE15 -> F1B83 -> F1860/F14C5. F1B83 increments BFE32 through
+ordinary instructions. Reads and preflight peeks do not advance time.
+Calendar progression, alarm deadlines, retention and the physical crystal
+remain separate recovery gaps. No calendar or firmware counter is seeded.
+
+With this source, the original ROM automatically leaves calibration and draws
+the contrast setup. A raw touch on Finish opens the fresh-memory initialization
+confirmation. Selecting Yes in the empty emulated machine runs 00FE and clears
+RAM. The next preserved failure is a filename lookup at F11D0 with X=05844;
+the recovered bus rejects that address. It is not organizer-entry proof.
 
 Raw replay also accepts `contact` with `column`, `row` and `pressed`, validated
 for the shared 11-column/eight-row matrix before any input runs. This supplies
@@ -116,6 +138,7 @@ four endpoints pass the recovered calibration. A short tap stays pressed for
 Worker and no-Worker browser paths both reproduce the native ten-sample
 calibration result from fresh RAM. They do not seed firmware queues or
 coefficients. The browser exposes only ON as a named key until the PI button
-mapping is recovered. The completion dialog currently remains open. Native
+mapping is recovered. The periodic RTC now advances past the completion
+message without keyboard input. Native
 `lcd_capture` and the Function Runner retain the full controller geometry;
 the presentation transform applies only to UI frames.

@@ -9,6 +9,53 @@ fn fixture(code: &[u8]) -> CoreRuntime {
 }
 
 #[test]
+fn periodic_rtc_ticks_coalesce_and_reassert_only_until_both_latches_are_acknowledged() {
+    let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
+    h.rtc_tick_period = Some(10);
+    h.advance_rtc_ticks(9);
+    assert_eq!(h.rtc.read(10), 0);
+    h.advance_rtc_ticks(21);
+    assert_eq!((h.rtc_ticks, h.rtc_tick_phase), (3, 0));
+    assert_eq!(h.rtc.read(10), 4);
+    assert!(!h.external_irq()); // masked device cause remains latched
+    assert_eq!(h.gate[0x12], 0);
+    h.rtc.write(8, 4);
+    assert!(!h.external_irq()); // gate mask is still zero
+    assert_eq!(h.gate[0x12], 1);
+    h.gate[0x10] = 1;
+    assert!(h.external_irq()); // independent of the absent auxiliary device
+    h.gate[0x12] = 0;
+    assert!(h.external_irq());
+    h.rtc.write(10, 0);
+    assert!(h.external_irq()); // gate must also be acknowledged
+    h.gate[0x12] = 0;
+    assert!(!h.external_irq());
+    assert!(h.ram.iter().all(|v| *v == 0));
+    assert_eq!(&h.rtc.registers()[..5], &[0; 5]); // calendar policy is separate
+}
+
+#[test]
+fn explicit_rtc_tick_clock_runs_in_halt_and_off_without_retiring_instructions() {
+    use crate::llama::state::PowerState;
+    for power in [PowerState::Running, PowerState::Halted, PowerState::Off] {
+        let mut rt = fixture(&[0; 8]);
+        assert!(rt.configure_pi3000_rtc_tick_candidate(0).is_err());
+        rt.configure_pi3000_rtc_tick_candidate(3).unwrap();
+        rt.state.set_power_state(power);
+        rt.step_scheduler_boundaries(8).unwrap();
+        let h = rt.pi3000_hardware().unwrap().borrow();
+        assert_eq!((h.rtc_ticks, h.rtc_tick_phase), (2, 2));
+        assert_eq!(h.rtc.read(10), 4);
+        assert_eq!(
+            rt.instruction_count(),
+            if power == PowerState::Running { 8 } else { 0 }
+        );
+        drop(h);
+        assert!(rt.configure_pi3000_rtc_tick_candidate(3).is_err());
+    }
+}
+
+#[test]
 fn guest_cannot_write_device_owned_eport_inputs() {
     let mut rt = fixture(&[
         0x30, 0xcc, 0xf5, 0x44, 0x30, 0xcc, 0xf6, 0x55, 0x30, 0xcc, 0xf3, 0xa5,

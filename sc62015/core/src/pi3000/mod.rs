@@ -80,6 +80,10 @@ pub struct Hardware {
     pub tablet_interrupt_source: TabletInterruptSource,
     pub halt_main_timer_candidate: bool,
     pub halt_main_timer_units: u64,
+    /// Explicit periodic A2 clock candidate; calendar advancement is separate.
+    pub rtc_tick_period: Option<u64>,
+    pub rtc_tick_phase: u64,
+    pub rtc_ticks: u64,
     pub gpio: [u8; 18],
     pub clock_control: u8,
     pub startup_latches: [u8; 3],
@@ -96,8 +100,26 @@ pub struct Hardware {
     mapped: Option<(u8, u8)>,
 }
 impl Hardware {
-    pub fn external_irq(&self) -> bool {
-        self.auxiliary.is_some() && self.gate[0x10] & self.gate[0x12] & 0x7f != 0
+    pub fn external_irq(&mut self) -> bool {
+        // F15C4 consumes the RTC mask/cause pair through gate bit0. It clears
+        // the RTC cause before acknowledging the gate latch (F1860/F14C5).
+        if self.rtc.interrupt_asserted() {
+            self.gate[0x12] |= 1;
+        }
+        self.gate[0x10] & self.gate[0x12] & 0x7f != 0
+    }
+    pub fn advance_rtc_ticks(&mut self, elapsed: u64) {
+        if let Some(period) = self.rtc_tick_period {
+            let total = u128::from(self.rtc_tick_phase) + u128::from(elapsed);
+            let ticks = (total / u128::from(period)) as u64;
+            self.rtc_tick_phase = (total % u128::from(period)) as u64;
+            if ticks != 0 {
+                self.rtc_ticks = self.rtc_ticks.wrapping_add(ticks);
+                // A2 -> BFE15 -> F1B83 advances the firmware time counter.
+                // Masked ticks coalesce in the device latch, never guest RAM.
+                self.rtc.raise_causes(4, 0);
+            }
+        }
     }
     pub fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
         Self {
@@ -114,6 +136,9 @@ impl Hardware {
             tablet_interrupt_source: TabletInterruptSource::default(),
             halt_main_timer_candidate: false,
             halt_main_timer_units: 0,
+            rtc_tick_period: (profile == BootstrapProfile::Firmware).then_some(512_000),
+            rtc_tick_phase: 0,
+            rtc_ticks: 0,
             gpio: [0; 18],
             clock_control: 0,
             startup_latches: [0; 3],
@@ -299,7 +324,7 @@ fn sync_bank(hw: &SharedHardware, memory: &mut MemoryImage) {
     h.mapped = Some((h.selector, h.mode));
 }
 
-struct Boundary(SharedHardware, Option<u64>);
+struct Boundary(SharedHardware, Option<u64>, u64);
 impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory);
@@ -308,6 +333,7 @@ impl BoundaryDevice for Boundary {
             return Err(CoreError::Other(e.clone()));
         }
         h.cycle = c.cycles;
+        self.2 = c.elapsed_timing_units;
         self.1 = (h.halt_main_timer_candidate
             && c.state.is_halted()
             && !c.state.is_off()
@@ -326,6 +352,7 @@ impl BoundaryDevice for Boundary {
             h.halt_main_timer_units += elapsed;
         }
         h.cycle = c.cycles;
+        h.advance_rtc_ticks(c.elapsed_timing_units.wrapping_sub(self.2));
         if let Some(auxiliary) = &mut h.auxiliary {
             auxiliary.advance(c.cycles);
         }
@@ -431,7 +458,7 @@ pub fn configure(
     }
     sync_bank(&hardware, &mut rt.memory);
     rt.power_on_reset().map_err(|e| e.to_string())?;
-    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None)))
+    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None, 0)))
         .map_err(|e| e.to_string())?;
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
     rt.pi3000_hardware = Some(hardware.clone());
@@ -464,6 +491,20 @@ pub fn configure(
 }
 
 impl CoreRuntime {
+    /// A2 periodic source candidate. Physical crystal/period remain unqualified.
+    /// Configure before execution. Strict leaves it off; Firmware uses the
+    /// related board's nominal half-second period (512,000 timing units).
+    pub fn configure_pi3000_rtc_tick_candidate(&mut self, period: u64) -> Result<(), String> {
+        if period == 0 || self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PI RTC tick requires a nonzero period before execution".into());
+        }
+        self.pi3000_hardware
+            .as_ref()
+            .ok_or("not a PI runtime")?
+            .borrow()
+            .rtc_tick_period = Some(period);
+        Ok(())
+    }
     pub fn configure_pi3000_halt_main_timer_candidate(
         &mut self,
         enabled: bool,
@@ -543,6 +584,7 @@ impl CoreRuntime {
             "tablet_route":h.tablet_route.map(|r|format!("{r:?}")),
             "tablet_interrupt_source":format!("{:?}",h.tablet_interrupt_source),
             "halt_main_timer_candidate":h.halt_main_timer_candidate,"halt_main_timer_units":h.halt_main_timer_units,
+            "rtc_tick_period":h.rtc_tick_period,"rtc_ticks":h.rtc_ticks,"rtc_tick_phase":h.rtc_tick_phase,
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),
         )

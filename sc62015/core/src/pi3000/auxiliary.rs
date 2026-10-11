@@ -20,7 +20,7 @@ impl Auxiliary {
             return Err("PI auxiliary start before prior completion acknowledgment".into());
         }
         let header = u16::from_le_bytes([request[0], request[1]]);
-        if !matches!(header, 0x01fe | 0x30fb | 0x02fe) {
+        if !matches!(header, 0x00fe | 0x01fe | 0x30fb | 0x02fe) {
             return Err(format!(
                 "unimplemented PI auxiliary command {header:04X}, written mask {:08X}",
                 self.written
@@ -105,5 +105,23 @@ mod tests {
         assert!(a.start(&request, 133).unwrap_err().contains("14FB"));
         assert_eq!(a.status(), 2);
         assert_eq!(a.accepted_count, 1);
+    }
+
+    #[test]
+    fn initialization_control_uses_the_same_single_byte_acknowledgment_contract() {
+        // FE:DE211 enters the same DE219/DE21E response path as 01FE.
+        let mut a = Auxiliary::default();
+        let mut request = [0; 32];
+        request[0] = 0xfe;
+        a.mark_written(0);
+        a.mark_written(1);
+        a.start(&request, 40).unwrap();
+        assert_eq!(a.status(), 0x82);
+        a.advance(72);
+        assert_eq!(a.response(0), Some(1));
+        assert_eq!(a.response(1), None);
+        a.acknowledge(0xbf).unwrap();
+        assert_eq!(a.status(), 2);
+        assert_eq!(a.accepted, [0x00fe]);
     }
 }
