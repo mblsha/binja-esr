@@ -190,6 +190,7 @@ fn explicit_calendar_uses_scheduler_time_in_running_halt_and_off() {
             None
         );
         rt.configure_pi3000_rtc_calendar_candidate(3).unwrap();
+        rt.pi3000_hardware().unwrap().borrow().rtc_event_candidate = true;
         {
             let mut h = rt.pi3000_hardware().unwrap().borrow();
             for (offset, value) in [59, 0, 8, 0xe1, 5].into_iter().enumerate() {
@@ -203,7 +204,7 @@ fn explicit_calendar_uses_scheduler_time_in_running_halt_and_off() {
         let clock = h.rtc.clock().unwrap();
         assert_eq!((clock.year, clock.month, clock.day), (1994, 1, 1));
         assert_eq!((clock.hour, clock.minute, clock.second), (0, 1, 1));
-        assert_eq!(h.rtc.read(10), 0); // no unqualified PI cyclic/alarm cause generation
+        assert_eq!(h.rtc.read(10), 0x18); // A3 second and A4 minute latch while masked.
         assert!(h.ram.iter().all(|v| *v == 0));
         assert_eq!(
             rt.instruction_count(),
@@ -219,6 +220,7 @@ fn calendar_hold_preserves_phase_and_errors_preserve_clock_and_counters() {
     use crate::oz9600::rtc::{Clock, CONTROL, HOLD};
     let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
     h.rtc_second_period = Some(10);
+    h.rtc_event_candidate = true;
     h.rtc_second_phase = 7;
     assert!(h.advance_rtc_calendar(3).is_err()); // invalid fresh clock is never repaired
     assert_eq!((h.rtc_seconds, h.rtc_second_phase), (0, 7));
@@ -270,6 +272,41 @@ fn calendar_hold_preserves_phase_and_errors_preserve_clock_and_counters() {
     assert_eq!((h.rtc_seconds, h.rtc_second_phase), (1, 0));
     assert_eq!(h.rtc.read(0) & 0xc0, 0xc0);
     assert_eq!(h.rtc.read(4) & 0x80, 0x80);
+    assert_eq!(h.rtc.read(10), 0x7c); // Existing A2 plus second/minute/hour/day.
+}
+
+#[test]
+fn calendar_candidate_latches_rom_programmed_alarm_without_writing_guest_ram() {
+    let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Strict);
+    h.rtc_second_period = Some(10);
+    h.rtc_event_candidate = true;
+    // FC:C196A/C1A09 getter/setter fixtures: 1994-01-01 03:59:58 -> 04:00:00.
+    for (offset, value) in [0x3a, 0xfb, 0x08, 0xe1, 0x65].into_iter().enumerate() {
+        h.rtc.write(offset, value);
+    }
+    for (i, value) in [0, 0, 0x09, 0xe1, 0x65, 7].into_iter().enumerate() {
+        h.rtc.write(16 + i, value);
+    }
+    // C19A6's disabled second value 3C must not raise the second alarm.
+    for (i, value) in [0x3c, 0, 0x09, 0xe1, 0x65, 7].into_iter().enumerate() {
+        h.rtc.write(24 + i, value);
+    }
+    h.advance_rtc_calendar(19).unwrap();
+    assert_eq!(h.rtc.read(10), 8);
+    h.rtc.write(10, 0);
+    h.advance_rtc_calendar(1).unwrap();
+    assert_eq!(h.rtc.read(10), 0x39); // A0 alarm, A3 second, A4 minute, A5 hour.
+    assert!(!h.external_irq());
+    h.rtc.write(8, 1);
+    h.gate[0x10] = 1;
+    assert!(h.external_irq());
+    h.rtc.write(10, 0);
+    h.gate[0x12] = 0;
+    assert!(!h.external_irq());
+    h.advance_rtc_calendar(10).unwrap();
+    assert_eq!(h.rtc.read(10), 8); // Acknowledged exact deadline does not reassert.
+    assert!(h.ram.iter().all(|v| *v == 0));
+    assert!(h.scratch.iter().all(|v| *v == 0));
 }
 
 #[test]

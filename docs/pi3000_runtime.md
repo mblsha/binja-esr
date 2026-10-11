@@ -61,9 +61,15 @@ candidate before execution, and `pi3000_status` reports its value.
 `configure_pi3000_rtc_calendar_candidate(period)` separately opts into packed
 calendar advancement before execution. It uses independent scheduler time in
 running, HALT and OFF states, freezes calendar phase under CONTROL.HOLD, and
-never seeds a date or generates PI alarm/cyclic causes. The shared OZ calendar
-codec and rollover rules remain a PI hypothesis pending complete getter and
-physical qualification. Invalid dates stop rather than being repaired. This
+never seeds a date. The separate `Hardware.rtc_event_candidate` policy generates
+A3/A4/A5/A6 for
+second/minute/hour/day boundaries and A0/A1 for ordinary alarm deadlines in
+08010/08018 with sixth-byte 07. PI's FC:C1938/C196A getter/setter fixtures
+confirm the shared packed fields; C1A09 programs ordinary A0 deadlines and
+raises A0 immediately for a due request. The second alarm's matching, other
+wildcard fields, weekday names and physical timing remain unqualified. Invalid
+dates stop rather than being repaired. Calendar-only behavior remains available
+with the event policy disabled, which is the default in every profile. This
 option is disabled in every bootstrap profile, preserving the current startup
 consumer. `pi3000_status` reports its period, phase, elapsed seconds and held units.
 An unknown instruction mapping fails preflight; an unknown data access stops

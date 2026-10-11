@@ -90,6 +90,8 @@ pub struct Hardware {
     pub rtc_second_phase: u64,
     pub rtc_seconds: u64,
     pub rtc_held_units: u64,
+    /// Separate experimental cyclic/alarm policy; calendar-only control stays available.
+    pub rtc_event_candidate: bool,
     /// Explicit read-only hypothesis for the unmapped 05000..07FFF bus window.
     /// A sequential hardware capture returned E0; electrical behavior is open.
     pub unmapped_low_read: Option<u8>,
@@ -161,9 +163,16 @@ impl Hardware {
                 let total = u128::from(self.rtc_second_phase) + u128::from(elapsed);
                 let seconds = (total / u128::from(period)) as u64;
                 if seconds != 0 {
-                    // Calendar only: PI cyclic/alarm matching is still open.
-                    // Validate before committing phase or counters.
-                    self.rtc.advance_seconds(seconds)?;
+                    // PI FC:C1938/C196A use the shared packed fields; the
+                    // fixed A3..A6 callbacks consume second/minute/hour/day
+                    // events. C1A09 programs A0 ordinary deadlines. Keep the
+                    // source policy opt-in; silicon timing and other wildcard
+                    // alarm forms are still unqualified.
+                    if self.rtc_event_candidate {
+                        self.rtc.advance_experimental_seconds(seconds)?;
+                    } else {
+                        self.rtc.advance_seconds(seconds)?;
+                    }
                     self.rtc_seconds = self.rtc_seconds.wrapping_add(seconds);
                 }
                 self.rtc_second_phase = (total % u128::from(period)) as u64;
@@ -193,6 +202,7 @@ impl Hardware {
             rtc_second_phase: 0,
             rtc_seconds: 0,
             rtc_held_units: 0,
+            rtc_event_candidate: false,
             unmapped_low_read: (profile == BootstrapProfile::Firmware).then_some(0xe0),
             gpio: [0; 18],
             clock_control: 0,

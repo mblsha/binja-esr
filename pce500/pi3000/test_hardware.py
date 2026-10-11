@@ -169,6 +169,7 @@ def test_calendar_candidate_crosses_year_and_hold_freezes_only_calendar_phase():
 
     h = Hardware({})
     h.rtc_second_period, h.rtc_second_phase = 10, 7
+    h.rtc_event_candidate = True
     with pytest.raises(ValueError, match="invalid ordinary RTC"):
         h.advance_rtc_calendar(3)
     assert (h.rtc_seconds, h.rtc_second_phase) == (0, 7)
@@ -190,7 +191,34 @@ def test_calendar_candidate_crosses_year_and_hold_freezes_only_calendar_phase():
     assert h.rtc.clock() == Clock(1995, 1, 1, 0, 0, 0, 4)
     assert (h.rtc_seconds, h.rtc_second_phase) == (1, 0)
     assert h.rtc.read(0) & 192 == 192 and h.rtc.read(4) & 128 == 128
+    assert h.rtc.read(10) == 0x7C
     assert not any(h.ram)
+
+
+def test_calendar_candidate_latches_rom_alarm_and_mask_gates_only_irq():
+    h = Hardware({})
+    h.rtc_second_period = 10
+    h.rtc_event_candidate = True
+    for i, value in enumerate([0x3A, 0xFB, 0x08, 0xE1, 0x65]):
+        h.rtc.write(i, value)
+    for i, value in enumerate([0, 0, 0x09, 0xE1, 0x65, 7]):
+        h.rtc.write(16 + i, value)
+    for i, value in enumerate([0x3C, 0, 0x09, 0xE1, 0x65, 7]):
+        h.rtc.write(24 + i, value)
+    h.advance_rtc_calendar(19)
+    assert h.rtc.read(10) == 8
+    h.rtc.write(10, 0)
+    h.advance_rtc_calendar(1)
+    assert h.rtc.read(10) == 0x39 and not h.external_irq()
+    h.rtc.write(8, 1)
+    h.gate[0x10] = 1
+    assert h.external_irq()
+    h.rtc.write(10, 0)
+    h.gate[0x12] = 0
+    assert not h.external_irq()
+    h.advance_rtc_calendar(10)
+    assert h.rtc.read(10) == 8
+    assert not any(h.ram) and not any(h.scratch)
 
 
 def test_unmapped_read_candidate_is_bounded_readonly_and_keeps_default_strict():

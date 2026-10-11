@@ -29,6 +29,7 @@ class Hardware:
         self.rtc_tick_phase = self.rtc_ticks = 0
         self.rtc_second_period = None
         self.rtc_second_phase = self.rtc_seconds = self.rtc_held_units = 0
+        self.rtc_event_candidate = False
         self.unmapped_low_read = 0xE0 if firmware else None
         self.clock_control = self.mapping_unlock = self.lcd_writes = 0
         self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
@@ -258,7 +259,7 @@ class Hardware:
                 self.rtc.raise_causes(4, 0)
 
     def advance_rtc_calendar(self, elapsed):
-        """Opt-in packed calendar; PI alarm/cyclic causes remain unqualified."""
+        """Opt-in packed calendar and ROM-backed A3..A6/ordinary alarm policy."""
         if self.rtc_second_period is not None:
             if self.rtc.read(12) & 128:  # CONTROL.HOLD
                 self.rtc_held_units = (self.rtc_held_units + elapsed) & (2**64 - 1)
@@ -267,6 +268,9 @@ class Hardware:
                     self.rtc_second_phase + elapsed, self.rtc_second_period
                 )
                 if seconds:
-                    self.rtc.advance_seconds(seconds)
+                    if self.rtc_event_candidate:
+                        self.rtc.advance_experimental_seconds(seconds)
+                    else:
+                        self.rtc.advance_seconds(seconds)
                     self.rtc_seconds = (self.rtc_seconds + seconds) & (2**64 - 1)
                 self.rtc_second_phase = phase
