@@ -1,6 +1,14 @@
 export type PaProfile = 'bootstrap-v1' | 'bootstrap-v2' | 'bootstrap-v3';
 export type PaInputMode = 'native' | 'basic';
 
+export type PaEditorAction = 'delete' | 'insert';
+
+/** ROM F76DA: modifier plus LEFT emits7F, plus RIGHT emits0100. */
+export function paEditorSequence(action: PaEditorAction): number[] {
+	if (action === 'delete') return [23, 8];
+	if (action === 'insert') return [23, 14];
+	throw new Error('Unknown PA editor action');
+}
 /** Use the same fresh constructor and normal ON release as the ROM replays. */
 export function loadPa9500(
 	emulator: any,

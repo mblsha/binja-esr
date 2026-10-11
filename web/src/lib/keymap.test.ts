@@ -75,6 +75,13 @@ describe('matrixCodeForKeyEvent', () => {
 			expect(keys.find((k) => k.testId === 'vk-a')?.code).toBe(mode === 'native' ? 39 : 24);
 		}
 	});
+	it('keeps PA clear separate from delete and uses the ROM direction words', () => {
+		for (const [host, code] of Object.entries({ ArrowLeft: 8, ArrowRight: 14, ArrowUp: 0, ArrowDown: 15, Escape: 5 }))
+			expect(matrixCodeForKeyEvent({ code: host } as KeyboardEvent, 'pa-9500')).toBe(code);
+		expect(matrixCodeForKeyEvent({ code: 'Delete' } as KeyboardEvent, 'pa-9500')).toBeNull();
+		expect(virtualKeysForModel('pa-9500').find((key) => key.testId === 'vk-clear')?.code).toBe(5);
+		expect(virtualKeysForModel('pa-9500').some((key) => key.testId === 'vk-del')).toBe(false);
+	});
 	it('maps PF keys', () => {
 		expect(matrixCodeForKeyEvent({ code: 'F1' } as KeyboardEvent)).toBe(0x56);
 		expect(matrixCodeForKeyEvent({ code: 'F2' } as KeyboardEvent)).toBe(0x55);

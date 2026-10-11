@@ -14,7 +14,14 @@ import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from '
 import { TabletInputs } from './tablet_inputs';
 import { AudioDelivery } from './oz_audio';
 import { SerialDelivery, queueSerialInput } from './oz_serial';
-import { loadPa9500, resetPa9500, type PaProfile, type PaInputMode } from './pa9500_loader';
+import {
+	loadPa9500,
+	resetPa9500,
+	paEditorSequence,
+	type PaProfile,
+	type PaInputMode,
+	type PaEditorAction,
+} from './pa9500_loader';
 
 type DebugOptions = {
 	regsOpen: boolean;
@@ -79,6 +86,7 @@ type WorkerRequest =
 	  }
 	| { id: number; type: 'release_inputs'; source: 'physical' | 'virtual'; generation?: number }
 	| { id: number; type: 'input_state' }
+	| { id: number; type: 'pa_editor_key'; action: PaEditorAction; generation: number }
 	| { id: number; type: 'paste_text'; text: string; generation: number; paInput?: PaInputMode }
 	| { id: number; type: 'frame_consumed'; sequence: number }
 	| { id: number; type: 'frame_delivery_state' };
@@ -1028,6 +1036,14 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (plan.error || plan.unsupported.length)
 					throw new Error(plan.error ?? 'Paste contains unqualified characters');
 				inputs.startPaste(plan.contacts);
+				requestFrame(false);
+				replyOk(msg.id, inputs.pasteStatus());
+				return;
+			}
+			case 'pa_editor_key': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale PA input generation');
+				if (romModel !== 'pa-9500' || operations.busy) throw new Error('Requires available PA model');
+				inputs.startPaste(paEditorSequence(msg.action));
 				requestFrame(false);
 				replyOk(msg.id, inputs.pasteStatus());
 				return;

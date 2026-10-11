@@ -248,7 +248,7 @@ export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'nat
 		['RETURN', 'Return'],
 		['ENTER', 'ENTER'],
 	])
-		add(name, label);
+		add(name, model === 'pa-9500' && name === 'CLEAR' ? 'CLEAR' : label);
 	keys.push({ label: 'ON', code: 'on', testId: 'vk-on' });
 	for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') add(c);
 	add('SPACE');

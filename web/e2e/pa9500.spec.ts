@@ -121,11 +121,11 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 		69: 'Enter',
 		43: 'Backspace',
 		18: 'Space',
-		0: 'ArrowLeft',
-		15: 'ArrowRight',
-		14: 'ArrowUp',
-		8: 'ArrowDown',
-		5: 'Delete',
+		8: 'ArrowLeft',
+		14: 'ArrowRight',
+		0: 'ArrowUp',
+		15: 'ArrowDown',
+		5: 'Escape',
 	};
 	const maps = JSON.parse(await readFile(resolve('src/lib/pa9500_keys.json'), 'utf8'));
 	const letters: Record<number, string> = {};
@@ -161,8 +161,19 @@ async function replay(page: Page, spec: any, basic = false, label = 'browser') {
 			expect(state.rust.on).toBe(down);
 			deliveries.push({ boundary, code: 'on', down, rust: state.rust });
 		}
+		for (const [at, action] of spec.host_actions ?? []) {
+			if (at !== boundary) continue;
+			await page.getByTestId('keyboard-target').locator('canvas').click();
+			await page.keyboard.press(action === 'delete' ? 'Delete' : 'Insert');
+		}
 		for (const [at, code, down] of spec.contacts) {
 			if (at !== boundary) continue;
+			if (spec.macro_events?.some((e: any[]) => e[0] === at && e[1] === code && e[2] === down)) {
+				const state = await request(page, 'input_state');
+				expect(state.rust.matrix).toEqual(down ? [code] : []);
+				deliveries.push({ boundary, code, down, rust: state.rust, shortcut: true });
+				continue;
+			}
 			const host = aliases[code] ?? (basic && !basicSelected ? nativeLetters[code] : letters[code]);
 			if (!host) throw new Error('No DOM host binding for contact ' + code);
 			if (down) {
@@ -191,7 +202,8 @@ test('PA native app editing and switching through host DOM keys', async ({ page 
 	test.setTimeout(240_000);
 	await openPa(page);
 	const spec = JSON.parse(await readFile(replayPath!, 'utf8'));
-	const result = await replay(page, spec);
+	if (spec.input_bindings === 'basic') await page.getByTestId('advanced-panel').locator('> summary').click();
+	const result = await replay(page, spec, spec.input_bindings === 'basic');
 	if (output) {
 		await mkdir(output, { recursive: true });
 		await writeFile(resolve(output, 'browser-replay.json'), JSON.stringify(result));
@@ -375,6 +387,11 @@ test('PA no-Worker fallback boots and edits through the same DOM controls', asyn
 		for (let i = 0; i < count; i++) {
 			await step.click();
 			await expect(step).toBeEnabled();
+		}
+		for (const [at, action] of spec.host_actions ?? []) {
+			if (at !== boundary) continue;
+			await page.getByTestId('keyboard-target').locator('canvas').click();
+			await page.keyboard.press(action === 'delete' ? 'Delete' : 'Insert');
 		}
 		for (const [at, code, down] of spec.contacts) {
 			if (at !== boundary) continue;

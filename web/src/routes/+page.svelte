@@ -6,7 +6,14 @@
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
 	import { lcdPng, downloadBlob } from '$lib/lcd_export';
 	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
-	import { loadPa9500, resetPa9500, type PaProfile, type PaInputMode } from '$lib/emulator/pa9500_loader';
+	import {
+		loadPa9500,
+		resetPa9500,
+		paEditorSequence,
+		type PaEditorAction,
+		type PaProfile,
+		type PaInputMode,
+	} from '$lib/emulator/pa9500_loader';
 	import { normalizeLcdKind, type LcdKind } from '$lib/lcd_kind';
 	import FunctionRunnerPanel from '$lib/components/FunctionRunnerPanel.svelte';
 	import FunctionRunnerExamplesPanel from '$lib/components/FunctionRunnerExamplesPanel.svelte';
@@ -1916,6 +1923,12 @@
 			return;
 		}
 		if (event.repeat) return;
+		if (romModel === 'pa-9500' && ['Delete', 'Insert'].includes(event.key)) {
+			event.preventDefault();
+			if (physicalKeyboardEnabled) void sendPaEditorKey(event.key === 'Delete' ? 'delete' : 'insert');
+			return;
+		}
+
 		const contacts = contactsForKeyEvent(event, romModel, hostKeyboardMode, paInput);
 		if (contacts.length === 0) {
 			if (event.key.length === 1)
@@ -1927,6 +1940,24 @@
 		contacts.forEach((code, index) => setPhysicalMatrixCode(code, true, `${event.code}:${index}`));
 		physicalHighlights = new Set([...physicalHeldCodes.values()].flat());
 		event.preventDefault();
+	}
+
+	async function sendPaEditorKey(action: PaEditorAction) {
+		const generation = romLoadGeneration;
+		try {
+			if (worker) {
+				const status = await workerCall('pa_editor_key', { generation, action });
+				if (generation !== romLoadGeneration) return;
+				pasteStatus = status;
+			} else {
+				fallbackInputs.startPaste(paEditorSequence(action));
+				pasteStatus = fallbackInputs.pasteStatus();
+				refreshFast();
+			}
+			keyboardNotice = '';
+		} catch (error) {
+			if (generation === romLoadGeneration) keyboardNotice = String(error);
+		}
 	}
 
 	function onKeyUp(event: KeyboardEvent) {
@@ -2466,7 +2497,7 @@
 							releaseInputSource('virtual');
 						}}
 					>
-						<option value="native">Native apps / kana</option><option value="basic">BASIC English</option>
+						<option value="native">Native kana layout</option><option value="basic">Latin layout / BASIC</option>
 					</select></label
 				>
 				<p class="hint">

@@ -80,7 +80,7 @@ native modifier; release it, then native N for Special Functions or K for
 SECRET. F10 operates the ROM input-mode key; F11 selects BASIC Run/Pro.
 F12 operates normal ON/BREAK. Unsupported host characters are reported.
 
-The PA configuration selects native-app/kana or BASIC English letter bindings.
+The PA configuration selects native kana or Latin layout / BASIC letter bindings.
 These follow different ROM conversion tables. Selecting bindings changes
 ordinary host contacts; the organizer's own Mode key continues to determine
 its text-entry mode. The accepted BASIC replay uses normal Mode transitions,
@@ -135,3 +135,22 @@ main-display fixtures,14 loader/reset guards,33 actual Node/WASM tests,
 regressions. The companion repository retains raw PNG/PBM, actual UI images,
 compiled artifacts and exact replay/source hashes. Native cargo tests alone
 run no wasm-bindgen tests and are not counted as the WASM regression gate.
+
+
+## Cursor and editing bindings
+
+The acquired matrix/base-word tables and card cursor-output code establish
+Left/contact8, Right14, Up0 and Down15. Escape/contact5 clears input; the virtual
+key is labelled CLEAR. Host Delete and Insert queue a normal modifier tap and
+release, then Left or Right respectively. The worker uses the existing contact
+queue and rejects stale generations or unavailable models; lifecycle cleanup
+uses the same input ownership rules. No firmware FIFO/RAM injection is used.
+
+The private proof's native Phonebook sequence changes AB to ACB through
+insertion, deletes B, backspaces C, clears A and returns to Calendar. The BASIC
+sequence changes10 PRINT13 to10 PRINT2 using cursor movement, Delete and
+Backspace, stores it and prints2. Native, Function Runner and browser replay
+results are compared, with independent acquired font pixels and strict program
+round trips. The40,000-boundary queue timing is an explicit host policy, not a
+physical timing measurement. Full input/search/registration and organizer/RTC/
+OFF retention remain separate work.
