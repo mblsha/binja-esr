@@ -77,14 +77,27 @@ through the explicit bundle API; periodic timers stay disabled in that profile.
 without completion or response bytes. The firmware can take its own timeout
 path; this does not implement the auxiliary device.
 
-`AuxiliaryControl` is a separate stateful candidate for startup control headers
-00FE,01FE,30FB,02FE. FE:DE211's 00FE initialization control shares DE219's
-single-byte acknowledgment path with 01FE. The model requires exactly two
-freshly written request bytes, enters
+`AuxiliaryControl` is a separate stateful candidate for status control headers
+00FE,01FE,30FB,02FE,00F9..02F9,03FE,04FE. FE:DE211's 00FE initialization control and
+DE202/DE207/DE20C's F9 controls, requested when entering Schedule content,
+share DE219/DE21E's
+single-byte acknowledgment path with 01FE. No command-specific response data
+is read by those wrappers. DDFDB's 04FE parameter request writes three bytes;
+DE006's 03FE geometry request writes eight. Both read only response byte0,
+accept status01 and acknowledge BF. Their physical configuration effects are
+unqualified. The model requires the exact fresh request-byte mask (two, three
+or eight bytes), enters
 busy, completes after 32 native timing units, exposes status01 and requires BF
 acknowledgment before another request. Unknown commands and query bytes stay
 unsupported. Its idle auxiliary event ports return zero; physical protocol,
 device identity, timing and recognition behavior remain unqualified.
+
+Ordinary Schedule content-label input now opens the ROM's character-entry
+panel; a recovered left tablet-strip contact opens Phonebook 1. Native and
+actual browser consumers verify the content controls without injecting guest
+queues or coefficients. Further contact with BFF20.bit7 set requests 03FC
+through FD6EA, which remains unsupported. Complete character acceptance,
+handwriting recognition and stored records are still open.
 
 The historical strict ISR replacement control triggers an early IRQ before
 reset has installed the handler workspace. An explicitly selected clear-only

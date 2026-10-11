@@ -261,8 +261,50 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	await expect.poll(renderedPanelDigest).toBe(scheduleNativePanelDigest);
 	const schedulePanelDigest = await renderedPanelDigest();
 	expect(errors).toEqual([]);
+	if (output) await canvas.screenshot({ path: resolve(output, 'browser-schedule-entry.png') });
+	await holdTouch(10, 54, 50_000, 1_000_000);
+	const contentState = await rpc(page, 'pi_state');
+	expect(contentState.fault).toBeNull();
+	expect(contentState.pc).toBe(0xf06ba);
+	expect(contentState.auxiliary_accepted.slice(-4)).toEqual([0x00f9, 0x01f9, 0x04fe, 0x03fe]);
+	const contentCapture = await rpc(page, 'eval_js', { source: 'return await e.lcd.capture(1);' });
+	expect(contentCapture.error).toBeNull();
+	const contentPixels = JSON.parse(contentCapture.resultJson).pixels;
+	const contentPanelDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 168 }, (_, i) =>
+					contentPixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	// Native ROM output supplies the input controls; exclude the blinking text cursor.
+	const contentControlsDigest = createHash('sha256')
+		.update(
+			Buffer.from(
+				Array.from({ length: 239 * 58 }, (_, i) =>
+					contentPixels[110 + Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+				),
+			),
+		)
+		.digest('hex');
+	await expect.poll(renderedPanelDigest).toBe(contentPanelDigest);
 	if (output) {
-		await canvas.screenshot({ path: resolve(output, 'browser-schedule-entry.png') });
+		await canvas.screenshot({ path: resolve(output, 'browser-schedule-content.png') });
+		const frame = Buffer.alloc(header.length + 30 * 336);
+		header.copy(frame);
+		for (let i = 0; i < contentPixels.length; i++)
+			if (contentPixels[i] === 0) frame[header.length + Math.floor(i / 8)] |= 1 << (7 - (i % 8));
+		await writeFile(resolve(output, 'browser-content-controller.pbm'), frame);
+		await writeFile(
+			resolve(output, 'browser-content-diagnostic.json'),
+			JSON.stringify({ contentState, contentPanelDigest, contentControlsDigest }),
+		);
+	}
+	expect(contentControlsDigest).toBe('6bf16689d09e4ef64ae62cbcb635a2faa53279709da73f392af8d5a5e3fe20dc');
+	expect(errors).toEqual([]);
+	if (output) {
 		await writeFile(
 			resolve(output, 'browser-startup.json'),
 			JSON.stringify({
@@ -286,6 +328,9 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 				schedulePanelDigest,
 				scheduleNativePanelDigest,
 				scheduleHeaderDigest,
+				contentState,
+				contentPanelDigest,
+				contentControlsDigest,
 			}),
 		);
 	}

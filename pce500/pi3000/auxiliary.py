@@ -1,4 +1,4 @@
-"""Provisional startup command/acknowledgment protocol; no query data stubs."""
+"""Provisional status command/acknowledgment protocol; no query data stubs."""
 
 
 class Auxiliary:
@@ -17,13 +17,25 @@ class Auxiliary:
                 "PI auxiliary start before prior completion acknowledgment"
             )
         header = int.from_bytes(request[:2], "little")
-        if header not in (0x00FE, 0x01FE, 0x30FB, 0x02FE):
+        request_bytes = {
+            0x00FE: 2,
+            0x01FE: 2,
+            0x30FB: 2,
+            0x02FE: 2,
+            0x00F9: 2,
+            0x01F9: 2,
+            0x02F9: 2,
+            0x04FE: 3,
+            0x03FE: 8,
+        }.get(header)
+        if request_bytes is None:
             raise ValueError(
                 f"unimplemented PI auxiliary command {header:04X}, written mask {self.written:08X}"
             )
-        if self.written != 3:
+        if self.written != (1 << request_bytes) - 1:
+            count = {2: "two", 3: "three", 8: "eight"}[request_bytes]
             raise ValueError(
-                "PI auxiliary startup control requires exactly two written bytes"
+                f"PI auxiliary control requires exactly {count} written bytes"
             )
         self.written = 0
         self.response_bytes = b"\x01" + bytes(31)

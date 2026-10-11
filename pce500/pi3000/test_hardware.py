@@ -209,18 +209,39 @@ def test_unmapped_read_candidate_is_bounded_readonly_and_keeps_default_strict():
         assert h.read(0x5844) == value and not any(h.ram) and not any(h.scratch)
 
 
-def test_auxiliary_initialization_control_matches_single_byte_acknowledgment():
+@pytest.mark.parametrize("header", [0x00FE, 0x00F9, 0x01F9, 0x02F9])
+def test_auxiliary_initialization_and_editor_controls_match_acknowledgment(header):
     from pce500.pi3000.auxiliary import Auxiliary
 
     a = Auxiliary()
     a.mark_written(0)
     a.mark_written(1)
-    a.start(b"\xfe\x00" + bytes(30), 40)
+    a.start(header.to_bytes(2, "little") + bytes(30), 40)
     assert a.status() == 0x82
     a.advance(72)
     assert a.response(0) == 1 and a.response(1) is None
     a.acknowledge(0xBF)
-    assert a.status() == 2 and a.accepted == [0x00FE]
+    assert a.status() == 2 and a.accepted == [header]
+
+
+@pytest.mark.parametrize("header,count", [(0x04FE, 3), (0x03FE, 8)])
+def test_auxiliary_parameter_controls_require_complete_exact_request(header, count):
+    a = Auxiliary()
+    request = header.to_bytes(2, "little") + bytes([0x7F]) * 30
+    for offset in range(count - 1):
+        a.mark_written(offset)
+    with pytest.raises(ValueError, match="exactly"):
+        a.start(request, 40)
+    assert a.status() == 2
+    a.mark_written(count - 1)
+    a.start(request, 40)
+    a.advance(72)
+    assert a.response(0) == 1 and a.response(1) is None
+    a.acknowledge(0xBF)
+    for offset in range(count + 1):
+        a.mark_written(offset)
+    with pytest.raises(ValueError, match="exactly"):
+        a.start(request, 80)
 
 
 @pytest.mark.parametrize(

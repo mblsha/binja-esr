@@ -1,5 +1,5 @@
 // PY_SOURCE: pce500/pi3000/auxiliary.py
-//! Provisional firmware-derived auxiliary startup control protocol.
+//! Provisional firmware-derived auxiliary status control protocol.
 //! No recognition/query data is synthesized. Unknown commands remain errors.
 
 #[derive(Default)]
@@ -20,14 +20,30 @@ impl Auxiliary {
             return Err("PI auxiliary start before prior completion acknowledgment".into());
         }
         let header = u16::from_le_bytes([request[0], request[1]]);
-        if !matches!(header, 0x00fe | 0x01fe | 0x30fb | 0x02fe) {
+        let request_bytes = match header {
+            0x00fe | 0x01fe | 0x30fb | 0x02fe | 0x00f9 | 0x01f9 | 0x02f9 => 2,
+            // FE:DDFDB and DE006 send parameter/geometry bytes, then read
+            // only DE219-compatible status01 and acknowledge BF.
+            0x04fe => 3,
+            0x03fe => 8,
+            _ => {
+                return Err(format!(
+                    "unimplemented PI auxiliary command {header:04X}, written mask {:08X}",
+                    self.written
+                ))
+            }
+        };
+        if self.written != (1 << request_bytes) - 1 {
+            let count = if request_bytes == 2 {
+                "two"
+            } else if request_bytes == 3 {
+                "three"
+            } else {
+                "eight"
+            };
             return Err(format!(
-                "unimplemented PI auxiliary command {header:04X}, written mask {:08X}",
-                self.written
+                "PI auxiliary control requires exactly {count} written bytes"
             ));
-        }
-        if self.written != 3 {
-            return Err("PI auxiliary startup control requires exactly two written bytes".into());
         }
         self.written = 0;
         self.response = [0; 32];
@@ -108,20 +124,47 @@ mod tests {
     }
 
     #[test]
-    fn initialization_control_uses_the_same_single_byte_acknowledgment_contract() {
-        // FE:DE211 enters the same DE219/DE21E response path as 01FE.
-        let mut a = Auxiliary::default();
-        let mut request = [0; 32];
-        request[0] = 0xfe;
-        a.mark_written(0);
-        a.mark_written(1);
-        a.start(&request, 40).unwrap();
-        assert_eq!(a.status(), 0x82);
-        a.advance(72);
-        assert_eq!(a.response(0), Some(1));
-        assert_eq!(a.response(1), None);
-        a.acknowledge(0xbf).unwrap();
-        assert_eq!(a.status(), 2);
-        assert_eq!(a.accepted, [0x00fe]);
+    fn initialization_and_editor_controls_use_single_byte_acknowledgment() {
+        // FE:DE202/DE207/DE20C (00..02F9) and DE211 enter DE219/DE21E.
+        for header in [0x00fe_u16, 0x00f9, 0x01f9, 0x02f9] {
+            let mut a = Auxiliary::default();
+            let mut request = [0; 32];
+            request[..2].copy_from_slice(&header.to_le_bytes());
+            a.mark_written(0);
+            a.mark_written(1);
+            a.start(&request, 40).unwrap();
+            assert_eq!(a.status(), 0x82);
+            a.advance(72);
+            assert_eq!(a.response(0), Some(1));
+            assert_eq!(a.response(1), None);
+            a.acknowledge(0xbf).unwrap();
+            assert_eq!(a.status(), 2);
+            assert_eq!(a.accepted, [header]);
+        }
+    }
+
+    #[test]
+    fn parameter_controls_require_every_request_byte_and_expose_only_status() {
+        for (header, count) in [(0x04fe_u16, 3), (0x03fe, 8)] {
+            let mut a = Auxiliary::default();
+            let mut request = [0x7f; 32];
+            request[..2].copy_from_slice(&header.to_le_bytes());
+            for offset in 0..count - 1 {
+                a.mark_written(offset);
+            }
+            assert!(a.start(&request, 40).is_err());
+            assert_eq!(a.status(), 2);
+            a.mark_written(count - 1);
+            a.start(&request, 40).unwrap();
+            a.advance(72);
+            assert_eq!(a.response(0), Some(1));
+            assert_eq!(a.response(1), None);
+            a.acknowledge(0xbf).unwrap();
+            a.mark_written(count);
+            for offset in 0..count {
+                a.mark_written(offset);
+            }
+            assert!(a.start(&request, 80).is_err());
+        }
     }
 }
