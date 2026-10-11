@@ -670,6 +670,8 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         // Use CARGO_MANIFEST_DIR so `cargo run --manifest-path ...` works from any directory.
         DeviceModel::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/iq-7000/bnida.json"),
+        DeviceModel::Pi3000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rom-analysis/pi-3000/bnida.json"),
         DeviceModel::PcE500 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../rom-analysis/pc-e500/en/bnida.json"),
         DeviceModel::PcE500Jp => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -4954,7 +4956,7 @@ fn apply_core_card_profile(
 ) -> sc62015_core::Result<()> {
     // The OZ factory owns the 4-B bus. A generic absent CE1 overlay would
     // shadow its card descriptor with zero bytes at 40000-4FFFF.
-    if model != DeviceModel::Oz9600 {
+    if !matches!(model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
         profile.apply(memory)?;
     }
     Ok(())
@@ -4968,9 +4970,10 @@ fn run_core_runtime_path(
 ) -> Result<(), Box<dyn Error>> {
     let unsupported = core_runtime_unsupported_options(args);
     if !unsupported.is_empty() {
-        if args.model == DeviceModel::Oz9600 {
+        if matches!(args.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
             return Err(format!(
-                "OZ-9600 does not support diagnostic option(s) {}; legacy mode is unavailable",
+                "{} does not support diagnostic option(s) {}; legacy mode is unavailable",
+                args.model.label(),
                 unsupported.join(", ")
             )
             .into());
@@ -5009,13 +5012,15 @@ fn run_core_runtime_path(
 
     let mut runtime = CoreRuntime::for_model(args.model, rom_bytes)?;
     apply_core_card_profile(args.model, card_profile, &mut runtime.memory)?;
-    if args.model != DeviceModel::Oz9600 {
+    if !matches!(args.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
         runtime.timer.enabled = !args.disable_timers;
     }
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
-    runtime.power_on_reset()?;
+    if args.model != DeviceModel::Pi3000 {
+        runtime.power_on_reset()?;
+    }
     if args.model == DeviceModel::Oz9600 {
         if let Some(path) = &args.oz9600_retained {
             runtime.restore_oz9600_retained_state(&fs::read(path)?)?;
@@ -5182,6 +5187,16 @@ fn run_core_runtime_path(
 
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
+    if args.model == DeviceModel::Pi3000 {
+        if !matches!(args.runtime, RuntimeEngine::Core) {
+            return Err("PI-3000 requires --runtime core".into());
+        }
+        if matches!(args.card, CardMode::Present) {
+            return Err(
+                "PI-3000 card mapping remains unsupported; use --card auto or absent".into(),
+            );
+        }
+    }
     let oz_options = args.oz9600_replay_report.is_some()
         || args.oz9600_card_rom.is_some()
         || args.oz9600_card_sram.is_some()

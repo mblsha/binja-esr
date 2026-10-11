@@ -58,6 +58,8 @@ pub use keyboard::KeyboardMatrix;
 pub mod oz9600;
 #[cfg(feature = "pa9500")]
 pub mod pa9500;
+#[cfg(feature = "pi3000")]
+pub mod pi3000;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
@@ -680,6 +682,10 @@ pub struct CoreRuntime {
     pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
     #[cfg(feature = "oz9600")]
     pub(crate) oz9600_hardware: Option<oz9600::SharedHardware>,
+    #[cfg(feature = "pi3000")]
+    pub(crate) pi3000_hardware: Option<pi3000::SharedHardware>,
+    #[cfg(feature = "pi3000")]
+    pub(crate) pi3000_compatibility: Option<pi3000::compatibility::Coordinator>,
 }
 
 impl Default for CoreRuntime {
@@ -729,6 +735,10 @@ impl CoreRuntime {
             pa9500_compatibility: None,
             #[cfg(feature = "oz9600")]
             oz9600_hardware: None,
+            #[cfg(feature = "pi3000")]
+            pi3000_hardware: None,
+            #[cfg(feature = "pi3000")]
+            pi3000_compatibility: None,
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -792,6 +802,12 @@ impl CoreRuntime {
     }
 
     pub fn power_on_reset(&mut self) -> Result<()> {
+        #[cfg(feature = "pi3000")]
+        if self.pi3000_hardware.is_some() {
+            return Err(CoreError::Other(
+                "PI reset requires a fresh board constructor".into(),
+            ));
+        }
         #[cfg(feature = "pa9500")]
         if self.pa9500_compatibility.is_some() {
             return Err(CoreError::Other(
@@ -1840,6 +1856,15 @@ impl CoreRuntime {
                  power-on reset required: {reason}"
             )));
         }
+        #[cfg(feature = "pi3000")]
+        if let Some(mut coordinator) = self.pi3000_compatibility.take() {
+            let result = (0..boundaries).try_for_each(|_| coordinator.step(self));
+            self.pi3000_compatibility = Some(coordinator);
+            if let Err(error) = &result {
+                self.poisoned = Some(error.clone());
+            }
+            return result.map_err(CoreError::Other);
+        }
         #[cfg(feature = "pa9500")]
         if let Some(mut coordinator) = self.pa9500_compatibility.take() {
             // The borrowed coordinator invokes the normal native boundary with
@@ -2488,7 +2513,8 @@ impl CoreRuntime {
         // Device and host hooks cannot be replaced during this call.
         let devices = BusDevices {
             #[cfg(feature = "oz9600")]
-            oz_readonly_eport_inputs: self.oz9600_hardware.is_some(),
+            oz_readonly_eport_inputs: self.oz9600_hardware.is_some()
+                || self.device_model() == DeviceModel::Pi3000,
             keyboard_ptr: self
                 .keyboard
                 .as_mut()

@@ -1,0 +1,151 @@
+"""PI logical bus reference, mirrored by the Rust CoreRuntime adapter.
+
+Fresh RAM, empty expansion slots and auxiliary absence are explicit bootstrap
+policies. Unknown I/O and unacquired mapping combinations stay unsupported.
+"""
+
+from pce500.oz9600.lcd import LcdController
+from pce500.oz9600.rtc import Rtc
+from pce500.oz9600.tablet import Tablet
+
+WIDTH, HEIGHT = 240, 336
+
+
+class Hardware:
+    def __init__(self, banks, *, absent_auxiliary=False):
+        self.banks = banks
+        self.selector, self.mode, self.cycle = 0xFD, 0, 0
+        self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
+        self.gate, self.gpio = bytearray(64), bytearray(18)
+        self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
+        self.tablet, self.tablet_route = Tablet(), None
+        self.clock_control = self.mapping_unlock = self.lcd_writes = 0
+        self.startup_latches, self.io_8a = bytearray(3), bytearray(9)
+        self.absent_auxiliary = absent_auxiliary
+        self.auxiliary_request = bytearray(32)
+        self.auxiliary_commands = []
+        self.auxiliary_command_count = 0
+        self.fault = None
+
+    def read(self, address):
+        if 0 <= address < 0x4000:
+            return self.scratch[address]
+        if address == 0x4021:
+            return self.selector
+        if 0x4000 <= address < 0x4040:
+            return self.gate[address - 0x4000]
+        if 0x8000 <= address < 0x8020:
+            return self.rtc.read(address - 0x8000)
+        if 0x8400 <= address < 0x8420 or 0x8438 <= address < 0x8440:
+            return self.lcd.peek(address & 31, self.cycle)
+        if address == 0x8A00 and self.absent_auxiliary:
+            return 2
+        if address == 0x8B1B and self.tablet_route is not None:
+            return int(self.tablet_route == "external")
+        if (address, self.tablet_route) in (
+            (0x8800, "external"),
+            (0x8B80, "integrated"),
+        ):
+            return self.tablet.conversion_control
+        if (address, self.tablet_route) in (
+            (0x8C00, "external"),
+            (0x8BC0, "integrated"),
+        ):
+            return self.tablet.peek_data()
+        if address == 0x8B1A:
+            return self.gpio[2]
+        if address == 0x8B1C:
+            return self.clock_control
+        if address == 0x8B1D:
+            return self.gpio[5]
+        if 0x20000 <= address < 0x80000:
+            return 255
+        if 0x80000 <= address < 0xC0000:
+            return self.ram[address - 0x80000]
+        if (
+            0xC0000 <= address < 0xE0000
+            and self.mode == 0
+            and self.selector in self.banks
+        ):
+            return self.banks[self.selector][address - 0xC0000]
+        return None
+
+    def architectural_read(self, address, pc=None):
+        try:
+            if (address, self.tablet_route) in (
+                (0x8C00, "external"),
+                (0x8BC0, "integrated"),
+            ):
+                return self.tablet.read_data()
+            if 0x8400 <= address < 0x8420:
+                return self.lcd.read(address & 31, self.cycle)
+            value = self.read(address)
+            if value is None:
+                raise ValueError(f"unqualified PI read {address:05X}, PC {pc}")
+            return value
+        except ValueError as error:
+            self.fault = self.fault or str(error)
+            return 255
+
+    def write(self, address, value, pc=None):
+        try:
+            if 0 <= address < 0x4000:
+                self.scratch[address] = value
+            elif address == 0x4021:
+                self.selector = value
+            elif 0x4000 <= address < 0x4040:
+                self.gate[address - 0x4000] = value
+            elif 0x8000 <= address < 0x8020:
+                self.rtc.write(address - 0x8000, value)
+            elif 0x8420 <= address < 0x8440:
+                self.lcd_writes += 1
+                self.lcd.write(address & 31, value)
+            elif address == 0x8B01:
+                self.mode = value
+            elif address == 0x8B00:
+                self.clock_control = value
+            elif address == 0x8B04:
+                self.gpio[4] = self.tablet.drive_control = value
+            elif 0x8B02 <= address <= 0x8B05 or 0x8B08 <= address <= 0x8B11:
+                self.gpio[address - 0x8B00] = value
+            elif (address, self.tablet_route) in (
+                (0x8800, "external"),
+                (0x8B80, "integrated"),
+            ):
+                self.tablet.write_conversion_control(value)
+            elif address in (0x8A01, 0x8A06, 0x8A07, 0x8A08) or (
+                self.absent_auxiliary and address in (0x8A02, 0x8A03)
+            ):
+                self.io_8a[address - 0x8A00] = value
+                if address == 0x8A02 and value == 0x80:
+                    self.auxiliary_command_count += 1
+                    if len(self.auxiliary_commands) < 256:
+                        self.auxiliary_commands.append(bytes(self.auxiliary_request))
+            elif self.absent_auxiliary and 0x8A20 <= address < 0x8A40:
+                self.auxiliary_request[address - 0x8A20] = value
+            elif 0xF00C <= address <= 0xF00E:
+                self.startup_latches[address - 0xF00C] = value
+            elif address == 0xF103:
+                self.mapping_unlock = value
+            elif 0x20000 <= address < 0x80000:
+                pass
+            elif 0x80000 <= address < 0xC0000:
+                self.ram[address - 0x80000] = value
+            else:
+                raise ValueError(f"unqualified PI write {address:05X}, PC {pc}")
+        except ValueError as error:
+            self.fault = self.fault or str(error)
+
+    def configure_tablet_route(self, route):
+        if route not in ("integrated", "external"):
+            raise ValueError("unknown PI tablet ADC route")
+        if self.tablet_route is not None and self.tablet_route != route:
+            raise ValueError("PI tablet ADC route cannot change after selection")
+        self.tablet_route = route
+
+    def set_raw_contact(self, x, y, pressed):
+        if self.tablet_route is None:
+            raise ValueError(
+                "PI tablet ADC route is unqualified; select an explicit candidate"
+            )
+        self.tablet.set_contact(x, y, pressed)
