@@ -646,6 +646,22 @@ impl CoreRuntime {
             .rtc_second_period = Some(period);
         Ok(())
     }
+    /// Select alarm/cyclic causes separately from the calendar, before execution.
+    pub fn configure_pi3000_rtc_event_candidate(&mut self, enabled: bool) -> Result<(), String> {
+        if self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PI RTC events must be selected before execution".into());
+        }
+        let mut h = self
+            .pi3000_hardware
+            .as_ref()
+            .ok_or("not a PI runtime")?
+            .borrow();
+        if enabled && h.rtc_second_period.is_none() {
+            return Err("PI RTC events require the calendar candidate".into());
+        }
+        h.rtc_event_candidate = enabled;
+        Ok(())
+    }
     pub fn configure_pi3000_unmapped_low_read_candidate(
         &mut self,
         value: u8,
@@ -743,6 +759,7 @@ impl CoreRuntime {
             "rtc_tick_period":h.rtc_tick_period,"rtc_ticks":h.rtc_ticks,"rtc_tick_phase":h.rtc_tick_phase,
             "rtc_second_period":h.rtc_second_period,"rtc_second_phase":h.rtc_second_phase,
             "rtc_seconds":h.rtc_seconds,"rtc_held_units":h.rtc_held_units,
+            "rtc_event_candidate":h.rtc_event_candidate,
             "unmapped_low_read":h.unmapped_low_read,
             "tablet":[u64::from(h.tablet.x),u64::from(h.tablet.y),u64::from(h.tablet.pressed),u64::from(h.tablet.conversion_control),u64::from(h.tablet.drive_control),h.tablet.data_reads],
             "compatibility":self.pi3000_compatibility.as_ref().map(|c|c.status())}),

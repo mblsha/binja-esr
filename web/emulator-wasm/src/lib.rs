@@ -556,6 +556,21 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e))
     }
 
+    /// Explicit clock experiment; normal PI loads leave both candidates disabled.
+    pub fn configure_pi3000_rtc_candidate(
+        &mut self,
+        second_period: u32,
+        events: bool,
+    ) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        self.runtime
+            .configure_pi3000_rtc_calendar_candidate(u64::from(second_period))
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.runtime
+            .configure_pi3000_rtc_event_candidate(events)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
     pub fn pi3000_state(&self) -> Result<JsValue, JsValue> {
         let state = self
             .runtime

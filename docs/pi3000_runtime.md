@@ -180,9 +180,22 @@ scheduler advancement deliver the daily-alarm popup and reschedule its deadline
 for the next day. Calendar-only advancement does not deliver it. A no-input
 selected-window control reaches the same fragmented Clock repaint after the next
 minute as the earlier contact sequence. Ordered-window protection now preserves
-the popup during that refresh. Neither the old repaint nor the protected popup
-establishes an alarm-clear contact; acknowledgment and audible output remain
-under recovery.
+the popup during that refresh. The old repaint alone does not establish dismissal.
+The C/CE contact now closes the protected popup through the ROM's modal handler
+and context removal. Column0,row1 produces scanner0C; fixed FC392 translates
+it through FE:CB752 to logical001A, accepted by F3:C7524. The browser labels
+this existing contact C/CE, with Date as its calendar action. It retains the
+stable `vk-date` input ID and F1 host shortcut. Clear/Escape remain separate.
+Native and browser compare complete before/after panels; audible output and
+physical key legends/timing remain open.
+
+The WASM `configure_pi3000_rtc_candidate(second_period, events)` and Worker
+`pi_rtc_candidate` request expose the explicit clock experiment before any
+execution. The period must be a positive uint32; events must be boolean.
+The core event selector additionally requires a configured calendar when
+enabling alarm/cyclic causes. Normal loads still leave these candidates off;
+configuration after running, HALT or OFF scheduler time is rejected. No date,
+deadline, queue or display is seeded by this configuration.
 The browser's Clear control and Escape use column1,row6 (scanner byte1C,
 virtual contact14). They close the incorrect-time popup and clear its hour
 field through the ROM's matrix scanner, preserving RTC. Native and browser

@@ -214,13 +214,15 @@ fn explicit_calendar_uses_scheduler_time_in_running_halt_and_off() {
     use crate::llama::state::PowerState;
     for power in [PowerState::Running, PowerState::Halted, PowerState::Off] {
         let mut rt = fixture(&[0; 8]);
+        assert!(rt.configure_pi3000_rtc_event_candidate(true).is_err());
+        assert!(!rt.pi3000_hardware().unwrap().borrow().rtc_event_candidate);
         assert!(rt.configure_pi3000_rtc_calendar_candidate(0).is_err());
         assert_eq!(
             rt.pi3000_hardware().unwrap().borrow().rtc_second_period,
             None
         );
         rt.configure_pi3000_rtc_calendar_candidate(3).unwrap();
-        rt.pi3000_hardware().unwrap().borrow().rtc_event_candidate = true;
+        rt.configure_pi3000_rtc_event_candidate(true).unwrap();
         {
             let mut h = rt.pi3000_hardware().unwrap().borrow();
             for (offset, value) in [59, 0, 8, 0xe1, 5].into_iter().enumerate() {
@@ -242,6 +244,7 @@ fn explicit_calendar_uses_scheduler_time_in_running_halt_and_off() {
         );
         drop(h);
         assert!(rt.configure_pi3000_rtc_calendar_candidate(3).is_err());
+        assert!(rt.configure_pi3000_rtc_event_candidate(false).is_err());
     }
 }
 

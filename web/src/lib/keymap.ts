@@ -8,7 +8,8 @@ export type VirtualKey = { label: string; code: InputContact; testId: string };
 export type HostKeyboardMode = 'symbols' | 'keycaps';
 const maps: Record<string, Record<string, number>> = physicalMaps;
 // Functional PI controls from its two-column ROM scan table and fresh-calendar
-// consumers. These labels describe observed actions, not physical key legends.
+// consumers. Scanner0C translates to logical001A, the alarm's C/CE key. In the
+// calendar this same contact opens date entry. Physical legends remain open.
 const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, CLEAR: 14, OFF: 7 };
 export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
 	if (model === 'pi-3000') return piControls[name] ?? null;
@@ -231,7 +232,11 @@ export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'nat
 	if (model === 'pi-3000')
 		return [
 			{ label: 'ON', code: 'on', testId: 'vk-on' },
-			...Object.entries(piControls).map(([label, code]) => ({ label, code, testId: 'vk-' + label.toLowerCase() })),
+			...Object.entries(piControls).map(([name, code]) => ({
+				label: name === 'DATE' ? 'C/CE' : name,
+				code,
+				testId: 'vk-' + name.toLowerCase(),
+			})),
 		];
 	const keys: VirtualKey[] = [];
 	const add = (name: string, label = name, id = name.toLowerCase().replaceAll('_', '-')) => {

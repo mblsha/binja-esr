@@ -66,7 +66,9 @@ export function deviceLayout(model: RomModel, paInput: PaInputMode = 'native'): 
 	};
 
 	if (model === 'pi-3000') {
-		['ON', 'DATE', 'MENU', 'PREV', 'NEXT', 'CLEAR', 'OFF'].forEach((id, c) => add(id, 26 + c * 73, 380, 70, 32));
+		['ON', 'DATE', 'MENU', 'PREV', 'NEXT', 'CLEAR', 'OFF'].forEach((id, c) =>
+			add(id, 26 + c * 73, 380, 70, 32, id === 'DATE' ? 'C/CE' : id, id === 'DATE' ? 'Date' : ''),
+		);
 		return {
 			version: 1,
 			model,

@@ -53,6 +53,7 @@ type WorkerRequest =
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'oz_state' }
 	| { id: number; type: 'pi_state' }
+	| { id: number; type: 'pi_rtc_candidate'; secondPeriod: number; events: boolean }
 	| { id: number; type: 'pi_retained_export'; generation?: number }
 	| { id: number; type: 'pi_retained_restore'; bytes: Uint8Array }
 	| { id: number; type: 'set_audio'; enabled: boolean; generation: number }
@@ -818,6 +819,15 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id, emulator.pi3000_state());
 				return;
 			}
+			case 'pi_rtc_candidate': {
+				if (!emulator?.has_rom() || romModel !== 'pi-3000') throw new Error('Requires loaded PI');
+				if (!Number.isInteger(msg.secondPeriod) || msg.secondPeriod <= 0 || msg.secondPeriod > 0xffffffff)
+					throw new Error('PI RTC period must be a positive uint32');
+				if (typeof msg.events !== 'boolean') throw new Error('PI RTC events must be boolean');
+				emulator.configure_pi3000_rtc_candidate(msg.secondPeriod, msg.events);
+				replyOk(msg.id, emulator.pi3000_state());
+				return;
+			}
 			case 'pi_retained_export': {
 				if (!emulator?.has_rom() || romModel !== 'pi-3000' || operations.busy)
 					throw new Error('Requires paused PI model');
@@ -1136,6 +1146,7 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'set_execution_mode',
 			'oz_retained_restore',
 			'pi_retained_restore',
+			'pi_rtc_candidate',
 			'oz_reset',
 			'pa_reset',
 			'oz_replay',

@@ -1,0 +1,414 @@
+{
+	"steps": [
+		{
+			"boundaries": 400000,
+			"label": "wait for four calibration targets"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 240,
+				"pressed": true
+			},
+			"label": "hold target 0"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 240,
+				"pressed": false
+			},
+			"label": "release target 0"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 240,
+				"pressed": true
+			},
+			"label": "hold target 1"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 240,
+				"pressed": false
+			},
+			"label": "release target 1"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 700,
+				"pressed": true
+			},
+			"label": "hold target 2"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 340,
+				"raw_y": 700,
+				"pressed": false
+			},
+			"label": "release target 2"
+		},
+		{
+			"boundaries": 200000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 700,
+				"pressed": true
+			},
+			"label": "hold target 3"
+		},
+		{
+			"boundaries": 100000,
+			"tablet": {
+				"raw_x": 700,
+				"raw_y": 700,
+				"pressed": false
+			},
+			"label": "release target 3"
+		},
+		{
+			"boundaries": 3000000,
+			"label": "periodic RTC completion wait"
+		},
+		{
+			"boundaries": 250000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": true
+			},
+			"label": "touch contrast Finish"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 789,
+				"pressed": false
+			},
+			"label": "release and continue startup"
+		},
+		{
+			"boundaries": 250000,
+			"tablet": {
+				"raw_x": 427,
+				"raw_y": 597,
+				"pressed": true
+			},
+			"label": "confirm fresh emulated RAM initialization"
+		},
+		{
+			"boundaries": 1500000,
+			"tablet": {
+				"raw_x": 427,
+				"raw_y": 597,
+				"pressed": false
+			},
+			"label": "release and enter organizer"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "finish RAM initialization"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 240,
+				"raw_y": 572,
+				"pressed": true
+			},
+			"label": "press verified Clock application contact at240,572"
+		},
+		{
+			"boundaries": 500000,
+			"tablet": {
+				"raw_x": 240,
+				"raw_y": 572,
+				"pressed": false
+			},
+			"label": "release verified Clock application contact"
+		},
+		{
+			"boundaries": 250000,
+			"tablet": {
+				"raw_x": 352,
+				"raw_y": 160,
+				"pressed": true
+			},
+			"label": "touch Clock time-setting at38,14"
+		},
+		{
+			"boundaries": 500000,
+			"tablet": {
+				"raw_x": 352,
+				"raw_y": 160,
+				"pressed": false
+			},
+			"label": "release time-setting control"
+		},
+		{
+			"boundaries": 1000000,
+			"label": "wait for Clock time dialog idle"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": true
+			},
+			"label": "replace focused hour tens with0"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": false
+			},
+			"label": "release replace focused hour tens with0"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "replace focused hour ones with1"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "release replace focused hour ones with1"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 316,
+				"pressed": true
+			},
+			"label": "apply completed two-digit Clock hour01"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 316,
+				"pressed": false
+			},
+			"label": "release apply completed two-digit Clock hour01"
+		},
+		{
+			"boundaries": 2000000,
+			"label": "finish accepted Clock time edit"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 448,
+				"raw_y": 160,
+				"pressed": true
+			},
+			"label": "daily alarm dialog press"
+		},
+		{
+			"boundaries": 1500000,
+			"tablet": {
+				"raw_x": 448,
+				"raw_y": 160,
+				"pressed": false
+			},
+			"label": "daily alarm dialog release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": true
+			},
+			"label": "hour digit0 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": false
+			},
+			"label": "hour digit0 release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "hour digit1 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "hour digit1 release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": true
+			},
+			"label": "minute digit0 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 794,
+				"pressed": false
+			},
+			"label": "minute digit0 release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": true
+			},
+			"label": "minute digit1 press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 307,
+				"raw_y": 731,
+				"pressed": false
+			},
+			"label": "minute digit1 release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 444,
+				"raw_y": 253,
+				"pressed": true
+			},
+			"label": "daily ON press"
+		},
+		{
+			"boundaries": 300000,
+			"tablet": {
+				"raw_x": 444,
+				"raw_y": 253,
+				"pressed": false
+			},
+			"label": "daily ON release"
+		},
+		{
+			"boundaries": 50000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 316,
+				"pressed": true
+			},
+			"label": "apply daily 01:01 press"
+		},
+		{
+			"boundaries": 1000000,
+			"tablet": {
+				"raw_x": 729,
+				"raw_y": 316,
+				"pressed": false
+			},
+			"label": "apply daily 01:01 release"
+		},
+		{
+			"boundaries": 2000000,
+			"label": "finish daily 01:01 save"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 0"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 1"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 2"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 3"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 4"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 5"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 6"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 7"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 8"
+		},
+		{
+			"boundaries": 5000000,
+			"label": "wait through due alarm interval 9"
+		},
+		{
+			"boundaries": 50000,
+			"contact": {
+				"column": 0,
+				"row": 1,
+				"pressed": true
+			},
+			"label": "press scanner0C, translated C/CE logical001A"
+		},
+		{
+			"boundaries": 2000000,
+			"contact": {
+				"column": 0,
+				"row": 1,
+				"pressed": false
+			},
+			"label": "release C/CE and let alarm cleanup finish"
+		},
+		{
+			"boundaries": 3000000,
+			"label": "verify persistent Clock after alarm clear"
+		}
+	]
+}

@@ -9,12 +9,7 @@ test.skip(!bundlePath, 'Supply verified private PI bundle with PI3000_ROM_PATH')
 const rpc = (page: Page, type: string, payload: any = {}) =>
 	page.evaluate(({ type, payload }) => (window as any).__piRpc(type, payload), { type, payload });
 
-test('PI browser initializes and reopens a saved Schedule record after power and restart', async ({
-	page,
-}, testInfo) => {
-	test.setTimeout(180_000);
-	const bundle = await readFile(bundlePath!);
-	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
+async function installPiRpc(page: Page) {
 	await page.addInitScript(() => {
 		localStorage.setItem('sc62015:rom-model', 'pi-3000');
 		const Original = window.Worker;
@@ -43,6 +38,15 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 			}
 		};
 	});
+}
+
+test('PI browser initializes and reopens a saved Schedule record after power and restart', async ({
+	page,
+}, testInfo) => {
+	test.setTimeout(180_000);
+	const bundle = await readFile(bundlePath!);
+	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
+	await installPiRpc(page);
 	const errors: string[] = [];
 	page.on('pageerror', (error) => errors.push(String(error)));
 	await page.goto('/');
@@ -813,6 +817,104 @@ test('PI browser initializes and reopens a saved Schedule record after power and
 			resolve(output, 'browser-calculator-operations.json'),
 			JSON.stringify({ calculatorOperations, state: await rpc(page, 'pi_state') }),
 		);
+});
+
+test('PI daily alarm returns to Clock through ordinary C/CE input', async ({ page }) => {
+	test.setTimeout(180_000);
+	const bundle = await readFile(bundlePath!);
+	await page.route('**/api/rom?model=pi-3000', (route) => route.fulfill({ body: bundle }));
+	await installPiRpc(page);
+	const errors: string[] = [];
+	page.on('pageerror', (error) => errors.push(String(error)));
+	await page.goto('/');
+	await expect(page.getByTestId('pause-resume')).toBeEnabled();
+	const initial = await rpc(page, 'pi_state');
+	expect(initial.native_instructions).toBe(0);
+	expect(initial.rtc_second_period).toBeNull();
+	expect(initial.rtc_event_candidate).toBe(false);
+	await expect(rpc(page, 'pi_rtc_candidate', { secondPeriod: 0, events: true })).rejects.toThrow(/positive uint32/);
+	const configured = await rpc(page, 'pi_rtc_candidate', { secondPeriod: 1_024_000, events: true });
+	expect(configured.rtc_event_candidate).toBe(true);
+	const { generation } = await rpc(page, 'input_state');
+	// Exact ordinary ADC contacts from the independent native alarm replay.
+	// No RAM, event, deadline or framebuffer is installed by this consumer.
+	const replay = JSON.parse(await readFile(resolve('e2e/fixtures/pi3000-clock-alarm-cce.json'), 'utf8'));
+	for (const step of replay.steps.slice(0, 52)) {
+		if (step.tablet)
+			await rpc(page, 'pi_tablet', {
+				contact: step.tablet,
+				owner: 'alarm-raw-prefix',
+				generation,
+				// The supplied replay owns exact raw hold/release budgets.
+				cancel: !step.tablet.pressed,
+			});
+		await rpc(page, 'step', { instructions: step.boundaries });
+	}
+	await expect(rpc(page, 'pi_rtc_candidate', { secondPeriod: 1_024_000, events: false })).rejects.toThrow(
+		/before execution/,
+	);
+	const canvas = page.getByTestId('pi-tablet-lcd').locator('canvas');
+	async function snapshot() {
+		const observed = await rpc(page, 'eval_js', {
+			source:
+				'return { capture: await e.lcd.capture(1), rtc: await Promise.all(Array.from({length:32}, (_,i) => e.memory.read(0x8000+i))) };',
+		});
+		expect(observed.error).toBeNull();
+		const data = JSON.parse(observed.resultJson);
+		const panel = Buffer.from(
+			Array.from({ length: 239 * 168 }, (_, i) =>
+				data.capture.pixels[Math.floor(i / 239) + (i % 239) * 240] === 0 ? 1 : 0,
+			),
+		);
+		return { panelSha256: createHash('sha256').update(panel).digest('hex'), rtc: data.rtc };
+	}
+	async function renderedDigest() {
+		return canvas.evaluate(async (element: HTMLCanvasElement) => {
+			const rgba = element.getContext('2d')!.getImageData(0, 0, 239, 168).data;
+			const bytes = new Uint8Array(239 * 168);
+			for (let i = 0; i < bytes.length; i++) bytes[i] = rgba[i * 4] < 128 ? 1 : 0;
+			const digest = await crypto.subtle.digest('SHA-256', bytes);
+			return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+		});
+	}
+	const popup = await snapshot();
+	expect(popup.panelSha256).toBe('2da5d7a1c65dfba1f6d5b60fad0781fe992d532d6686087a8d088edfcfaa3ee3');
+	await expect.poll(renderedDigest).toBe(popup.panelSha256);
+	if (output) {
+		await mkdir(output, { recursive: true });
+		await canvas.screenshot({ path: resolve(output, 'browser-alarm-cce-before.png') });
+	}
+	// C/CE uses the existing contact1. Its calendar Date action remains covered.
+	const key = page.getByTestId('vk-date');
+	await expect(key).toHaveAttribute('aria-label', 'C/CE');
+	await key.scrollIntoViewIfNeeded();
+	const box = (await key.boundingBox())!;
+	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+	await page.mouse.down();
+	await expect(key).toHaveClass(/delivered/);
+	await rpc(page, 'step', { instructions: 50_000 });
+	await page.mouse.up();
+	await expect(key).not.toHaveClass(/delivered/);
+	await rpc(page, 'step', { instructions: 2_000_000 });
+	const cleared = await snapshot();
+	expect(cleared.panelSha256).toBe('2e60b0d0e68bea00373b3084e874fda77d381e380a9fb34de58cb563d614ce4b');
+	await expect.poll(renderedDigest).toBe(cleared.panelSha256);
+	await rpc(page, 'step', { instructions: 3_000_000 });
+	const persistent = await snapshot();
+	expect(persistent.panelSha256).toBe(cleared.panelSha256);
+	expect(persistent.rtc.slice(0, 5)).toEqual([0x2f, 0x01, 0x09, 0xe1, 0x05]);
+	expect(persistent.rtc.slice(16, 22)).toEqual([0x00, 0x01, 0x11, 0xe1, 0x05, 0x07]);
+	const state = await rpc(page, 'pi_state');
+	expect(state.fault).toBeNull();
+	expect(state.native_instructions).toBe(22_242_927);
+	expect(errors).toEqual([]);
+	if (output) {
+		await canvas.screenshot({ path: resolve(output, 'browser-alarm-cce-after.png') });
+		await writeFile(
+			resolve(output, 'browser-alarm-cce.json'),
+			JSON.stringify({ initial, configured, popup, cleared, persistent, state, errors }),
+		);
+	}
 });
 
 test('PI no-Worker browser fallback shares panel, contacts and backup restore', async ({ page }, testInfo) => {
