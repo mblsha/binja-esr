@@ -5,7 +5,10 @@ CoreRuntime. It reuses the native CPU, matrix LCD controller, RTC reference
 and bounded ESR-H interpreter. PI ROM mapping, controller geometry and input
 ports come from the acquired PI firmware. This is an implementation in
 progress. Native and browser raw input complete calibration, pass contrast
-setup, initialize fresh memory and enter the organizer calendar. Complete organizer navigation,
+setup, initialize fresh memory, enter the organizer calendar and select dates.
+The selected numeral blinks through ordinary ROM-controlled context updates;
+the previous selected numeral reappears at its original date cell. Native and
+browser idle samples agree on both complete framebuffer phases. Complete organizer navigation,
 complete keyboard/RTC/power behavior and cards remain open.
 
 The normal factory accepts only a `PIROM01` bundle of the verified fixed ROM

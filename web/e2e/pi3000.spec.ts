@@ -145,8 +145,8 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-calendar.png') });
 	}
-	// Normal pointer input reaches a numeric entry response. The physical and
-	// application hit mapping remains a recovery gap; this does not select day16.
+	// Normal pointer input selects day16. The previous selection (day1) becomes
+	// visible again; idle execution blinks only the newly selected date.
 	await holdTouch(76, 72, 250_000, 500_000);
 	const contactState = await rpc(page, 'pi_state');
 	const contactDigest = await controllerDigest();
@@ -154,6 +154,18 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 	expect(contactState.tablet.slice(0, 3)).toEqual([432, 419, 0]);
 	expect(contactState.native_instructions).toBe(5378834);
 	expect(contactDigest).toBe('48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9');
+	expect(errors).toEqual([]);
+	const blinkSnapshots = [{ state: contactState, digest: contactDigest }];
+	for (let i = 0; i < 32; i++) {
+		await rpc(page, 'step', { instructions: 100_000 });
+		blinkSnapshots.push({ state: await rpc(page, 'pi_state'), digest: await controllerDigest() });
+	}
+	expect([...new Set(blinkSnapshots.map((s) => s.digest))]).toEqual([
+		'48e46b64f27429fa090f6e630da7e390caf9821e0f6f8b65297c3e018789a0e9',
+		'b5c34cd004f6732bb14f18c76d9e5054cdbd5719fc414b9c3c58bce696212875',
+	]);
+	expect(blinkSnapshots.at(-1)!.state.native_instructions).toBe(5387372);
+	expect(blinkSnapshots.every((s) => s.state.fault === null)).toBe(true);
 	expect(errors).toEqual([]);
 	if (output) {
 		await canvas.screenshot({ path: resolve(output, 'browser-calendar-contact.png') });
@@ -168,6 +180,7 @@ test('PI fresh browser touch completes initialization and enters the calendar', 
 				calendarDigest,
 				contactState,
 				contactDigest,
+				blinkSnapshots,
 			}),
 		);
 	}
