@@ -3,8 +3,21 @@ import { render, fireEvent, cleanup } from '@testing-library/svelte';
 import { afterEach } from 'vitest';
 import { pvLcdPixels } from './pvf1_panel';
 import OzTabletSurface from './components/OzTabletSurface.svelte';
+import PvTabletControls from './components/PvTabletControls.svelte';
 afterEach(cleanup);
 describe('PV-F1 logical LCD pen', () => {
+	it('delivers application pen contacts and releases on cancellation', async () => {
+		const onContact = vi.fn();
+		const { getByTestId } = render(PvTabletControls, { onContact });
+		await fireEvent.pointerDown(getByTestId('pv-app-drawing'), { button: 0, pointerId: 1 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 980, raw_y: 510, pressed: true }, 'tablet:Drawing:1', false);
+		await fireEvent.pointerUp(window, { pointerId: 1 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 980, raw_y: 510, pressed: false }, 'tablet:Drawing:1', false);
+		await fireEvent.pointerDown(getByTestId('pv-app-calculator'), { button: 0, pointerId: 2 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 900, raw_y: 640, pressed: true }, 'tablet:Calculator:2', false);
+		await fireEvent.pointerCancel(window, { pointerId: 2 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 900, raw_y: 640, pressed: false }, 'tablet:Calculator:2', true);
+	});
 	it('keeps storage rows outside the main viewport and preserves native pixel locations', () => {
 		expect(pvLcdPixels(222.5 / 336, 16.5 / 292)).toEqual([222, 16]);
 		expect(pvLcdPixels(335.5 / 336, 239.5 / 292)).toEqual([335, 239]);
