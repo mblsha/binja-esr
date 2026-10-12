@@ -246,3 +246,29 @@ by a supplied `82,73,00` response. The native IRQ/query path displays `Ｔ` in t
 editor. This proves response transport with a fixture, not handwriting recognition.
 The default has no result provider; result type 2, multi-result sequencing,
 physical timing and stroke classification remain open.
+
+
+## Portable handwriting inference
+
+`configure_pvf1_recognizer(Some(model_bytes))` attaches a replaceable
+Zinnia-compatible model before boot. The pure Rust shared `handwriting` module
+loads version-1 sparse linear models and extracts ordered-stroke features.
+PV-F1 owns the native markers, four character slots, canvas geometry, CP932
+conversion and result transport. Reset preserves the model and clears gesture
+state. The Python mirror implements the same component boundaries.
+
+Native uploads use 8000/index to start a stroke for a character slot, FFFF/FFFF
+to end a pen stroke, and 00FC to finish the idle character. In the qualified
+Handwriting case, native03FE supplies a 138-by-222 canvas. Normal pen movement
+for two-stroke hiragana `い` produces126 uploads, one classification and one
+native result IRQ/query. The classifier ranks `い` first and the ROM renders it
+without a supplied result record. The Japanese model has6420 classes and is
+loaded externally; its license/source and model identity belong to that data
+package. It is not embedded in the CPU or an implementation of Sharp's original
+recognizer. The default unconfigured controller still has no provider.
+
+Recognition/rendering now has a native regression. Native commit/reopen of the
+handwritten result is still unresolved, and the first tests reach the older TEST
+record after restart. Broader handwriting accuracy, Latin coverage, multiple
+character slots, type-2 notifications and frontend model provisioning remain
+open. No claim of complete handwriting or emulator functionality follows.
