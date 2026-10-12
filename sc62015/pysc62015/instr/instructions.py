@@ -1609,9 +1609,31 @@ class IncDecInstruction(Instruction):
         assert isinstance(first, HasWidth), f"Expected HasWidth, got {type(first)}"
         return first.width()
 
+    def lift_il_update(self, il: LowLevelILFunction) -> bool:
+        (first,) = self.operands()
+        if not isinstance(first, Reg3) or first.reg != RegisterName("IL"):
+            return False
+        # INC/DEC preserve IH; the IL value-load path intentionally clears it.
+        result = TempReg(TempLoopByteResult, width=1)
+        result.lift_assign(il, self.lift_operation1(il, first.lift(il)))
+        il.append(
+            il.set_reg(
+                2,
+                RegisterName("I"),
+                il.or_expr(
+                    2,
+                    il.and_expr(2, il.reg(2, RegisterName("I")), il.const(2, 0xFF00)),
+                    il.zero_extend(2, result.lift(il)),
+                ),
+            )
+        )
+        return True
+
 
 class INC(IncDecInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self.lift_il_update(il):
+            return
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected only one operand"
         if isinstance(first, Reg3) and first.reg in REG3_20BIT_REGS:
@@ -1643,6 +1665,8 @@ class INC(IncDecInstruction):
 
 class DEC(IncDecInstruction):
     def lift(self, il: LowLevelILFunction, addr: int) -> None:
+        if self.lift_il_update(il):
+            return
         first, *rest = self.operands()
         assert len(rest) == 0, "Expected only one operand"
         if isinstance(first, Reg3) and first.reg in REG3_20BIT_REGS:

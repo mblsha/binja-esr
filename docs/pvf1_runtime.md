@@ -321,3 +321,19 @@ incomplete path instead renders 八. This is assisted input, not measured timing
 Broader handwriting accuracy, Latin coverage, type-2 notifications and remaining
 application/card workflows stay open. Routine
 behavioral checks use standalone Rust; WASM checks only the changed bindings.
+
+## Action Planner keyword matching
+
+Native related-word queries now match the full-width TEST schedule and TASK
+Action List records. The query's Input contact executes the search; the result
+view's top-right contact opens Report creation. Report cancellation returns to
+the intact result list. A positive report trial creates one Action Board page.
+
+The failing multi-character path exposed a shared CPU alias error. At bankFC
+C4B37, INC IL/DEC IL inspect a pattern word's low byte before SUB BA,I. Those
+instructions must preserve IH; routing them through the IL value-load setter
+changed8264 to0064 and rejected the second character. The scoped Rust and LLIL
+correction preserves IH, low-byte wrap and carry, and derives zero from IL.
+IL value-load behavior retains its existing high-byte clearing. Tiny Rust
+opcode/word-compare regressions and normal unmodified-ROM query consumers cover
+the correction. Broader report/edit/navigation behavior remains separate work.

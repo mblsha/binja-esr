@@ -489,9 +489,9 @@ qualification remains incomplete; see the scoped hardware findings in
 
 | Mnemonic        | Function                                  | Flags (C Z) | Bytes | Cycles | Opcode (Bin / Hex)                               | Operand Type |
 | :-------------- | :---------------------------------------- | :---------- | :---- | :------- | :----------------------------------------------- | :----------- |
-| `INC r`         | `r ← r+1` (r can be r1, r2, r3)           | `- ○`       | 2     | 3        | `0110 1100` / `6C` <br> `0r` / `0X`               | `r`          |
+| `INC r`         | `r ← r+1` (r can be r1, r2, r3; IL preserves IH) | `- ○`       | 2     | 3        | `0110 1100` / `6C` <br> `0r` / `0X`               | `r`          |
 | `INC (n)`       | `(n) ← (n)+1`                             | `- ○`       | 2     | 3        | `0110 1101` / `6D` <br> `n`                       | `n`          |
-| `DEC r`         | `r ← r-1` (r can be r1, r2, r3)           | `- ○`       | 2     | 3        | `0111 1100` / `7C` <br> `0r` / `0X`               | `r`          |
+| `DEC r`         | `r ← r-1` (r can be r1, r2, r3; IL preserves IH) | `- ○`       | 2     | 3        | `0111 1100` / `7C` <br> `0r` / `0X`               | `r`          |
 | `DEC (n)`       | `(n) ← (n)-1`                             | `- ○`       | 2     | 3        | `0111 1101` / `7D` <br> `n`                       | `n`          |
 
 ### Jump, Call, and Return Instructions
