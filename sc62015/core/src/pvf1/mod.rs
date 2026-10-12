@@ -52,6 +52,9 @@ pub struct Hardware {
     expansion_absent: bool,
     pub card: Option<crate::pa9500::card::Pa9c3Card>,
     card_presence_candidate: bool,
+    // PA-9C3 native ROM stages RUN and input text at E000. This separate
+    // logical buffer is an explicit card candidate, not a physical RAM alias.
+    card_buffer: Vec<u8>,
     pub tablet: Option<crate::oz9600::tablet::Tablet>,
     halt_main_timer_candidate: bool,
     pub halt_main_timer_units: u64,
@@ -111,6 +114,7 @@ impl Hardware {
             expansion_absent: profile != BootstrapProfile::Strict,
             card: None,
             card_presence_candidate: false,
+            card_buffer: vec![0; 0x1000],
             halt_main_timer_candidate: false,
             halt_main_timer_units: 0,
             start_timers_at_first_halt_candidate: false,
@@ -142,6 +146,9 @@ impl Hardware {
             0x8800 => self.tablet.as_ref().map(|t| t.conversion_control),
             0x8c00 => self.tablet.as_ref().map(|t| t.peek_data()),
             0xf01c..=0xf01e => Some(self.startup[(a - 0xf01c) as usize]),
+            0xe000..=0xefff if self.card_presence_candidate && self.startup[0] == 1 => {
+                Some(self.card_buffer[(a - 0xe000) as usize])
+            }
             0x20000..=0x7ffff if self.card.is_some() => {
                 self.card.as_ref().unwrap().read(a).or(Some(255))
             }
@@ -216,6 +223,9 @@ impl Hardware {
                 }
             }
             0xf00c..=0xf00e => self.startup[(a - 0xf00c) as usize] = v,
+            0xe000..=0xefff if self.card_presence_candidate && self.startup[0] == 1 => {
+                self.card_buffer[(a - 0xe000) as usize] = v;
+            }
             // F80A9/F80AF and other PV mapper branches emit A5, 5A here.
             // Keep the latch; candidate absent expansion stays read-only.
             0xf103 if matches!(v, 0xa5 | 0x5a) => self.mapping_unlock = v,
@@ -431,6 +441,8 @@ impl CoreRuntime {
     }
     /// Mount verified PA-9C3 backing in an explicit PV-F1 card candidate.
     /// ROM mirrors are acquired evidence; SRAM aliases/presence are candidates.
+    /// A separate E000..EFFF input-buffer candidate is visible in startup mode1;
+    /// physical extent, alias and mode gating remain unverified.
     pub fn configure_pvf1_pa9c3_candidate(
         &mut self,
         rom: &[u8],

@@ -82,6 +82,8 @@ class Hardware:
         self.expansion_absent = profile != "strict"
         self.card = None
         self.card_presence_candidate = False
+        # Separate logical PA-9C3 input buffer; physical alias/extent unverified.
+        self.card_buffer = bytearray(0x1000)
         self.uart = Uart(1_024_000, 2) if profile == "firmware" else None
         self.tablet = None if profile == "strict" else Tablet(contact_sample=1023)
         self.halt_main_timer_candidate = profile == "firmware"
@@ -115,6 +117,12 @@ class Hardware:
             return self.tablet.peek_data()
         if 0xF01C <= address <= 0xF01E:
             return self.startup[address - 0xF01C]
+        if (
+            0xE000 <= address <= 0xEFFF
+            and self.card_presence_candidate
+            and self.startup[0] == 1
+        ):
+            return self.card_buffer[address - 0xE000]
         if 0x20000 <= address <= 0x7FFFF:
             if self.card:
                 result = self.card.read(address)
@@ -203,6 +211,12 @@ class Hardware:
                 self.auxiliary.write(address, value, self.cycle)
             elif 0xF00C <= address <= 0xF00E:
                 self.startup[address - 0xF00C] = value
+            elif (
+                0xE000 <= address <= 0xEFFF
+                and self.card_presence_candidate
+                and self.startup[0] == 1
+            ):
+                self.card_buffer[address - 0xE000] = value
             elif address == 0xF103 and value in (0xA5, 0x5A):
                 self.mapping_unlock = value
             elif 0x20000 <= address <= 0x7FFFF and self.card:
