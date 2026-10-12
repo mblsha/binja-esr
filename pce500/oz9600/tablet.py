@@ -2,7 +2,10 @@
 
 
 class Tablet:
-    def __init__(self):
+    def __init__(self, contact_sample=1023):
+        if not 0 <= contact_sample <= 1023:
+            raise ValueError("contact pressure sample must be ten-bit")
+        self.contact_sample = contact_sample
         self.x = self.y = self.conversion_control = self.drive_control = (
             self.data_reads
         ) = 0
@@ -30,7 +33,7 @@ class Tablet:
             if (self.drive_control, self.conversion_control & 1) == (0xA8, 0)
             else self.y
             if (self.drive_control, self.conversion_control & 1) == (0x8A, 1)
-            else 1023
+            else self.contact_sample
         )
 
     def peek_data(self):
