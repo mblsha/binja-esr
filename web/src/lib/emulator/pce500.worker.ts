@@ -208,6 +208,7 @@ const tabletInputs = new TabletInputs(
 	() => romModel !== 'oz-9600' || emulator.oz9600_tablet_contact_release_ready(),
 	() => romModel === 'oz-9600' && emulator.oz9600_tablet_mailbox_busy(),
 	() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
+	() => (romModel === 'pv-f1' ? 50_000 : 0),
 );
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
