@@ -109,3 +109,19 @@ phase. This is software qualification of a nominal timing candidate; calendar
 progression, alarm/power wiring, HOLD behavior, restart retention and recognition
 remain unqualified. The RTC component and Python logical reference are separate
 from the firmware-specific mapper and auxiliary protocol.
+## Retained restart backing
+
+`CoreRuntime::pvf1_retained_state()` exports the board's main RAM, scratch RAM
+and raw RTC registers. `restore_pvf1_retained_state(&image)` validates exact
+length, fixed-ROM identity, ordered bank/layout identity and payload checksum
+before copying backing into a fresh board, prior to its first scheduler
+boundary. CPU, LCD, mapper, input, GPIO/gate, auxiliary and clock phases are
+fresh. The emulator-only `PVRAM01` format does not identify physical
+battery-backed regions. Native ROM checks save and reopen Typewriter TEST
+after a fresh restart through normal calendar/Modify contacts.
+
+The standalone `pce500` CLI accepts `--pvf1-retained PATH` and
+`--pvf1-retained-out PATH` with `--model pv-f1 --rom verified.pvrom` and the
+`pvf1` build feature. It preserves PV-F1 factory ownership of reset, card
+mapping and first-HALT timer initialization. Calendar time progression,
+alarm wake and handwriting recognition remain incomplete.
