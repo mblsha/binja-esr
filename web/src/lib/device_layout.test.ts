@@ -7,7 +7,11 @@ describe('reference-based device layouts', () => {
 		const layout = deviceLayout('pv-f1');
 		expect(layout.provenance).toBe('functional-input-layout');
 		expect(layout.lcd.w / layout.lcd.h).toBeCloseTo(336 / 292);
-		expect(layout.keys.map((k) => k.code)).toEqual(['on', 1]);
+		expect(layout.keys.find((k) => k.label === 'C/CE')?.code).toBe(1);
+		expect(layout.keys.find((k) => k.label === 'MENU')?.code).toBe(6);
+		expect(layout.keys.find((k) => k.label === 'PREV')?.code).toBe(9);
+		expect(layout.keys.find((k) => k.label === 'NEXT')?.code).toBe(13);
+		expect(new Set(layout.keys.map((k) => k.code)).size).toBe(layout.keys.length);
 		for (const key of layout.keys) expect(key.y).toBeGreaterThan(layout.lcd.y + layout.lcd.h);
 	});
 	it('PA exposes functional ROM controls without inheriting a physical PC case', () => {

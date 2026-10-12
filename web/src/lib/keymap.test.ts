@@ -57,11 +57,15 @@ describe('host letters and symbols', () => {
 });
 
 describe('matrixCodeForKeyEvent', () => {
-	it('PV-F1 exposes the qualified focus/ON controls without inheriting desktop letter keys', () => {
-		expect(matrixCodeForKeyEvent({ code: 'Tab' } as KeyboardEvent, 'pv-f1')).toBe(1);
+	it('PV-F1 exposes native C/CE, menu and navigation without inheriting desktop letter keys', () => {
+		expect(matrixCodeForKeyEvent({ code: 'Tab' } as KeyboardEvent, 'pv-f1')).toBeNull();
+		expect(matrixCodeForKeyEvent({ code: 'Escape' } as KeyboardEvent, 'pv-f1')).toBe(1);
+		expect(matrixCodeForKeyEvent({ code: 'F7' } as KeyboardEvent, 'pv-f1')).toBe(6);
+		expect(matrixCodeForKeyEvent({ code: 'PageUp' } as KeyboardEvent, 'pv-f1')).toBe(9);
+		expect(matrixCodeForKeyEvent({ code: 'PageDown' } as KeyboardEvent, 'pv-f1')).toBe(13);
 		expect(matrixCodeForKeyEvent({ code: 'F12' } as KeyboardEvent, 'pv-f1')).toBe('on');
 		expect(physicalKey('pv-f1', 'A')).toBeNull();
-		expect(virtualKeysForModel('pv-f1').map((k) => k.code)).toEqual(['on', 1]);
+		expect(virtualKeysForModel('pv-f1').map((k) => k.code)).toEqual(['on', 0, 1, 5, 6, 7, 8, 9, 13, 14, 15]);
 	});
 	it('uses PA ROM contacts and keeps native and BASIC letter conversion separate', () => {
 		expect(physicalKey('pa-9500', 'M')).toBe(32);
