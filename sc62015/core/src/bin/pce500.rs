@@ -666,6 +666,9 @@ fn apply_scenario(args: &mut Args) -> Result<(), Box<dyn Error>> {
 
 fn default_bnida_path(model: DeviceModel) -> PathBuf {
     match model {
+        DeviceModel::PvF1 => {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../rom-analysis/pv-f1/bnida.json")
+        }
         // When running via binja-esr-tests/scripts/run_rom_tests.sh, CWD is public-src.
         // Use CARGO_MANIFEST_DIR so `cargo run --manifest-path ...` works from any directory.
         DeviceModel::Iq7000 => PathBuf::from(env!("CARGO_MANIFEST_DIR"))

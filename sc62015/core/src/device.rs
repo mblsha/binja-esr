@@ -83,6 +83,7 @@ pub enum TimerProfileProvenance {
     Oz9600UncalibratedExperiment,
     Pa9500UncalibratedExperiment,
     Pi3000UncalibratedExperiment,
+    PvF1UncalibratedExperiment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +120,7 @@ impl DeviceTimerProfile {
         matches!(
             self.provenance,
             TimerProfileProvenance::PcE500UncalibratedCompatibility
+                | TimerProfileProvenance::PvF1UncalibratedExperiment
                 | TimerProfileProvenance::Iq7000PcCompatibilityFallback
                 | TimerProfileProvenance::Oz9600UncalibratedExperiment
                 | TimerProfileProvenance::Pa9500UncalibratedExperiment
@@ -129,6 +131,9 @@ impl DeviceTimerProfile {
         match self.provenance {
             TimerProfileProvenance::Pi3000UncalibratedExperiment => {
                 "provisional PI-3000 scheduler; disabled in strict bootstrap"
+            }
+            TimerProfileProvenance::PvF1UncalibratedExperiment => {
+                "provisional PV-F1 scheduler; physical timing remains uncalibrated"
             }
             TimerProfileProvenance::Pa9500UncalibratedExperiment => {
                 "provisional PA-9500 scheduler; disabled in bootstrap profile"
@@ -193,6 +198,9 @@ pub enum DeviceModel {
     #[cfg_attr(feature = "cli", value(name = "pi-3000"))]
     #[serde(rename = "pi-3000")]
     Pi3000,
+    #[cfg_attr(feature = "cli", value(name = "pv-f1"))]
+    #[serde(rename = "pv-f1")]
+    PvF1,
 }
 
 /// Configure device-specific LCD character matching for Perfetto tracing.
@@ -202,7 +210,7 @@ pub enum DeviceModel {
 /// device's font tables (either the raw ROM image or a snapshot's external memory dump).
 pub fn configure_lcd_char_tracing(lcd: &mut dyn LcdHal, model: DeviceModel, rom: &[u8]) {
     match model {
-        DeviceModel::Oz9600 | DeviceModel::Pa9500 | DeviceModel::Pi3000 => {} // No host character matcher for this controller.
+        DeviceModel::Oz9600 | DeviceModel::Pa9500 | DeviceModel::Pi3000 | DeviceModel::PvF1 => {} // No host character matcher for this controller.
         DeviceModel::PcE500 | DeviceModel::PcE500Jp => {
             let matcher = pce500::pce500_font_map_from_rom(rom)
                 .and_then(|font| LcdCharMatcher::from_pce500_font_map(&font));
@@ -226,6 +234,31 @@ impl DeviceModel {
 
     pub fn spec(self) -> DeviceSpec {
         match self {
+            Self::PvF1 => DeviceSpec {
+                label: "pv-f1",
+                rom_basename: "pv-f1.pvrom",
+                lcd_kind: LcdKind::Unknown,
+                rom_window_start: 0xe0000,
+                rom_window_len: 0x20000,
+                font_base_addr: None,
+                text_decoder: None,
+                timer: DeviceTimerProfile {
+                    provenance: TimerProfileProvenance::PvF1UncalibratedExperiment,
+                    ..Self::Oz9600.timer_profile()
+                },
+                internal_ram_mirror: false,
+                // Acquired PV-F1 FA528/FA532 sample SSR.ONK, bit3.
+                on_key_ssr_mask: 8,
+                keyboard: DeviceKeyboardProfile {
+                    columns_active_high: true,
+                    fifo_mirroring: false,
+                    keyi_on_any_press: false,
+                    raw_kil: true,
+                    press_threshold: 1,
+                },
+                sio_stub: false,
+                default_memory_card: DeviceMemoryCardProfile::Absent,
+            },
             Self::Pi3000 => DeviceSpec {
                 label: "pi-3000",
                 rom_basename: "pi-3000.pirom",
@@ -408,6 +441,7 @@ impl DeviceModel {
             "oz-9600" | "oz9600" | "oz_9600" => Some(Self::Oz9600),
             "pa-9500" | "pa9500" | "db-z" | "dbz" => Some(Self::Pa9500),
             "pi-3000" | "pi3000" | "pi_3000" => Some(Self::Pi3000),
+            "pv-f1" | "pvf1" | "pv_f1" => Some(Self::PvF1),
             _ => None,
         }
     }
@@ -468,6 +502,11 @@ impl DeviceModel {
     }
 
     pub(crate) fn configure_fresh_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
+        if *self == Self::PvF1 {
+            return Err(crate::CoreError::Other(
+                "PV-F1 requires the verified organizer board adapter".into(),
+            ));
+        }
         if *self == Self::Pi3000 {
             #[cfg(feature = "pi3000")]
             {
@@ -522,7 +561,7 @@ impl DeviceModel {
             Self::Iq7000 => iq7000::load_iq7000_rom_image(rt, rom),
             Self::PcE500 => pce500::load_pce500_rom_window(rt, rom),
             Self::PcE500Jp => pce500::load_pce500_system_image(rt, rom),
-            Self::Oz9600 | Self::Pa9500 | Self::Pi3000 => {
+            Self::Oz9600 | Self::Pa9500 | Self::Pi3000 | Self::PvF1 => {
                 unreachable!("banked construction handled above")
             }
         };
