@@ -11,8 +11,22 @@ const maps: Record<string, Record<string, number>> = physicalMaps;
 // consumers. Scanner0C translates to logical001A, the alarm's C/CE key. In the
 // calendar this same contact opens date entry. Physical legends remain open.
 const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, CLEAR: 14, OFF: 7 };
+// PV-F1 FD587 scan table and acquired-FE key translation. C/CE dismisses the
+// native alarm; PREV/NEXT change calendar months. No desktop letter mapping.
+const pvControls: Record<string, number> = {
+	UP: 0,
+	CLEAR: 1,
+	FUNCTION: 5,
+	MENU: 6,
+	OFF: 7,
+	LEFT: 8,
+	PREV: 9,
+	NEXT: 13,
+	RIGHT: 14,
+	DOWN: 15,
+};
 export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
-	if (model === 'pv-f1') return name === 'FOCUS' ? 1 : null;
+	if (model === 'pv-f1') return pvControls[name] ?? null;
 	if (model === 'pi-3000') return piControls[name] ?? null;
 	if (model === 'pa-9500') {
 		const table: Record<string, number> = { ...paMaps.common, ...paMaps[paInput] };
@@ -121,7 +135,7 @@ const piHost: Record<string, string> = {
 };
 const modelHost = (model: RomModel) =>
 	model === 'pv-f1'
-		? { Tab: 'FOCUS' }
+		? { F7: 'MENU', F9: 'FUNCTION', PageUp: 'PREV', PageDown: 'NEXT', Escape: 'CLEAR', Pause: 'OFF' }
 		: model === 'iq-7000'
 			? iqHost
 			: model === 'oz-9600'
@@ -235,7 +249,14 @@ export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'nat
 	if (model === 'pv-f1')
 		return [
 			{ label: 'ON', code: 'on', testId: 'vk-on' },
-			{ label: 'Focus', code: 1, testId: 'vk-focus' },
+			...Object.entries(pvControls).map(([name, code]) => ({
+				label:
+					(
+						{ CLEAR: 'C/CE', FUNCTION: 'Function', UP: '↑', LEFT: '←', RIGHT: '→', DOWN: '↓' } as Record<string, string>
+					)[name] ?? name,
+				code,
+				testId: 'vk-' + name.toLowerCase(),
+			})),
 		];
 	if (model === 'pi-3000')
 		return [
