@@ -60,7 +60,7 @@ missing results and false zero-progress budget completion still fail closed.
 
 The acquisition and private proof repository retain the source-bound native,
 WASM and browser receipts. Thirty-nine LCD IOCS slots have a static inventory;
-nineteen non-error commands still lack a successful focused native case.
+six non-error commands still lack a successful focused native case.
 Remaining work includes broader applications, input calibration, RTC, power,
 retention and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
