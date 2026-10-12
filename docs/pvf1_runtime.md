@@ -86,8 +86,15 @@ The acquisition and private proof repository retain the source-bound native,
 WASM and browser receipts. All 39 LCD IOCS slots have a static inventory and
 all 31 non-error commands have successful focused native cases. These cases
 do not qualify every context, raster mode, font, codec or error branch.
-Remaining work includes broader applications, auxiliary-mode input, RTC clock
-setting/alarms and PV-F1 card/serial routing. No physical LCD or timing qualification
+Native menu contacts now open clock/daily-alarm settings. Numeric11:23AM entry
+commits through native RTC IOCS; an enabled daily alarm wakes native OFF,
+displays the ROM notification and rearms the next day. Firmware infers an
+ON/power-wake level only from enabled RTC alarm causesA0/A1, excluding periodic
+sources. Strict preserves its prior policy; ControlCandidate has a guarded
+pre-execution `configure_pvf1_alarm_wake_candidate` comparison. Physical wiring
+and timing are unverified. C/CE notification dismissal remains an input gap.
+Remaining work includes broader applications, auxiliary-mode input, remaining
+clock/date/city paths and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
 
 ## Native saved-entry wait and RTC A2 candidate
