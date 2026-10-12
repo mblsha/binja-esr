@@ -258,8 +258,11 @@ class Hardware:
         self.calendar_clock.configure(period)
 
     def external_irq(self):
-        if self.auxiliary and self.auxiliary.advance(self.cycle):
-            self.gate[0x12] |= 8
+        if self.auxiliary:
+            if self.auxiliary.advance(self.cycle):
+                self.gate[0x12] |= 8
+            if self.auxiliary.take_result_irq_edge():
+                self.gate[0x12] |= 0x40
         if self.tablet and self.rtc.interrupt_asserted():
             self.gate[0x12] |= 1
         return self.tablet is not None and bool(self.gate[0x12] & self.gate[0x10])
