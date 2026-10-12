@@ -37,6 +37,7 @@ pub struct Hardware {
     pub lcd: LcdController,
     pub rtc: Rtc,
     rtc_clock: rtc_clock::HalfSecondClock,
+    calendar_clock: rtc_clock::CalendarClock,
     pub ram: Vec<u8>,
     pub scratch: Vec<u8>,
     pub gpio: [u8; 18],
@@ -74,6 +75,15 @@ impl Hardware {
                 clock
             },
             ram: vec![0; 0x40000],
+            calendar_clock: {
+                let mut clock = rtc_clock::CalendarClock::default();
+                if profile == BootstrapProfile::Firmware {
+                    clock
+                        .configure(Some(DeviceModel::PvF1.timer_profile().timebase_hz))
+                        .expect("positive PV-F1 calendar clock candidate");
+                }
+                clock
+            },
             scratch: vec![0; 0x4000],
             gpio: [0; 18],
             banks,
@@ -282,6 +292,16 @@ impl BoundaryDevice for Boundary {
         {
             h.rtc.raise_causes(4, 0);
         }
+        {
+            let Hardware {
+                rtc,
+                calendar_clock,
+                ..
+            } = &mut *h;
+            calendar_clock
+                .advance(rtc, c.elapsed_timing_units.wrapping_sub(self.2))
+                .map_err(CoreError::Other)?;
+        }
         if let Some(deadline) = self.1.take() {
             c.timer.next_mti = deadline;
             c.timer
@@ -471,6 +491,18 @@ impl CoreRuntime {
         }
         h.rtc_clock.configure(period)
     }
+    pub fn configure_pvf1_calendar_candidate(&mut self, period: Option<u64>) -> Result<(), String> {
+        let mut h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if h.tablet.is_none() {
+            return Err("RTC calendar requires an explicit board candidate".into());
+        }
+        h.calendar_clock.configure(period)
+    }
     pub fn pvf1_status(&self) -> Result<Value, String> {
         let h = self
             .pvf1_hardware
@@ -479,7 +511,7 @@ impl CoreRuntime {
             .lock()
             .unwrap();
         Ok(
-            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
+            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
 }
