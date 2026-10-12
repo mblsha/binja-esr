@@ -8,6 +8,7 @@ pub struct Auxiliary {
     ready_at: Option<u64>,
     complete: bool,
     response: Option<u8>,
+    acknowledgment_required: bool,
     pub capture_active: bool,
     pub accepted: Vec<u16>,
     pub accepted_count: u64,
@@ -34,13 +35,48 @@ impl Auxiliary {
                 ))
             }
         };
-        if self.written != (1 << request_bytes) - 1 {
+        self.start_packet(
+            request,
+            cycle,
+            request_bytes,
+            if header == 0x03fc { None } else { Some(1) },
+            true,
+        )?;
+        if header == 0x03fc {
+            self.capture_active = true;
+        }
+        if header == 0x05fe {
+            self.capture_active = false;
+        }
+        Ok(())
+    }
+    /// Transport only: the caller owns command, length and response contracts.
+    pub fn start_packet(
+        &mut self,
+        request: &[u8; 32],
+        cycle: u64,
+        request_bytes: usize,
+        response: Option<u8>,
+        acknowledgment_required: bool,
+    ) -> Result<(), String> {
+        if self.ready_at.is_some() || self.complete {
+            return Err("PI auxiliary start before prior completion acknowledgment".into());
+        }
+        if !(2..=32).contains(&request_bytes) {
+            return Err("auxiliary packet length must be 2..32".into());
+        }
+        let expected = u32::MAX >> (32 - request_bytes);
+        if self.written != expected {
             let count = if request_bytes == 2 {
                 "two"
             } else if request_bytes == 3 {
                 "three"
-            } else {
+            } else if request_bytes == 8 {
                 "eight"
+            } else {
+                return Err(format!(
+                    "auxiliary packet requires exactly {request_bytes} written bytes"
+                ));
             };
             return Err(format!(
                 "PI auxiliary control requires exactly {count} written bytes"
@@ -49,24 +85,20 @@ impl Auxiliary {
         self.written = 0;
         // FD6EA sets IL=1; FD722 decrements it to zero and acknowledges
         // 03FC at FD726 without reading any response byte.
-        self.response = if header == 0x03fc { None } else { Some(1) };
-        if header == 0x03fc {
-            self.capture_active = true;
-        }
-        if header == 0x05fe {
-            self.capture_active = false;
-        }
+        self.response = response;
+        self.acknowledgment_required = acknowledgment_required;
         self.ready_at = Some(cycle.saturating_add(32));
         self.accepted_count += 1;
         if self.accepted.len() < 256 {
-            self.accepted.push(header);
+            self.accepted
+                .push(u16::from_le_bytes([request[0], request[1]]));
         }
         Ok(())
     }
     pub fn advance(&mut self, cycle: u64) {
         if self.ready_at.is_some_and(|ready| cycle >= ready) {
             self.ready_at = None;
-            self.complete = true;
+            self.complete = self.acknowledgment_required;
         }
     }
     pub fn status(&self) -> u8 {

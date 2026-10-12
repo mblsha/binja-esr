@@ -51,6 +51,9 @@ pub enum Auxiliary {
         enabled: bool,
         engine: ControlEngine,
         clock: CaptureClock,
+        sample_uploads: u64,
+        completed_strokes: u64,
+        last_samples: Vec<[u16; 2]>,
     },
 }
 impl Auxiliary {
@@ -69,6 +72,9 @@ impl Auxiliary {
             enabled: true,
             engine: ControlEngine::default(),
             clock: CaptureClock::default(),
+            sample_uploads: 0,
+            completed_strokes: 0,
+            last_samples: vec![],
         }
     }
     pub fn configure_sample_period(&mut self, period: Option<u64>) -> Result<(), String> {
@@ -98,9 +104,12 @@ impl Auxiliary {
                 enabled,
                 engine,
                 clock,
+                sample_uploads,
+                completed_strokes,
+                last_samples,
                 ..
             } => {
-                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events})
+                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples})
             }
         }
     }
@@ -197,9 +206,41 @@ impl Auxiliary {
                     Ok(())
                 }
                 Self::Control {
-                    request, engine, ..
+                    request,
+                    engine,
+                    sample_uploads,
+                    completed_strokes,
+                    last_samples,
+                    ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
+                    if command == 0x00fc {
+                        // DBF57/DBF60 ends the upload with the same busy-only
+                        // start. Candidate-result IRQ/data remain unresolved.
+                        engine.start_packet(request, cycle, 2, None, false)?;
+                        *completed_strokes += 1;
+                        return Ok(());
+                    }
+                    // FE:DBEBD..DBF20 uploads one to seven converted coordinate
+                    // pairs at22 onward, then FF/count at20. No response payload
+                    // is consumed here. This does not synthesize recognition.
+                    let count = request[1] as usize;
+                    if request[0] == 0xff && (1..=7).contains(&count) {
+                        // DBEBD tests only busy80 before another upload. Unlike
+                        // status commands, sample batches have no host BF ack.
+                        engine.start_packet(request, cycle, 2 + 4 * count, None, false)?;
+                        *sample_uploads += 1;
+                        *last_samples = request[2..2 + 4 * count]
+                            .chunks_exact(4)
+                            .map(|p| {
+                                [
+                                    u16::from_le_bytes([p[0], p[1]]),
+                                    u16::from_le_bytes([p[2], p[3]]),
+                                ]
+                            })
+                            .collect();
+                        return Ok(());
+                    }
                     // FE DD77B..DD7B3 sends two-byte controls; DD55E sends
                     // 04FE plus one parameter (3 bytes); DD589 sends 03FE plus geometry
                     // (8 bytes). These callers consume only status 01 at 08A40
@@ -244,6 +285,49 @@ mod tests {
             a.write(0x8a20 + i as u32, b, cycle).unwrap();
         }
         a.write(0x8a02, 0x80, cycle).unwrap();
+    }
+
+    #[test]
+    fn native_sample_uploads_are_busy_only_and_require_exact_model_lengths() {
+        let mut a = Auxiliary::control();
+        for (cycle, count) in [(0, 1), (100, 7)] {
+            let mut request = vec![0xff, count];
+            for i in 0..count {
+                request.extend_from_slice(&(i as u16).to_le_bytes());
+                request.extend_from_slice(&(0x8000 + i as u16).to_le_bytes());
+            }
+            for (i, b) in request.iter().enumerate() {
+                a.write(0x8a20 + i as u32, *b, cycle).unwrap();
+            }
+            a.write(0x8a02, 0x80, cycle).unwrap();
+            assert_eq!(a.peek(0x8a00), Some(0x82));
+            a.advance(cycle + 32);
+            assert_eq!(a.peek(0x8a00), Some(2));
+            assert_eq!(a.peek(0x8a40), None);
+            assert_eq!(a.peek(0x8a41), None);
+            assert_eq!(a.snapshot()["last_uploaded_samples"][0], json!([0, 0x8000]));
+        }
+        start(&mut a, 0x00fc, 200);
+        a.advance(232);
+        assert_eq!(a.snapshot()["completed_strokes"], 1);
+        assert_eq!(a.peek(0x8a00), Some(2));
+        // Capture controls remain acknowledged and never acquire query bytes.
+        start(&mut a, 0x03fc, 300);
+        a.advance(332);
+        assert_eq!(a.peek(0x8a00), Some(0x42));
+        a.write(0x8a03, 0xbf, 332).unwrap();
+        for (i, b) in [0xff, 7, 0, 0, 0, 0].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 400).unwrap();
+        }
+        assert!(a.write(0x8a02, 0x80, 400).is_err());
+        assert_eq!(a.snapshot()["sample_uploads"], 2);
+        assert_eq!(a.peek(0x8a41), None);
+        let mut pi = ControlEngine::default();
+        let request = [0xff; 32];
+        assert!(
+            pi.start(&request, 0).is_err(),
+            "PV uploads must not change PI command admission"
+        );
     }
 
     #[test]
