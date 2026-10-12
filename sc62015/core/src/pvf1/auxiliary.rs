@@ -2,9 +2,11 @@
 //! PV-F1 FF406/FF40E control transport. Absent mode exposes the acquired idle
 //! status and lets ROM time out. The opt-in control candidate reuses the shared
 //! handshake engine, gated to PV-F1-confirmed request/response contracts only.
+use crate::handwriting::{Model, Strokes};
 use crate::pi3000::auxiliary::Auxiliary as ControlEngine;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Provisional sample cadence, independent of the acquired register/IRQ ABI.
 pub const CAPTURE_SAMPLE_PERIOD_CANDIDATE: u64 = 4096;
@@ -48,6 +50,98 @@ pub struct CandidateResults {
     response: Option<Vec<u8>>,
 }
 
+/// Optional portable inference backend; protocol state remains PV-owned.
+#[derive(Default)]
+pub struct Recognition {
+    model: Option<Arc<Model>>,
+    width: u16,
+    height: u16,
+    active: Option<u8>,
+    strokes: BTreeMap<u8, Strokes>,
+    in_stroke: bool,
+    classifications: u64,
+    last_labels: Vec<String>,
+}
+type RecognitionResult = Option<(u8, Vec<[u8; 3]>)>;
+impl Recognition {
+    fn upload(&mut self, samples: &[[u16; 2]]) -> Result<(), String> {
+        if self.model.is_none() {
+            return Ok(());
+        }
+        for &[x, y] in samples {
+            if x == 0x8000 && y < 4 {
+                self.active = Some(y as u8);
+                self.in_stroke = false;
+            } else if x == 0xffff && y == 0xffff {
+                self.in_stroke = false;
+            } else if x < 0x8000 && y < 0x8000 {
+                let index = self
+                    .active
+                    .ok_or("recognizer sample without start marker")?;
+                let strokes = self.strokes.entry(index).or_default();
+                if !self.in_stroke {
+                    strokes.push(vec![]);
+                    self.in_stroke = true;
+                }
+                if strokes.len() > 64 {
+                    return Err("too many recognition strokes".into());
+                }
+                let stroke = strokes.last_mut().unwrap();
+                if stroke.len() >= 16384 {
+                    return Err("too many recognition points".into());
+                }
+                if stroke.last() != Some(&[x as f32, y as f32]) {
+                    stroke.push([x as f32, y as f32]);
+                }
+            } else {
+                return Err(format!("unrecovered recognition marker{x:04X}/{y:04X}"));
+            }
+        }
+        Ok(())
+    }
+    fn finish(&mut self) -> Result<RecognitionResult, String> {
+        let Some(model) = &self.model else {
+            return Ok(None);
+        };
+        let index = self
+            .active
+            .take()
+            .ok_or("recognizer finish without character")?;
+        self.in_stroke = false;
+        let strokes = self
+            .strokes
+            .remove(&index)
+            .ok_or("recognizer finish without ink")?;
+        let labels = model.classify(
+            &strokes,
+            self.width as f32,
+            self.height as f32,
+            model.class_count(),
+        )?;
+        let mut records = Vec::new();
+        self.last_labels.clear();
+        for (label, _) in labels {
+            let Some(mut c) = label.chars().next().filter(|_| label.chars().count() == 1) else {
+                continue;
+            };
+            if c.is_ascii_graphic() {
+                c = char::from_u32(c as u32 + 0xfee0).unwrap();
+            }
+            let text = c.to_string();
+            let (bytes, _, error) = encoding_rs::SHIFT_JIS.encode(&text);
+            if !error && bytes.len() == 2 {
+                records.push([bytes[0], bytes[1], 0]);
+                self.last_labels.push(text);
+            }
+            if records.len() == 10 {
+                break;
+            }
+        }
+        self.classifications += 1;
+        Ok(Some((index, records)))
+    }
+}
+
 pub enum Auxiliary {
     Absent {
         request: [u8; 32],
@@ -64,7 +158,8 @@ pub enum Auxiliary {
         sample_uploads: u64,
         completed_strokes: u64,
         last_samples: Vec<[u16; 2]>,
-        results: CandidateResults,
+        results: Box<CandidateResults>,
+        recognition: Box<Recognition>,
     },
 }
 impl Auxiliary {
@@ -86,8 +181,19 @@ impl Auxiliary {
             sample_uploads: 0,
             completed_strokes: 0,
             last_samples: vec![],
-            results: CandidateResults::default(),
+            results: Box::default(),
+            recognition: Box::default(),
         }
+    }
+    pub fn configure_recognizer(&mut self, model: Option<Arc<Model>>) -> Result<(), String> {
+        let Self::Control { recognition, .. } = self else {
+            return Err("recognizer requires auxiliary candidate".into());
+        };
+        **recognition = Recognition {
+            model,
+            ..Recognition::default()
+        };
+        Ok(())
     }
     /// Supply an opaque type-1 result from a controller fixture or replay.
     /// Native FF463 and DD4DF assign four query indices; DD511 accepts 0..10
@@ -160,9 +266,10 @@ impl Auxiliary {
                 completed_strokes,
                 last_samples,
                 results,
+                recognition,
                 ..
             } => {
-                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples,"result_fixture_ready":results.ready,"result_fixture_indices":results.pages.keys().collect::<Vec<_>>() })
+                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples,"result_fixture_ready":results.ready,"result_fixture_indices":results.pages.keys().collect::<Vec<_>>(),"recognizer_loaded":recognition.model.is_some(),"recognition_canvas":[recognition.width,recognition.height],"classifications":recognition.classifications,"recognized_labels":recognition.last_labels })
             }
         }
     }
@@ -222,6 +329,10 @@ impl Auxiliary {
             // FE DD3AE/DD3BD drives FD, delay, 02, delay. Control bit1 feedback
             // and reset cancellation remain explicit controller hypotheses.
             0x8a01 if matches!(value, 2 | 0xfd) => {
+                let model = match self {
+                    Self::Control { recognition, .. } => recognition.model.clone(),
+                    _ => None,
+                };
                 let period = match self {
                     Self::Control { clock, .. } => clock.period,
                     Self::Absent { .. } => None,
@@ -231,6 +342,7 @@ impl Auxiliary {
                 } else {
                     *self = Self::control();
                     self.configure_sample_period(period)?;
+                    self.configure_recognizer(model)?;
                 }
                 let enabled = match self {
                     Self::Absent { enabled, .. } | Self::Control { enabled, .. } => enabled,
@@ -282,6 +394,7 @@ impl Auxiliary {
                     completed_strokes,
                     last_samples,
                     results,
+                    recognition,
                     ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
@@ -302,6 +415,14 @@ impl Auxiliary {
                         // start. Candidate-result IRQ/data remain unresolved.
                         engine.start_packet(request, cycle, 2, None, false)?;
                         *completed_strokes += 1;
+                        if let Some((index, records)) = recognition.finish()? {
+                            if results.ready || results.pages.contains_key(&index) {
+                                return Err("recognizer result would replace pending page".into());
+                            }
+                            results.pages.insert(index, records);
+                            results.ready = true;
+                            results.irq_sent = false;
+                        }
                         return Ok(());
                     }
                     // FE:DBEBD..DBF20 uploads one to seven converted coordinate
@@ -322,6 +443,7 @@ impl Auxiliary {
                                 ]
                             })
                             .collect();
+                        recognition.upload(last_samples)?;
                         return Ok(());
                     }
                     // FE DD77B..DD7B3 sends two-byte controls; DD55E sends
@@ -345,7 +467,15 @@ impl Auxiliary {
                     ) {
                         return Err(format!("unrecovered PV-F1 auxiliary command {command:04X}"));
                     }
-                    engine.start(request, cycle)
+                    engine.start(request, cycle)?;
+                    if command == 0x03fe {
+                        recognition.width = u16::from_le_bytes([request[2], request[3]]);
+                        recognition.height = u16::from_le_bytes([request[4], request[5]]);
+                        recognition.active = None;
+                        recognition.strokes.clear();
+                        recognition.in_stroke = false;
+                    }
+                    Ok(())
                 }
             },
             0x8a03 if value == 0xbf => match self {

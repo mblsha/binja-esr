@@ -257,6 +257,13 @@ class Hardware:
             raise ValueError("RTC calendar requires an explicit board candidate")
         self.calendar_clock.configure(period)
 
+    def configure_recognizer(self, data):
+        from pce500.handwriting import Model
+
+        if self.auxiliary is None:
+            raise ValueError("requires an auxiliary candidate")
+        self.auxiliary.configure_recognizer(None if data is None else Model(data))
+
     def external_irq(self):
         if self.auxiliary:
             if self.auxiliary.advance(self.cycle):

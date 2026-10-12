@@ -35,6 +35,81 @@ class Auxiliary:
         self.completed_strokes = 0
         self.result_ready, self.result_irq_sent = False, False
         self.result_pages, self.result_response = {}, None
+        self.recognizer = None
+        self.recognition_width, self.recognition_height = 0, 0
+        self.recognition_active, self.recognition_in_stroke = None, False
+        self.recognition_strokes = {}
+        self.classifications, self.recognized_labels = 0, []
+
+    def configure_recognizer(self, model):
+        if not self.control:
+            raise ValueError("recognizer requires auxiliary candidate")
+        self.recognizer = model
+        self.recognition_active, self.recognition_in_stroke = None, False
+        self.recognition_strokes = {}
+        self.recognition_width, self.recognition_height = 0, 0
+        self.classifications, self.recognized_labels = 0, []
+
+    def recognition_upload(self, samples):
+        if self.recognizer is None:
+            return
+        for x, y in samples:
+            if x == 0x8000 and y < 4:
+                self.recognition_active, self.recognition_in_stroke = y, False
+            elif x == 0xFFFF and y == 0xFFFF:
+                self.recognition_in_stroke = False
+            elif x < 0x8000 and y < 0x8000:
+                if self.recognition_active is None:
+                    raise ValueError("recognizer sample without start marker")
+                strokes = self.recognition_strokes.setdefault(
+                    self.recognition_active, []
+                )
+                if not self.recognition_in_stroke:
+                    strokes.append([])
+                    self.recognition_in_stroke = True
+                if len(strokes) > 64:
+                    raise ValueError("too many recognition strokes")
+                stroke = strokes[-1]
+                if len(stroke) >= 16384:
+                    raise ValueError("too many recognition points")
+                if not stroke or stroke[-1] != [float(x), float(y)]:
+                    stroke.append([float(x), float(y)])
+            else:
+                raise ValueError(f"unrecovered recognition marker{x:04X}/{y:04X}")
+
+    def recognition_finish(self):
+        if self.recognizer is None:
+            return
+        index = self.recognition_active
+        if index is None:
+            raise ValueError("recognizer finish without character")
+        self.recognition_active, self.recognition_in_stroke = None, False
+        if index not in self.recognition_strokes:
+            raise ValueError("recognizer finish without ink")
+        strokes = self.recognition_strokes.pop(index)
+        labels = self.recognizer.classify(
+            strokes,
+            self.recognition_width,
+            self.recognition_height,
+            len(self.recognizer.classes),
+        )
+        records, self.recognized_labels = [], []
+        for label, _ in labels:
+            if len(label) != 1:
+                continue
+            if 0x21 <= ord(label) <= 0x7E:
+                label = chr(ord(label) + 0xFEE0)
+            try:
+                encoded = label.encode("cp932")
+            except UnicodeEncodeError:
+                continue
+            if len(encoded) == 2:
+                records.append(encoded + b"\0")
+                self.recognized_labels.append(label)
+            if len(records) == 10:
+                break
+        self.classifications += 1
+        self.supply_candidate_result_fixture(index, records)
 
     def supply_candidate_result_fixture(self, index, candidates):
         """Opaque controller replay, without interpreting or recognizing strokes."""
@@ -92,6 +167,10 @@ class Auxiliary:
                 last_uploaded_samples=self.last_samples,
                 result_fixture_ready=self.result_ready,
                 result_fixture_indices=sorted(self.result_pages),
+                recognizer_loaded=self.recognizer is not None,
+                recognition_canvas=[self.recognition_width, self.recognition_height],
+                classifications=self.classifications,
+                recognized_labels=self.recognized_labels,
             )
         return result
 
@@ -138,10 +217,12 @@ class Auxiliary:
 
     def write(self, address, value, cycle):
         if address == 0x8A01 and value in (2, 0xFD):
+            model = self.recognizer
             period = self.clock.period
             self.__init__(self.control)
             if self.control:
                 self.configure_sample_period(period)
+                self.configure_recognizer(model)
             self.enabled = value == 2
         elif 0x8A20 <= address <= 0x8A3F:
             offset = address - 0x8A20
@@ -171,6 +252,7 @@ class Auxiliary:
                 if command == 0x00FC:
                     self.engine.start_packet(self.request, cycle, 2, None, False)
                     self.completed_strokes += 1
+                    self.recognition_finish()
                     return
                 count = self.request[1]
                 if self.request[0] == 0xFF and 1 <= count <= 7:
@@ -185,6 +267,7 @@ class Auxiliary:
                         ]
                         for i in range(2, 2 + 4 * count, 4)
                     ]
+                    self.recognition_upload(self.last_samples)
                     return
                 if command not in (
                     0x03FC,
@@ -203,6 +286,13 @@ class Auxiliary:
                         f"unrecovered PV-F1 auxiliary command {command:04X}"
                     )
                 self.engine.start(self.request, cycle)
+                if command == 0x03FE:
+                    self.recognition_width = int.from_bytes(self.request[2:4], "little")
+                    self.recognition_height = int.from_bytes(
+                        self.request[4:6], "little"
+                    )
+                    self.recognition_active, self.recognition_in_stroke = None, False
+                    self.recognition_strokes.clear()
             else:
                 self.starts += 1
         elif address == 0x8A03 and value == 0xBF:

@@ -12,6 +12,8 @@ pub mod generated_key_input;
 mod interrupt_codec;
 pub mod iq7000;
 pub mod iq7000_annunciators;
+#[cfg(feature = "pi3000")]
+pub mod handwriting;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_capture;
