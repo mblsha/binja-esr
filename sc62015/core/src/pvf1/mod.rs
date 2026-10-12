@@ -610,6 +610,22 @@ impl CoreRuntime {
         h.halt_main_timer_candidate = enabled;
         Ok(())
     }
+    /// Attach a portable stroke inference model without changing the firmware.
+    pub fn configure_pvf1_recognizer(&mut self, bytes: Option<&[u8]>) -> Result<(), String> {
+        let model = bytes
+            .map(crate::handwriting::Model::from_bytes)
+            .transpose()?
+            .map(Arc::new);
+        self.pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap()
+            .auxiliary
+            .as_mut()
+            .ok_or("requires an auxiliary candidate")?
+            .configure_recognizer(model)
+    }
     /// Explicit controller result replay; no recognizer is installed by default.
     pub fn supply_pvf1_controller_result_fixture(
         &mut self,

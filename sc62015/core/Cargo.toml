@@ -16,6 +16,7 @@ sha2 = { version = "0.10", optional = true }
 crc32fast = "1.4"
 flate2 = "1.0"
 tiny-skia = { version = "0.12", default-features = false, features = ["std"] }
+encoding_rs = { version = "=0.8.35", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
 
 [target.'cfg(unix)'.dev-dependencies]
@@ -37,7 +38,7 @@ default = ["cli", "perfetto", "snapshot", "oz9600"]
 oz9600 = ["json-compat", "dep:sha2"]
 pa9500 = ["oz9600"]
 pi3000 = ["pa9500"]
-pvf1 = ["pi3000"]
+pvf1 = ["pi3000", "dep:encoding_rs"]
 json-compat = ["dep:serde_json"]
 llama-tests = ["json-compat", "perfetto"]
 cli = ["json-compat", "oz9600", "dep:chrono", "dep:clap", "dep:crossterm", "dep:sha2"]
