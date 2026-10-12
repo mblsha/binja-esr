@@ -78,16 +78,17 @@ class LcdController:
             if not self.registers[3] & mask or not self.permits_write(px, py):
                 continue
             index = py * STORAGE_WIDTH + px
-            destination, source = self.pixels[index], int(bool(value & mask))
+            destination = self.pixels[index]
+            source = int(bool(value & mask)) ^ ((self.registers[8] >> 2) & 1)
             combined = (
                 source,
                 destination ^ source,
-                destination | source,
+                destination & source,
                 # Scrapbook live mode 3 matches the saved software OR stroke.
-                # Mode 2 remains an unqualified hypothesis.
+                # Physical AA/3C results establish AND and source inversion.
                 destination | source,
             )[self.registers[8] & 3]
-            self.pixels[index] = combined ^ ((self.registers[8] >> 2) & 1)
+            self.pixels[index] = combined
 
     def increment_axis(self, coordinate, nibble):
         if not nibble:

@@ -4,8 +4,8 @@
 //! Register names and timing are still being qualified. These operations cover
 //! Pixel streams, masked blocks, independent read/write coordinates, and
 //! the one-byte read pipeline used by F73A2/F767B. SET (0), XOR (1) and
-//! Scrapbook's OR (3) follow firmware behavior. Mode 2 and inversion of the
-//! combined result remain hypotheses requiring silicon qualification.
+//! OR (3) follow firmware behavior. Physical LH1553F measurements establish
+//! AND (2) and bit-2 source inversion for a vertical eight-pixel group.
 //! Sixteen window descriptors and register readback are checked against the
 //! F0 diagnostic loops. Ordinary writes clip to inclusive signed window bounds;
 //! the Y-end bit-9 bypass, read clipping, and reset geometry are provisional.
@@ -149,23 +149,22 @@ impl LcdController {
             let (px, py) = self.bit_location(x, y, bit);
             if self.registers[3] & mask != 0 && self.permits_write(px, py) {
                 let destination = &mut self.pixels[py * STORAGE_WIDTH + px];
-                let source = u8::from(value & mask != 0);
+                let source = u8::from(value & mask != 0) ^ ((self.registers[8] >> 2) & 1);
                 let combined = match self.registers[8] & 3 {
                     0 => source,
                     1 => *destination ^ source,
-                    2 => *destination | source,
+                    2 => *destination & source,
                     // Scrapbook issues live mode 3 at its native line entry,
                     // then ORs the same stroke into its saved software bitmap.
                     // AND hid live strokes until a later SET bitmap redraw.
                     3 => *destination | source,
                     _ => unreachable!("two-bit raster operation"),
                 };
-                // Calendar's F6E79 solid pattern uses mode 1 over an existing
-                // date: XOR preserves inverse glyphs. Notebook's F7157 uses
-                // mode 5 with zero data to complement its existing title.
-                // Mode 2 retains its unqualified OR hypothesis. Bit-2 result
-                // inversion still needs physical-controller qualification.
-                *destination = combined ^ ((self.registers[8] >> 2) & 1);
+                // Physical AA-destination/3C-source cases distinguish
+                // mode 2 (28), inverted AND (82), and inverted OR (EB).
+                // Invert the source before the Boolean operation, rather
+                // than complementing the combined destination afterward.
+                *destination = combined;
             }
         }
     }
@@ -324,6 +323,31 @@ impl LcdController {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_vertical_raster_modes_match_aa_destination_3c_source() {
+        // Physical OZ-9600/LH1553F, 13 Oct 2026: each baseline AA was
+        // read back before applying source 3C. Modes 2/6/7 distinguish
+        // AND from OR and source inversion from result inversion.
+        let observed = [0x3c, 0x96, 0x28, 0xbe, 0xc3, 0x69, 0x82, 0xeb];
+        for (mode, expected) in observed.into_iter().enumerate() {
+            let mut lcd = LcdController::default();
+            lcd.write(31, 2).unwrap(); // Component fixture: full-area bypass.
+            lcd.write(3, 255).unwrap();
+            lcd.write(16, 48).unwrap();
+            lcd.write(18, 88).unwrap();
+            lcd.write(20, 48).unwrap();
+            lcd.write(22, 88).unwrap();
+            lcd.write(8, 0x80).unwrap();
+            lcd.write(2, 0xaa).unwrap();
+            lcd.read(2, 0).unwrap(); // Prime the read latch.
+            assert_eq!(lcd.read(2, 0).unwrap(), 0xaa);
+            lcd.write(8, 0x80 | mode as u8).unwrap();
+            lcd.write(2, 0x3c).unwrap();
+            lcd.read(2, 0).unwrap();
+            assert_eq!(lcd.read(2, 0).unwrap(), expected, "mode {mode}");
+        }
+    }
 
     #[test]
     fn scrapbook_mode_three_adds_stroke_without_erasing_existing_ink() {
