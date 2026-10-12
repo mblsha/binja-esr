@@ -24,6 +24,7 @@ class Hardware:
         self.banks, self.profile = banks, profile
         self.selector, self.cycle, self.fault = 7, 0, None
         self.gate, self.gpio = bytearray(64), bytearray(18)
+        self.pixel_expansion = 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
         self.startup = bytearray(3)
@@ -43,6 +44,8 @@ class Hardware:
             return self.scratch[address]
         if address == 0x4021:
             return self.selector
+        if address in (0x401E, 0x401F):
+            return (self.pixel_expansion >> (8 * (address - 0x401E))) & 255
         if 0x4000 <= address <= 0x403F:
             return self.gate[address - 0x4000]
         if 0x8000 <= address <= 0x801F:
@@ -93,6 +96,12 @@ class Hardware:
                 self.scratch[address] = value
             elif address == 0x4021:
                 self.selector = value
+            elif address == 0x401E:
+                # Native F2CDA/F2CFA request a doubled packed pixel column.
+                self.gate[0x1E] = value
+                self.pixel_expansion = sum(
+                    3 << (2 * bit) for bit in range(8) if value & (1 << bit)
+                )
             elif 0x4000 <= address <= 0x403F:
                 self.gate[address - 0x4000] = value
             elif 0x8000 <= address <= 0x801F:

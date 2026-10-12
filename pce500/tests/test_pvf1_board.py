@@ -7,6 +7,23 @@ from pce500.pvf1.compatibility import entered_legacy
 from pce500.pvf1.hardware import Hardware
 
 
+@pytest.mark.parametrize(
+    "value, expanded", [(0, 0), (255, 65535), (129, 49155), (90, 13260)]
+)
+def test_font_pixel_expansion_is_little_endian_and_peeks_do_not_advance(
+    value, expanded
+):
+    board = Hardware({})
+    board.write(0x401D, 0xA5)
+    board.write(0x4020, 0x5A)
+    board.write(0x401E, value)
+    for _ in range(3):
+        assert board.peek(0x401E) == board.read_mutated(0x401E) == expanded & 255
+        assert board.peek(0x401F) == board.read_mutated(0x401F) == expanded >> 8
+    assert board.peek(0x401D) == 0xA5 and board.peek(0x4020) == 0x5A
+    assert board.selector == 7 and board.fault is None
+
+
 def test_adc_peeks_hold_conversion_and_gpio_feedback_is_model_specific():
     board = Hardware({}, "control-candidate")
     board.set_raw_contact(403, 601, True)
@@ -52,7 +69,10 @@ def test_auxiliary_controls_have_exact_lengths_and_never_supply_query_stubs():
     assert board.peek(0x8A40) is None
 
 
-@pytest.mark.parametrize("data", [b"", b"PIROM01\0\0\0\0\0", b"PVROM01\0\0\0\0\0", b"PVROM01\0\xff\xff\xff\xff"])
+@pytest.mark.parametrize(
+    "data",
+    [b"", b"PIROM01\0\0\0\0\0", b"PVROM01\0\0\0\0\0", b"PVROM01\0\xff\xff\xff\xff"],
+)
 def test_bundle_rejects_wrong_model_and_unbounded_or_empty_lengths(data):
     with pytest.raises(ValueError):
         parse_bundle(data)
