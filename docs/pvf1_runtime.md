@@ -125,3 +125,21 @@ The standalone `pce500` CLI accepts `--pvf1-retained PATH` and
 `pvf1` build feature. It preserves PV-F1 factory ownership of reset, card
 mapping and first-HALT timer initialization. Calendar time progression,
 alarm wake and handwriting recognition remain incomplete.
+
+## Advancing calendar candidate
+
+Firmware now advances the RTC calendar at a nominal 1,024,000 scheduler units
+per second, including HALT/OFF idle. The separate A2 source stays at 512,000.
+Strict is disabled; ControlCandidate opts in through
+`configure_pvf1_calendar_candidate(Some(period))`, or disables with `None`.
+Zero rejects without changing phase. The model freezes calendar phase during
+HOLD and skips invalid/uninitialized dates without synthesizing a date or
+replaying skipped time. Reports expose phase, seconds and held/skipped units.
+
+Native PV-F1 FC getters establish the shared packed year/month/day/hour/minute/
+second encoding. Public IOCS device 0A reads/writes the five mapped RTC bytes
+with its own HOLD protocol. A retained unmodified-ROM boot crosses midnight,
+and the native Typewriter save/restart/reopen regression still passes with
+progression enabled. Cyclic/deadline matching, HOLD freeze and the oscillator
+rate remain candidates; normal UI clock-setting and alarm/ON behavior need
+further foreground checks. This is not hardware timing qualification.
