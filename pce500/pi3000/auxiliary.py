@@ -5,6 +5,7 @@ class Auxiliary:
     def __init__(self):
         self.written, self.ready_at, self.complete = 0, None, False
         self.response_byte = None
+        self.acknowledgment_required = False
         self.capture_active = False
         self.accepted = []
         self.accepted_count = 0
@@ -35,25 +36,44 @@ class Auxiliary:
             raise ValueError(
                 f"unimplemented PI auxiliary command {header:04X}, written mask {self.written:08X}"
             )
-        if self.written != (1 << request_bytes) - 1:
-            count = {2: "two", 3: "three", 8: "eight"}[request_bytes]
-            raise ValueError(
-                f"PI auxiliary control requires exactly {count} written bytes"
-            )
-        self.written = 0
-        self.response_byte = None if header == 0x03FC else 1
+        self.start_packet(
+            request, cycle, request_bytes, None if header == 0x03FC else 1, True
+        )
         if header == 0x03FC:
             self.capture_active = True
         if header == 0x05FE:
             self.capture_active = False
+
+    def start_packet(
+        self, request, cycle, request_bytes, response, acknowledgment_required
+    ):
+        """Transport only; model callers own command and payload contracts."""
+        if self.ready_at is not None or self.complete:
+            raise ValueError(
+                "PI auxiliary start before prior completion acknowledgment"
+            )
+        if not 2 <= request_bytes <= 32:
+            raise ValueError("auxiliary packet length must be 2..32")
+        if self.written != (1 << request_bytes) - 1:
+            count = {2: "two", 3: "three", 8: "eight"}.get(request_bytes)
+            if count is None:
+                raise ValueError(
+                    f"auxiliary packet requires exactly {request_bytes} written bytes"
+                )
+            raise ValueError(
+                f"PI auxiliary control requires exactly {count} written bytes"
+            )
+        self.written = 0
+        self.response_byte = response
+        self.acknowledgment_required = acknowledgment_required
         self.ready_at = cycle + 32
         self.accepted_count += 1
         if len(self.accepted) < 256:
-            self.accepted.append(header)
+            self.accepted.append(int.from_bytes(request[:2], "little"))
 
     def advance(self, cycle):
         if self.ready_at is not None and cycle >= self.ready_at:
-            self.ready_at, self.complete = None, True
+            self.ready_at, self.complete = None, self.acknowledgment_required
 
     def status(self):
         return 2 | (0x80 if self.ready_at is not None else 0x40 if self.complete else 0)
