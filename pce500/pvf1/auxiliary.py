@@ -31,6 +31,8 @@ class Auxiliary:
         self.enabled, self.starts = True, 0
         self.engine = ControlEngine() if control else None
         self.clock = CaptureClock()
+        self.sample_uploads, self.last_samples = 0, []
+        self.completed_strokes = 0
 
     def configure_sample_period(self, period):
         if period is not None and (not isinstance(period, int) or period <= 0):
@@ -55,6 +57,9 @@ class Auxiliary:
                 sample_period_candidate=self.clock.period,
                 sample_ready=self.clock.ready,
                 sample_events=self.clock.events,
+                sample_uploads=self.sample_uploads,
+                completed_strokes=self.completed_strokes,
+                last_uploaded_samples=self.last_samples,
             )
         return result
 
@@ -102,6 +107,24 @@ class Auxiliary:
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
+                if command == 0x00FC:
+                    self.engine.start_packet(self.request, cycle, 2, None, False)
+                    self.completed_strokes += 1
+                    return
+                count = self.request[1]
+                if self.request[0] == 0xFF and 1 <= count <= 7:
+                    self.engine.start_packet(
+                        self.request, cycle, 2 + 4 * count, None, False
+                    )
+                    self.sample_uploads += 1
+                    self.last_samples = [
+                        [
+                            int.from_bytes(self.request[i : i + 2], "little"),
+                            int.from_bytes(self.request[i + 2 : i + 4], "little"),
+                        ]
+                        for i in range(2, 2 + 4 * count, 4)
+                    ]
+                    return
                 if command not in (
                     0x03FC,
                     0x05FE,
