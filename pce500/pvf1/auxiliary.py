@@ -44,10 +44,11 @@ class Auxiliary:
     def configure_recognizer(self, model):
         if not self.control:
             raise ValueError("recognizer requires auxiliary candidate")
+        if self.engine.capture_active:
+            raise ValueError("Leave the handwriting editor before changing the model")
         self.recognizer = model
         self.recognition_active, self.recognition_in_stroke = None, False
         self.recognition_strokes = {}
-        self.recognition_width, self.recognition_height = 0, 0
         self.classifications, self.recognized_labels = 0, []
 
     def recognition_upload(self, samples):

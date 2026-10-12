@@ -123,6 +123,12 @@
 	let ozReplayStatus = '';
 	let piBackupError = '';
 	let piBackupStatus = '';
+	let pvHandwritingModel = new Uint8Array();
+	let pvHandwritingName = '';
+	let pvHandwritingError = '';
+	let pvHandwritingBusy = false;
+	let pvBackupStatus = '';
+	let pvBackupError = '';
 	let running = false;
 	let soundEnabled = false;
 	let soundBusy = false;
@@ -1121,6 +1127,7 @@
 						model,
 						generation,
 						...(model === 'oz-9600' ? { ozProfile, retained, ...(savedSession ? { session: savedSession } : {}) } : {}),
+						...(model === 'pv-f1' ? { pvHandwritingModel: pvHandwritingModel.slice() } : {}),
 						...(model === 'pa-9500'
 							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice(), paRetained }
 							: {}),
@@ -1139,6 +1146,7 @@
 				} else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
+				if (model === 'pv-f1' && pvHandwritingModel.length) emu.configure_pvf1_recognizer(pvHandwritingModel);
 				fallbackInputs.clear();
 				resetFallbackSerial();
 				refreshAllNow();
@@ -1509,6 +1517,33 @@
 		setTimeout(() => pumpRender(id), delayMs);
 	}
 
+	async function onSelectPvHandwriting(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !romLoaded || loadingRom || pvHandwritingBusy) return;
+		const generation = romLoadGeneration;
+		pvHandwritingBusy = true;
+		pvHandwritingError = '';
+		try {
+			if (!(await stop())) throw new Error('Pause was not acknowledged; model was not changed');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (generation !== romLoadGeneration || romModel !== 'pv-f1') return;
+			if (!bytes.length) throw new Error('Empty handwriting model');
+			if (worker) {
+				const copy = bytes.slice();
+				await workerCall('pv_recognizer', { bytes: copy, generation }, [copy.buffer]);
+			} else emulator.configure_pvf1_recognizer(bytes);
+			if (generation !== romLoadGeneration) return;
+			pvHandwritingModel = bytes;
+			pvHandwritingName = file.name;
+		} catch (error) {
+			if (generation === romLoadGeneration) pvHandwritingError = String(error);
+		} finally {
+			pvHandwritingBusy = false;
+		}
+	}
+
 	async function onSelectRom(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
@@ -1832,6 +1867,53 @@
 			lastError = String(error);
 		}
 	}
+	async function exportPvBackup() {
+		if (!romLoaded || romModel !== 'pv-f1' || !(await stop())) return;
+		try {
+			const bytes = worker
+				? await workerCall('pv_retained_export', { generation: romLoadGeneration })
+				: emulator.export_pvf1_retained();
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pv-f1.pvram');
+			pvBackupError = '';
+			pvBackupStatus = 'Backup saved';
+		} catch (error) {
+			pvBackupError = String(error);
+		}
+	}
+	async function importPvBackup(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !romLoaded || romModel !== 'pv-f1' || loadingRom || !(await stop())) return;
+		const generation = romLoadGeneration;
+		loadingRom = true;
+		try {
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (generation !== romLoadGeneration) return;
+			if (worker) {
+				const model = pvHandwritingModel.slice();
+				await workerCall('pv_retained_restore', { bytes, model, generation, nextGeneration: generation + 1 }, [
+					bytes.buffer,
+					model.buffer,
+				]);
+			} else {
+				emulator.restore_pvf1_retained(bytes, pvHandwritingModel);
+				fallbackInputs.clear();
+				fallbackTablet.discard();
+			}
+			if (generation !== romLoadGeneration) return;
+			romLoadGeneration = generation + 1;
+			pvBackupError = '';
+			pvBackupStatus = `Restored ${file.name}; Resume to boot from saved records`;
+			releaseAllPhysicalHeldCodes();
+			refreshAllNow();
+		} catch (error) {
+			if (generation === romLoadGeneration) pvBackupError = String(error);
+		} finally {
+			loadingRom = false;
+		}
+	}
+
 	async function exportPiBackup() {
 		if (!romLoaded || romModel !== 'pi-3000' || !(await stop())) return;
 		try {
@@ -2528,6 +2610,29 @@
 			{#if piBackupError}<p class="error" role="alert" data-testid="pi-backup-error">{piBackupError}</p>{/if}
 		</section>
 	{/if}
+	{#if romModel === 'pv-f1'}
+		<section class="serial-panel" aria-label="Saved records" data-testid="pv-saved-records">
+			<button
+				data-testid="pv-backup-export"
+				on:click={exportPvBackup}
+				disabled={!romLoaded || loadingRom || functionRunnerBusy || stepBusy || !!controlPending}>Save backup</button
+			>
+			<label
+				>Restore backup <input
+					type="file"
+					accept=".pvram,.bin"
+					data-testid="pv-backup-file"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy || stepBusy || !!controlPending}
+					on:change={importPvBackup}
+				/></label
+			>
+			<p class="hint">
+				Restoring starts a fresh paused organizer with saved RAM/RTC and the selected handwriting model.
+			</p>
+			{#if pvBackupStatus}<p role="status">{pvBackupStatus}</p>{/if}
+			{#if pvBackupError}<p class="error" role="alert">{pvBackupError}</p>{/if}
+		</section>
+	{/if}
 	{#if romModel === 'oz-9600'}
 		<section class="serial-panel" aria-label="Saved records" data-testid="oz-saved-records">
 			<label
@@ -2740,6 +2845,32 @@
 				</label>
 			</div>
 		</header>
+
+		{#if romModel === 'pv-f1'}
+			<section aria-label="PV-F1 handwriting">
+				<label
+					>Handwriting model:
+					<input
+						type="file"
+						accept=".model,.bin"
+						data-testid="pv-handwriting-model"
+						disabled={!romLoaded ||
+							loadingRom ||
+							pvHandwritingBusy ||
+							stepBusy ||
+							functionRunnerBusy ||
+							Boolean(controlPending)}
+						on:change={onSelectPvHandwriting}
+					/>
+				</label>
+				<p class="hint">
+					{pvHandwritingName
+						? `Loaded ${pvHandwritingName}; retained for ROM reloads in this session.`
+						: 'Load a Zinnia version-1 model to recognize pen strokes.'} Loading pauses the emulator; Resume to continue.
+				</p>
+				{#if pvHandwritingError}<p role="alert">{pvHandwritingError}</p>{/if}
+			</section>
+		{/if}
 
 		{#if romModel === 'pa-9500'}
 			<section aria-label="PA configuration" data-testid="pa-configuration">
