@@ -215,6 +215,7 @@ const tabletInputs = new TabletInputs(
 				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
 	() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 	() => (romModel === 'pv-f1' ? 50_000 : 0),
+	() => (romModel === 'pv-f1' ? 20_000 : 0),
 );
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
