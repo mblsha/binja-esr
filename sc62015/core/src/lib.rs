@@ -3,6 +3,7 @@
 // PY_SOURCE: pce500/oz9600/profile.py
 // PY_SOURCE: pce500/oz9600/audio.py
 // PY_SOURCE: pce500/pvf1/interrupts.py
+// PY_SOURCE: pce500/pvf1/rtc_clock.py:alarm_wake_level
 
 pub mod async_driver;
 pub mod bus_trace;
@@ -686,6 +687,8 @@ pub struct CoreRuntime {
     pub(crate) pvf1_irq_imr_only_candidate: bool,
     #[cfg(feature = "pvf1")]
     pub(crate) pvf1_on_input_live_candidate: bool,
+    #[cfg(feature = "pvf1")]
+    pub(crate) pvf1_alarm_wake_candidate: bool,
     #[cfg(feature = "pa9500")]
     pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
     #[cfg(feature = "oz9600")]
@@ -747,6 +750,8 @@ impl CoreRuntime {
             pvf1_irq_imr_only_candidate: false,
             #[cfg(feature = "pvf1")]
             pvf1_on_input_live_candidate: false,
+            #[cfg(feature = "pvf1")]
+            pvf1_alarm_wake_candidate: false,
             #[cfg(feature = "pa9500")]
             pa9500_compatibility: None,
             #[cfg(feature = "oz9600")]
@@ -1058,7 +1063,14 @@ impl CoreRuntime {
     }
 
     fn effective_onk_level(&self) -> bool {
-        self.onk_level || self.iq7000_alarm_wake_level()
+        #[cfg(feature = "pvf1")]
+        let pvf1_alarm = self.pvf1_alarm_wake_candidate
+            && self.pvf1_hardware.as_ref().is_some_and(|hardware| {
+                crate::pvf1::alarm_wake_level(&hardware.lock().unwrap().rtc)
+            });
+        #[cfg(not(feature = "pvf1"))]
+        let pvf1_alarm = false;
+        self.onk_level || self.iq7000_alarm_wake_level() || pvf1_alarm
     }
 
     // PY_SOURCE: pce500/pa9500/bootstrap.py:on_irq_should_reassert
