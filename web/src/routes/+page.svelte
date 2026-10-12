@@ -264,6 +264,7 @@
 					? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
 					: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
 		() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
+		() => (romModel === 'pv-f1' ? 50_000 : 0),
 	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
