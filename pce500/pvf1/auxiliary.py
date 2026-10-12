@@ -33,6 +33,36 @@ class Auxiliary:
         self.clock = CaptureClock()
         self.sample_uploads, self.last_samples = 0, []
         self.completed_strokes = 0
+        self.result_ready, self.result_irq_sent = False, False
+        self.result_pages, self.result_response = {}, None
+
+    def supply_candidate_result_fixture(self, index, candidates):
+        """Opaque controller replay, without interpreting or recognizing strokes."""
+        if not 0 <= index < 4 or len(candidates) > 10:
+            raise ValueError("PV-F1 result requires index 0..3 and at most 10 records")
+        page = [bytes(record) for record in candidates]
+        if any(len(record) != 3 for record in page):
+            raise ValueError("PV-F1 candidate records must be three bytes")
+        if not self.control:
+            raise ValueError(
+                "controller result fixture requires the auxiliary candidate"
+            )
+        if self.result_ready or index in self.result_pages:
+            raise ValueError("PV-F1 result fixture would replace an unconsumed result")
+        self.result_pages[index] = page
+        self.result_ready, self.result_irq_sent = True, False
+
+    def take_result_irq_edge(self):
+        if (
+            self.control
+            and self.enabled
+            and self.controls[0] & 0x40
+            and self.result_ready
+            and not self.result_irq_sent
+        ):
+            self.result_irq_sent = True
+            return True
+        return False
 
     def configure_sample_period(self, period):
         if period is not None and (not isinstance(period, int) or period <= 0):
@@ -60,6 +90,8 @@ class Auxiliary:
                 sample_uploads=self.sample_uploads,
                 completed_strokes=self.completed_strokes,
                 last_uploaded_samples=self.last_samples,
+                result_fixture_ready=self.result_ready,
+                result_fixture_indices=sorted(self.result_pages),
             )
         return result
 
@@ -70,7 +102,23 @@ class Auxiliary:
         if address == 0x8A04:
             return self.controls[0]
         if address == 0x8A05 and self.control:
-            return 0x80 if self.clock.ready else 0
+            return (0x80 if self.clock.ready else 0) | (
+                0x40 if self.result_ready else 0
+            )
+        if address == 0x8A09 and self.control:
+            return int(self.result_ready)
+        if (
+            0x8A41 <= address <= 0x8A5F
+            and self.engine
+            and self.engine.status() & 0x40
+            and self.result_response is not None
+        ):
+            offset = address - 0x8A41
+            return (
+                self.result_response[offset]
+                if offset < len(self.result_response)
+                else None
+            )
         if address in (0x8A05, 0x8A09):
             return 0
         if address == 0x8A40 and self.engine:
@@ -104,9 +152,22 @@ class Auxiliary:
             self.controls[address - 0x8A06] = value
             if address == 0x8A07 and value & 0x80 == 0:
                 self.clock.ready, self.clock.next = False, None
+            if address == 0x8A08 and value & 0x40 == 0:
+                self.result_ready, self.result_irq_sent = False, False
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
+                if command == 0x02FC:
+                    index = self.request[2]
+                    if index not in self.result_pages:
+                        raise ValueError(
+                            f"PV-F1 query index {index} has no controller result fixture"
+                        )
+                    page = self.result_pages[index]
+                    self.engine.start_packet(self.request, cycle, 3, None, True)
+                    self.result_response = bytes([len(page)]) + b"".join(page)
+                    del self.result_pages[index]
+                    return
                 if command == 0x00FC:
                     self.engine.start_packet(self.request, cycle, 2, None, False)
                     self.completed_strokes += 1
@@ -147,6 +208,7 @@ class Auxiliary:
         elif address == 0x8A03 and value == 0xBF:
             if self.engine:
                 self.engine.acknowledge(value)
+                self.result_response = None
         else:
             raise ValueError(
                 f"unrecovered PV-F1 auxiliary write {address:05X}={value:02X}"
