@@ -231,6 +231,10 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     pvf1_retained_out: Option<PathBuf>,
 
+    /// Portable PV-F1 stroke recognition model loaded before the first ROM boundary.
+    #[arg(long, value_name = "PATH")]
+    pvf1_handwriting_model: Option<PathBuf>,
+
     /// Verified OZ-707 ROM; opts into the provisional logical card view.
     #[arg(long, value_name = "PATH", requires = "oz9600_card_sram")]
     oz9600_card_rom: Option<PathBuf>,
@@ -5042,6 +5046,10 @@ fn run_core_runtime_path(
     if let Some(path) = &args.pvf1_retained {
         runtime.restore_pvf1_retained_state(&fs::read(path)?)?;
     }
+    #[cfg(feature = "pvf1")]
+    if let Some(path) = &args.pvf1_handwriting_model {
+        runtime.configure_pvf1_recognizer(Some(&fs::read(path)?))?;
+    }
     if args.model == DeviceModel::Oz9600 {
         if let Some(path) = &args.oz9600_retained {
             runtime.restore_oz9600_retained_state(&fs::read(path)?)?;
@@ -5212,10 +5220,12 @@ fn run_core_runtime_path(
 
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
-    if (args.pvf1_retained.is_some() || args.pvf1_retained_out.is_some())
+    if (args.pvf1_retained.is_some()
+        || args.pvf1_retained_out.is_some()
+        || args.pvf1_handwriting_model.is_some())
         && args.model != DeviceModel::PvF1
     {
-        return Err("--pvf1-retained* options require --model pv-f1".into());
+        return Err("--pvf1-* options require --model pv-f1".into());
     }
     if args.model == DeviceModel::PvF1 {
         if !matches!(args.runtime, RuntimeEngine::Core) {

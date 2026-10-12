@@ -186,11 +186,21 @@ impl Auxiliary {
         }
     }
     pub fn configure_recognizer(&mut self, model: Option<Arc<Model>>) -> Result<(), String> {
-        let Self::Control { recognition, .. } = self else {
+        let Self::Control {
+            recognition,
+            engine,
+            ..
+        } = self
+        else {
             return Err("recognizer requires auxiliary candidate".into());
         };
+        if engine.capture_active {
+            return Err("Leave the handwriting editor before changing the model".into());
+        }
         **recognition = Recognition {
             model,
+            width: recognition.width,
+            height: recognition.height,
             ..Recognition::default()
         };
         Ok(())
@@ -504,6 +514,29 @@ mod tests {
             a.write(0x8a20 + i as u32, b, cycle).unwrap();
         }
         a.write(0x8a02, 0x80, cycle).unwrap();
+    }
+
+    #[test]
+    fn changing_host_model_preserves_native_geometry_but_reset_clears_it() {
+        let mut a = Auxiliary::control();
+        if let Auxiliary::Control { recognition, .. } = &mut a {
+            recognition.width = 138;
+            recognition.height = 222;
+            recognition.active = Some(1);
+        }
+        a.configure_recognizer(None).unwrap();
+        assert_eq!(a.snapshot()["recognition_canvas"], json!([138, 222]));
+        if let Auxiliary::Control { recognition, .. } = &a {
+            assert_eq!(recognition.active, None);
+        }
+        a.write(0x8a01, 2, 0).unwrap();
+        assert_eq!(a.snapshot()["recognition_canvas"], json!([0, 0]));
+        if let Auxiliary::Control { engine, .. } = &mut a {
+            engine.capture_active = true;
+        }
+        let before = a.snapshot();
+        assert!(a.configure_recognizer(None).is_err());
+        assert_eq!(a.snapshot(), before);
     }
 
     #[test]
