@@ -50,6 +50,7 @@ class Hardware:
             raise ValueError("unknown PV-F1 profile")
         self.banks, self.profile = banks, profile
         self.irq_imr_only_candidate = profile == "firmware"
+        self.on_input_live_candidate = profile == "firmware"
         self.cpu_options = {
             "block_transfer_policy": "independent"
             if profile == "strict"

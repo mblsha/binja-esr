@@ -87,7 +87,7 @@ WASM and browser receipts. All 39 LCD IOCS slots have a static inventory and
 all 31 non-error commands have successful focused native cases. These cases
 do not qualify every context, raster mode, font, codec or error branch.
 Remaining work includes broader applications, auxiliary-mode input, RTC clock
-setting/alarms, held-ON behavior and PV-F1 card/serial routing. No physical LCD or timing qualification
+setting/alarms and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
 
 ## Native saved-entry wait and RTC A2 candidate
@@ -157,8 +157,21 @@ A normal physical matrix contact at column0/row7 reaches the acquired system41
 power routine and its OFF instruction. CPU execution stops while RTC time
 continues. Releasing that contact and briefly pressing ON resumes the native
 calendar, RTC callbacks and saved-entry Modify operation. The private Rust
-suite includes this flow and all25 cases pass. The matrix contact's physical
-key label and electrical timing remain unverified. Longer ON holds can leave
-the native abort flag set and stop subsequent tablet input; that separate
-foreground issue remains open. No guest flags, queues, counters or pixels are
+suite includes this flow. The matrix contact's physical
+key label and electrical timing remain unverified. No guest flags, queues, counters or pixels are
 patched to produce this result, and alarm wake is not yet qualified.
+
+Firmware also samples SSR.ONK from the live external ON contact. Native
+power execution can retain an old ON bit in SSR backing; an OR-only read
+would then report held ON after release, leaving the native abort flag set.
+The live-input candidate replaces only SSR.ONK on architectural reads and
+passive CPU peeks. It preserves other SSR bits and leaves backing and latched
+ISR.ONKI acknowledgement to the guest. Strict keeps the original policy;
+ControlCandidate can opt in through the pre-execution
+`configure_pvf1_on_input_candidate` API.
+
+The native suite now checks scalar and word input reads and OFF/ON holds of
+50,000 and150,000 boundaries. A separate1,000,000-boundary hold also resumes
+and reopens stored TEST. Firmware consumes its own abort notification after
+release; no host clearing is used. All26 native cases pass. Electrical timing,
+debounce and alarm wake remain unqualified.
