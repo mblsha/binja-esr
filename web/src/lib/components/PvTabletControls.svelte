@@ -1,12 +1,21 @@
 <script lang="ts">
 	import OzTabletSurface from './OzTabletSurface.svelte';
 	import type { TabletContact } from '../emulator/oz9600_replay';
+	import { PV_APPLICATIONS } from '../pvf1_panel';
 	export let disabled = false;
 	export let onContact: (contact: TabletContact, owner: string, cancel: boolean) => void;
 	let x = 362;
 	let y = 585;
 	$: valid = Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x <= 1023 && y >= 0 && y <= 1023;
 </script>
+
+<div class="applications" aria-label="PV-F1 applications">
+	{#each PV_APPLICATIONS as app}
+		<OzTabletSurface label={app.label} fixed={app.raw} testPrefix="pv-app" {disabled} {onContact}
+			><span>{app.label}</span></OzTabletSurface
+		>
+	{/each}
+</div>
 
 <div class="tablet" aria-label="PV-F1 tablet samples" data-testid="pv-tablet-controls">
 	<label
@@ -24,6 +33,21 @@
 </div>
 
 <style>
+	.applications {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+		margin-top: 12px;
+	}
+	.applications :global(.surface) {
+		padding: 10px;
+		border: 1px solid #84918b;
+		border-radius: 6px;
+		background: #394942;
+		color: #f2f4eb;
+		text-align: center;
+		cursor: pointer;
+	}
 	.tablet {
 		display: flex;
 		gap: 12px;
