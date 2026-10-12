@@ -2,7 +2,7 @@
 //! Physical tablet samples. ADC routing is derived from the unmodified F0
 //! firmware; coordinate calibration and electrical timing remain provisional.
 
-#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Tablet {
     pub x: u16,
     pub y: u16,
@@ -17,16 +17,48 @@ pub struct Tablet {
     sample_x_seen: bool,
     #[serde(default)]
     contact_sampled: bool,
+    #[serde(default = "default_contact_sample")]
+    contact_sample: u16,
+}
+
+fn default_contact_sample() -> u16 {
+    1023
+}
+
+impl Default for Tablet {
+    fn default() -> Self {
+        Self::with_contact_sample(1023).expect("default ten-bit contact sample")
+    }
 }
 
 impl Tablet {
     pub(super) fn validate_session(&self) -> Result<(), String> {
-        if self.x > 1023 || self.y > 1023 || self.latched_sample > 1023 {
+        if self.x > 1023 || self.y > 1023 || self.latched_sample > 1023 || self.contact_sample > 1023 {
             return Err("Invalid saved tablet state".into());
         }
         Ok(())
     }
 
+    /// Explicit model pressure hypothesis. The existing boards retain their
+    /// full-scale default; PV-F1 FE DB7F4 accepts high bytes 40..C7 instead.
+    pub fn with_contact_sample(contact_sample: u16) -> Result<Self, String> {
+        if contact_sample > 1023 {
+            return Err("contact pressure sample must be ten-bit".into());
+        }
+        Ok(Self {
+            x: 0,
+            y: 0,
+            pressed: false,
+            conversion_control: 0,
+            drive_control: 0,
+            data_reads: 0,
+            low_part_next: false,
+            latched_sample: 0,
+            sample_x_seen: false,
+            contact_sampled: false,
+            contact_sample,
+        })
+    }
     /// Raw ten-bit inputs, not LCD pixel coordinates or translated UI events.
     /// Returns a press edge for the provisional GA tablet interrupt latch.
     pub fn set_contact(&mut self, x: u16, y: u16, pressed: bool) -> Result<bool, String> {
@@ -73,10 +105,9 @@ impl Tablet {
         match (self.drive_control, self.conversion_control & 1) {
             (0xa8, 0) => self.x,
             (0x8a, 1) => self.y,
-            // The ROM's presence checks require a high byte >= C8. This
-            // binary contact source models a firm press at full scale, not
-            // measured panel pressure, switch voltages, or settling time.
-            _ => 1023,
+            // Explicit board pressure policy, independent of coordinate
+            // routing and the held two-read conversion mechanism.
+            _ => self.contact_sample,
         }
     }
 
@@ -186,5 +217,23 @@ mod tests {
         tablet.write_conversion_control(6).unwrap();
         assert_eq!(tablet.read_data().unwrap(), 0);
         assert!(tablet.set_contact(0, 1023, true).unwrap());
+    }
+    #[test]
+    fn model_pressure_keeps_coordinate_routes_and_holds_both_pressure_parts() {
+        let mut t = Tablet::with_contact_sample(513).unwrap();
+        t.set_contact(403, 601, true).unwrap();
+        t.drive_control = 0x80;
+        t.write_conversion_control(6).unwrap();
+        assert_eq!(t.peek_data(), 128);
+        assert_eq!(t.data_reads, 0);
+        assert_eq!(t.read_data().unwrap(), 128);
+        t.set_contact(404, 602, false).unwrap();
+        assert_eq!(t.read_data().unwrap(), 1);
+        t.set_contact(403, 601, true).unwrap();
+        t.drive_control = 0xa8;
+        t.write_conversion_control(6).unwrap();
+        assert_eq!(t.read_data().unwrap(), 100);
+        assert_eq!(t.read_data().unwrap(), 3);
+        assert!(Tablet::with_contact_sample(1024).is_err());
     }
 }
