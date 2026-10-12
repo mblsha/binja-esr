@@ -7,7 +7,7 @@ are reused independently of the related models' mapper and command contracts.
 from pce500.oz9600.lcd import LcdController
 from pce500.oz9600.rtc import Rtc
 from pce500.oz9600.tablet import Tablet
-from pce500.pvf1.auxiliary import Auxiliary
+from pce500.pvf1.auxiliary import Auxiliary, CAPTURE_SAMPLE_PERIOD_CANDIDATE
 from pce500.tablet_geometry import quarter_to_adc
 
 WIDTH, HEIGHT = 336, 292
@@ -66,6 +66,8 @@ class Hardware:
         self.auxiliary = (
             None if profile == "strict" else Auxiliary(profile != "absent-auxiliary")
         )
+        if profile == "firmware":
+            self.auxiliary.configure_sample_period(CAPTURE_SAMPLE_PERIOD_CANDIDATE)
         self.expansion_absent = profile != "strict"
         self.card = None
         self.tablet = None if profile == "strict" else Tablet(contact_sample=1023)
@@ -178,6 +180,8 @@ class Hardware:
         )
 
     def external_irq(self):
+        if self.auxiliary and self.auxiliary.advance(self.cycle):
+            self.gate[0x12] |= 8
         if self.tablet and self.rtc.interrupt_asserted():
             self.gate[0x12] |= 1
         return self.tablet is not None and bool(self.gate[0x12] & self.gate[0x10])
