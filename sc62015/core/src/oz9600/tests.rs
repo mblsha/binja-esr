@@ -5,6 +5,7 @@ use super::*;
 use crate::llama::state::{
     BlockTransferPolicy, ByteArithmeticSourcePolicy, IsrSoftwareWritePolicy,
 };
+use crate::RegName;
 
 fn synthetic_runtime() -> CoreRuntime {
     let mut fixed = vec![0; 0x20000];
@@ -951,4 +952,102 @@ fn physical_predecrement_and_overlap_vectors_are_device_defaults() {
         other.state.block_transfer_policy(),
         BlockTransferPolicy::Independent
     );
+}
+
+// OZ-9600 acquisitions,12 October2026: a complete following instruction retires
+// before the CPU frame, even when that instruction clears IMR or ISR.
+#[test]
+fn irq_recognition_retires_one_instruction_and_latches_cancellation() {
+    let cases: &[(&[u8], u32, u8)] = &[
+        (&[0x6c, 0x00], 0x5a12, 0x81),             // INC A
+        (&[0x8a, 0x00, 0x60, 0x00], 0xa67e, 0x81), // MV BA,[6000]
+        (&[0x30, 0xcc, 0xfb, 0x00], 0x5a11, 0x00), // MV IMR,0
+        (&[0x30, 0x71, 0xfc, 0xfe], 0x5a11, 0x81), // AND ISR,FE
+        (&[0x30, 0xcc, 0xfb, 0x81], 0x5a11, 0x81), // repeat IMR
+        (&[0x30, 0x79, 0xfc, 0x01], 0x5a11, 0x81), // repeat ISR
+    ];
+    for &(following, ba, saved_imr) in cases {
+        let mut rt = synthetic_runtime();
+        rt.configure_oz9600_profile(ExecutionProfile::ExperimentalIrqRecognition)
+            .unwrap();
+        rt.state.set_reg(RegName::S, 0x1f900);
+        rt.state.set_reg(RegName::BA, 0x5a11);
+        rt.memory.write_internal_byte(0xfb, 0x01); // MTM, IRM off
+        rt.memory.write_internal_byte(0xfc, 0x01); // MTI pending
+        rt.load_rom(&[0x7e, 0xa6], 0x6000);
+        rt.load_rom(&[0x00, 0x10, 0x0e], 0xffffa);
+        rt.load_rom(&[0x00, 0x01], 0xe1000); // NOP; RETI
+        let mut program = vec![0x30, 0xcc, 0xfb, 0x81];
+        program.extend(following);
+        program.extend([0x00; 8]);
+        rt.load_rom(&program, 0xe0000);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 0);
+        assert_eq!(rt.timer.recognized_mask, 0);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 0);
+        assert_eq!(rt.timer.recognized_mask, 1);
+        assert_eq!(rt.state.get_reg(RegName::BA), ba);
+        let resume = 0xe0004 + following.len() as u32;
+        assert_eq!(rt.state.pc(), resume);
+        let expected_f = rt.state.get_reg(RegName::F);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 1);
+        assert_eq!(rt.timer.recognized_mask, 0);
+        assert_eq!(rt.state.pc(), 0xe1001);
+        assert_eq!(rt.memory.load(0x1f8fb, 8), Some(u32::from(saved_imr)));
+        assert_eq!(rt.memory.load(0x1f8fc, 8), Some(expected_f));
+        assert_eq!(rt.memory.load(0x1f8fd, 24), Some(resume));
+        rt.step(1).unwrap();
+        assert_eq!(rt.state.pc(), resume);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x1f900);
+        assert_eq!(rt.state.get_reg(RegName::BA), ba);
+    }
+}
+
+#[test]
+fn recognized_irq_session_roundtrip_continues_and_reset_clears_latch() {
+    let make = || {
+        let mut rt = synthetic_runtime();
+        rt.configure_oz9600_profile(ExecutionProfile::ExperimentalIrqRecognition)
+            .unwrap();
+        rt.state.set_reg(RegName::S, 0x1f900);
+        rt.memory.write_internal_byte(0xfb, 0x81);
+        rt.memory.write_internal_byte(0xfc, 1);
+        rt.load_rom(&[0x30, 0xcc, 0xfb, 0x00, 0x00], 0xe0000);
+        rt.load_rom(&[0x00, 0x10, 0x0e], 0xffffa);
+        rt.load_rom(&[0x00, 0x01], 0xe1000);
+        rt
+    };
+    let mut live = make();
+    live.step(1).unwrap();
+    assert_eq!(live.timer.recognized_mask, 1);
+    assert_eq!(live.memory.read_internal_byte(0xfb), Some(0));
+    let image = live.oz9600_session_state().unwrap();
+    // Legacy readers require schema1, so they reject this before losing the latch.
+    let mut decoder = flate2::bufread::GzDecoder::new(&image[104..]);
+    let mut decoded = String::new();
+    std::io::Read::read_to_string(&mut decoder, &mut decoded).unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&decoded).unwrap();
+    assert_eq!(encoded["schema"], 2);
+    let mut ordinary = make();
+    ordinary
+        .configure_oz9600_profile(ExecutionProfile::ProvisionalV1)
+        .unwrap();
+    let before = ordinary.oz9600_session_state().unwrap();
+    assert!(ordinary.restore_oz9600_session(&image).is_err());
+    assert_eq!(ordinary.oz9600_session_state().unwrap(), before);
+    let mut restored = make();
+    restored.restore_oz9600_session(&image).unwrap();
+    assert_eq!(restored.timer.recognized_mask, 1);
+    live.step(2).unwrap();
+    restored.step(2).unwrap();
+    assert_eq!(
+        live.oz9600_session_state().unwrap(),
+        restored.oz9600_session_state().unwrap()
+    );
+    restored.timer.recognized_mask = 1;
+    restored.timer.clear_pending_for_reset();
+    assert_eq!(restored.timer.recognized_mask, 0);
+    assert!(restored.timer.recognition_delay);
 }

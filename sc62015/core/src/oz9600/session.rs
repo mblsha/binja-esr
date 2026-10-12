@@ -84,7 +84,7 @@ impl CoreRuntime {
             return Err(invalid("Session requires a healthy built-in organizer without card or diagnostic observers"));
         }
         let data = Session {
-            schema: 1,
+            schema: if self.timer.recognition_delay { 2 } else { 1 },
             metadata: self.metadata.clone(),
             state: self.state.clone(),
             timer: (*self.timer).clone(),
@@ -168,7 +168,8 @@ impl CoreRuntime {
             return Err(invalid("OZ session compression/length mismatch"));
         }
         let mut data: Session = serde_json::from_slice(&body).map_err(invalid)?;
-        if data.schema != 1
+        if !matches!(data.schema, 1 | 2)
+            || (data.schema == 2) != data.timer.recognition_delay
             || data.metadata.device_model != Some(DeviceModel::Oz9600)
             || data.external.len() != 0xe0000
             || data.internal.len() != 256
@@ -195,7 +196,8 @@ impl CoreRuntime {
             data.state
                 .set_isr_software_write_policy(IsrSoftwareWritePolicy::Replace);
         }
-        if data.state.block_transfer_policy() != self.state.block_transfer_policy()
+        if data.timer.recognition_delay != self.timer.recognition_delay
+            || data.state.block_transfer_policy() != self.state.block_transfer_policy()
             || data.state.byte_arithmetic_source_policy()
                 != self.state.byte_arithmetic_source_policy()
             || data.state.isr_software_write_policy() != self.state.isr_software_write_policy()

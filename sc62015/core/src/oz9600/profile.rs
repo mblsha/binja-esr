@@ -31,6 +31,9 @@ pub enum ExecutionProfile {
     /// V1 basis plus opt-in EXI wake from OFF, inferred from ROM masks/wake code.
     /// Physical ESR-P OFF and gate-array signal behavior remain unqualified.
     ExperimentalExternalWake,
+    /// V1 plus the 12 October software MTI/STI recognition contract.
+    /// Electrical arrival and HALT/OFF recognition windows remain hypotheses.
+    ExperimentalIrqRecognition,
 }
 
 impl CoreRuntime {
@@ -84,6 +87,7 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
                 | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
         hw.execution.diagnostic_irq_imr_only = matches!(
             profile,
@@ -91,7 +95,9 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
                 | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
+        self.timer.recognition_delay = profile == ExecutionProfile::ExperimentalIrqRecognition;
         hw.execution.diagnostic_external_off_wake =
             profile == ExecutionProfile::ExperimentalExternalWake;
         let calendar = matches!(
@@ -100,6 +106,7 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
                 | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
         let second_period = self.device_model().timer_profile().timebase_hz;
         hw.execution.diagnostic_rtc_a2_period = if calendar {
@@ -119,7 +126,9 @@ impl CoreRuntime {
             0xec,
             if (matches!(
                 profile,
-                ExecutionProfile::ProvisionalV1 | ExecutionProfile::ExperimentalExternalWake
+                ExecutionProfile::ProvisionalV1
+                    | ExecutionProfile::ExperimentalExternalWake
+                    | ExecutionProfile::ExperimentalIrqRecognition
             ) && hw.ram.iter().all(|b| *b == 0))
                 || (profile == ExecutionProfile::Experimental && !hw.retained_loaded)
             {

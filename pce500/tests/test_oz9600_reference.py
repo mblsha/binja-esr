@@ -389,3 +389,44 @@ def test_rom_tablet_mailbox_observer_is_read_only_and_pointer_bounded():
         assert not tablet_mailbox_busy(h)
     h.ram[0x3FF47:0x3FF4A] = bytes.fromhex("FF FF 01")
     assert not tablet_mailbox_busy(h)
+
+
+def test_physical_irq_recognition_latch_survives_mask_clear_and_repeated_request():
+    from pce500.oz9600.profile import IrqRecognition
+
+    ordinary = ExecutionProfile.configure("provisional-v1")
+    experimental = ExecutionProfile.configure("experimental-irq-recognition")
+    assert not ordinary.irq_recognition_delay and experimental.irq_recognition_delay
+    assert experimental.irq_imr_only and experimental.rtc_second_period == 1_024_000
+    for next_imr, next_isr in [(0, 1), (0x81, 0), (0x81, 1)]:
+        latch = IrqRecognition(enabled=True)
+        assert not latch.transfer_selected()
+        latch.recognize_before_instruction(0x81, 1)
+        # The next boundary sees the preceding instruction's completed writes.
+        latch.recognize_before_instruction(next_imr, next_isr)
+        assert latch.recognized_mask == 1 and latch.transfer_selected()
+        latch.entered_or_reset()
+        assert not latch.transfer_selected()
+    masked = IrqRecognition(enabled=True)
+    masked.recognize_before_instruction(1, 1)
+    assert not masked.transfer_selected()
+    masked.recognize_before_instruction(0x82, 2)
+    assert masked.recognized_mask == 2
+
+    priority = IrqRecognition(enabled=True)
+    priority.recognize_before_instruction(0xE0, 0x60)
+    assert priority.recognized_mask == 0x20  # Existing RX-before-EX dispatcher priority
+
+
+def test_recognized_irq_session_uses_schema_two_to_fail_closed_in_older_readers():
+    from pce500.oz9600.session import decode, encode
+
+    identity = bytes(range(64))
+    data = {"schema": 2, "timer": {"recognition_delay": True, "recognized_mask": 1}}
+    assert decode(encode(data, identity), identity) == data
+    for bad in [
+        {"schema": 1, "timer": {"recognition_delay": True}},
+        {"schema": 2, "timer": {}},
+    ]:
+        with pytest.raises(ValueError, match="policy/schema"):
+            encode(bad, identity)

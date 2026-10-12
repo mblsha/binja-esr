@@ -29,14 +29,16 @@ def decode(image: bytes, identity: bytes) -> dict:
     ):
         raise ValueError("OZ session compression/length mismatch")
     data = json.loads(body)
-    if not isinstance(data, dict) or data.get("schema") != 1:
+    if not isinstance(data, dict) or data.get("schema") not in (1, 2):
         raise ValueError("OZ session layout mismatch")
+    _check_recognition_schema(data)
     return data
 
 
 def encode(data: dict, identity: bytes) -> bytes:
-    if len(identity) != 64 or data.get("schema") != 1:
+    if len(identity) != 64 or data.get("schema") not in (1, 2):
         raise ValueError("OZ session layout mismatch")
+    _check_recognition_schema(data)
     body = json.dumps(data, separators=(",", ":"), allow_nan=False).encode()
     if len(body) > MAX_BODY:
         raise ValueError("Session exceeds decoded size limit")
@@ -45,3 +47,9 @@ def encode(data: dict, identity: bytes) -> bytes:
     if len(image) > MAX_IMAGE:
         raise ValueError("Session exceeds encoded size limit")
     return image
+
+
+def _check_recognition_schema(data: dict) -> None:
+    enabled = data.get("timer", {}).get("recognition_delay", False)
+    if (data["schema"] == 2) != bool(enabled):
+        raise ValueError("OZ session recognition policy/schema mismatch")
