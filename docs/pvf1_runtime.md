@@ -224,3 +224,25 @@ The native suite now checks scalar and word input reads and OFF/ON holds of
 and reopens stored TEST. Firmware consumes its own abort notification after
 release; no host clearing is used. All26 native cases pass. Electrical timing,
 debounce and alarm wake remain unqualified.
+
+
+## Explicit handwriting controller replay
+
+The Rust runtime exposes `supply_pvf1_controller_result_fixture(index, records)`
+for an explicit type-1 controller response. Indices 0..3 and up to ten opaque
+three-byte records follow the native FE `DD4DF`/`DD511` consumers. This API
+supplies peripheral data; the ROM owns interrupt delivery, query, copying and
+rendering. It installs no recognizer and does not interpret pen samples.
+
+Result-ready is separate from sample-ready. Native GA source 6 reaches fixed
+`FF463`; `F1A94` acknowledges it with `08A08=BF`. The candidate query then sends
+`FC,02,index`, waits for transport completion and acknowledges with `08A03=BF`.
+Indexed response bytes survive the earlier interrupt acknowledgment. Reset
+cancels pending fixture state. PI command admission remains unchanged.
+
+Standalone Rust checks cover zero, one and ten records through unmodified
+`DD511`, plus a normal Handwriting selection and native sample upload followed
+by a supplied `82,73,00` response. The native IRQ/query path displays `Ｔ` in the
+editor. This proves response transport with a fixture, not handwriting recognition.
+The default has no result provider; result type 2, multi-result sequencing,
+physical timing and stroke classification remain open.

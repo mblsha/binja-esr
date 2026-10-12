@@ -294,8 +294,14 @@ impl BoundaryDevice for Boundary {
         if let Some(aux) = &mut h.auxiliary {
             // F19F7 selects BFE06; its native FF575 callback samples the ADC.
             // F1A6D clears GA source3 and acknowledges80 through08A07=7F.
-            if aux.advance(c.cycles) {
+            let sample_edge = aux.advance(c.cycles);
+            let result_edge = aux.take_result_irq_edge();
+            if sample_edge {
                 h.gate[0x12] |= 8;
+            }
+            // Native F1A36 dispatches source6 to FF463; F1A94 writes08A08=BF.
+            if result_edge {
+                h.gate[0x12] |= 0x40;
             }
         }
         // F19A7/F19AC gate sources through pending & mask; F1AA5
@@ -603,6 +609,22 @@ impl CoreRuntime {
         }
         h.halt_main_timer_candidate = enabled;
         Ok(())
+    }
+    /// Explicit controller result replay; no recognizer is installed by default.
+    pub fn supply_pvf1_controller_result_fixture(
+        &mut self,
+        index: u8,
+        candidates: Vec<[u8; 3]>,
+    ) -> Result<(), String> {
+        self.pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap()
+            .auxiliary
+            .as_mut()
+            .ok_or("requires an explicit auxiliary candidate")?
+            .supply_candidate_result_fixture(index, candidates)
     }
     pub fn configure_pvf1_capture_clock_candidate(
         &mut self,
