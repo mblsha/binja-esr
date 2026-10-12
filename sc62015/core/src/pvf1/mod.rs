@@ -16,6 +16,7 @@ pub mod auxiliary;
 pub mod bundle;
 pub mod compatibility;
 mod lcd_view;
+mod rtc_clock;
 pub const WIDTH: usize = 336;
 pub const HEIGHT: usize = 292;
 pub const FIXED_SHA256: &str = "4ba7105476b2da9d28f10df6ff7ae41466357dd0acd3915d592de3ebde3b37a9";
@@ -34,6 +35,7 @@ pub struct Hardware {
     pixel_expansion: u16,
     pub lcd: LcdController,
     pub rtc: Rtc,
+    rtc_clock: rtc_clock::HalfSecondClock,
     pub ram: Vec<u8>,
     pub scratch: Vec<u8>,
     pub gpio: [u8; 18],
@@ -59,6 +61,17 @@ impl Hardware {
             pixel_expansion: 0,
             lcd: LcdController::with_geometry(WIDTH, HEIGHT),
             rtc: Rtc::default(),
+            rtc_clock: {
+                let mut clock = rtc_clock::HalfSecondClock::default();
+                if profile == BootstrapProfile::Firmware {
+                    // Native F1BEB/BFE15=F210A owns the A2 half-second
+                    // counter. This nominal timebase remains uncalibrated.
+                    clock
+                        .configure(Some(DeviceModel::PvF1.timer_profile().timebase_hz / 2))
+                        .expect("positive PV-F1 RTC clock candidate");
+                }
+                clock
+            },
             ram: vec![0; 0x40000],
             scratch: vec![0; 0x4000],
             gpio: [0; 18],
@@ -218,10 +231,11 @@ pub fn sync_bank(hardware: &SharedHardware, memory: &mut crate::MemoryImage) -> 
     h.mapped = Some(h.selector);
     Ok(())
 }
-struct Boundary(SharedHardware, Option<u64>);
+struct Boundary(SharedHardware, Option<u64>, u64);
 impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
+        self.2 = c.elapsed_timing_units;
         let mut h = self.0.lock().unwrap();
         if let Some(e) = &h.fault {
             return Err(CoreError::Other(e.clone()));
@@ -262,6 +276,11 @@ impl BoundaryDevice for Boundary {
     }
     fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, elapsed: u64) -> crate::Result<()> {
         let mut h = self.0.lock().unwrap();
+        if h.rtc_clock
+            .advance(c.elapsed_timing_units.wrapping_sub(self.2))
+        {
+            h.rtc.raise_causes(4, 0);
+        }
         if let Some(deadline) = self.1.take() {
             c.timer.next_mti = deadline;
             c.timer
@@ -320,7 +339,7 @@ pub fn configure(
     }
     sync_bank(&hardware, &mut rt.memory)?;
     rt.power_on_reset().map_err(|e| e.to_string())?;
-    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None)))
+    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None, 0)))
         .map_err(|e| e.to_string())?;
     if profile != BootstrapProfile::Strict {
         rt.state.set_block_transfer_policy(
@@ -420,6 +439,21 @@ impl CoreRuntime {
             .ok_or("requires an explicit auxiliary candidate")?
             .configure_sample_period(period)
     }
+    pub fn configure_pvf1_rtc_half_second_candidate(
+        &mut self,
+        period: Option<u64>,
+    ) -> Result<(), String> {
+        let mut h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if h.tablet.is_none() {
+            return Err("RTC timing requires an explicit board candidate".into());
+        }
+        h.rtc_clock.configure(period)
+    }
     pub fn pvf1_status(&self) -> Result<Value, String> {
         let h = self
             .pvf1_hardware
@@ -428,7 +462,7 @@ impl CoreRuntime {
             .lock()
             .unwrap();
         Ok(
-            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
+            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
 }
