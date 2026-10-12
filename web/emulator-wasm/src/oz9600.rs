@@ -10,7 +10,25 @@ use super::*;
 use js_sys::{Int16Array, Reflect};
 use sc62015_core::oz9600::{input::PhysicalReplay, ExecutionProfile};
 
+#[derive(Default)]
+pub(crate) struct PvF1Assets<'a> {
+    pub model: &'a [u8],
+    pub card_rom: &'a [u8],
+    pub card_sram: &'a [u8],
+}
+
 impl Sc62015Emulator {
+    pub(crate) fn pvf1_card_images(&self) -> Result<(Vec<u8>, Vec<u8>), JsValue> {
+        let hardware = self
+            .runtime
+            .pvf1_hardware()
+            .ok_or_else(|| JsValue::from_str("Requires loaded PV-F1"))?;
+        let h = hardware.lock().unwrap();
+        Ok(h.card.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |card| (card.rom().to_vec(), card.sram.clone()),
+        ))
+    }
     pub(crate) fn install_rom(
         &mut self,
         rom: &[u8],
@@ -20,15 +38,15 @@ impl Sc62015Emulator {
     ) -> Result<(), JsValue> {
         self.install_rom_checked(rom, model, profile, retained, None)
     }
-    pub(crate) fn install_rom_with_pvf1_model(
+    pub(crate) fn install_rom_with_pvf1_media(
         &mut self,
         rom: &[u8],
         model: DeviceModel,
         profile: ExecutionProfile,
         retained: &[u8],
-        handwriting_model: &[u8],
+        assets: PvF1Assets<'_>,
     ) -> Result<(), JsValue> {
-        self.install_rom_with_options(rom, model, profile, retained, None, handwriting_model)
+        self.install_rom_with_options(rom, model, profile, retained, None, assets)
     }
 
     fn install_rom_checked(
@@ -39,7 +57,7 @@ impl Sc62015Emulator {
         retained: &[u8],
         expected_battery: Option<&[u8]>,
     ) -> Result<(), JsValue> {
-        self.install_rom_with_options(rom, model, profile, retained, expected_battery, &[])
+        self.install_rom_with_options(rom, model, profile, retained, expected_battery, PvF1Assets::default())
     }
 
     fn install_rom_with_options(
@@ -49,7 +67,7 @@ impl Sc62015Emulator {
         profile: ExecutionProfile,
         retained: &[u8],
         expected_battery: Option<&[u8]>,
-        handwriting_model: &[u8],
+        assets: PvF1Assets<'_>,
     ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
         if rom.is_empty() {
@@ -72,9 +90,14 @@ impl Sc62015Emulator {
                     .restore_pvf1_retained_state(retained)
                     .map_err(|e| JsValue::from_str(&e))?;
             }
-            if !handwriting_model.is_empty() {
+            if !assets.card_rom.is_empty() || !assets.card_sram.is_empty() {
                 candidate
-                    .configure_pvf1_recognizer(Some(handwriting_model))
+                    .configure_pvf1_pa9c3_candidate(assets.card_rom, assets.card_sram)
+                    .map_err(|e| JsValue::from_str(&e))?;
+            }
+            if !assets.model.is_empty() {
+                candidate
+                    .configure_pvf1_recognizer(Some(assets.model))
                     .map_err(|e| JsValue::from_str(&e))?;
             }
         } else if model == DeviceModel::Oz9600 {

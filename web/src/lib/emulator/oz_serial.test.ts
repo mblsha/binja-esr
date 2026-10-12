@@ -1,7 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { SerialCapture, SerialDelivery, queueSerialInput, serialInput, type SerialPacket } from './oz_serial';
+import {
+	SerialCapture,
+	SerialDelivery,
+	queueSerialInput,
+	serialInput,
+	supportsSerial,
+	type SerialPacket,
+} from './oz_serial';
 
 describe('serial byte admission', () => {
+	it('exposes models with the configured register UART and leaves other profiles unchanged', () => {
+		for (const m of ['oz-9600', 'pa-9500', 'pv-f1']) expect(supportsSerial(m)).toBe(true);
+		for (const m of ['pi-3000', 'iq-7000', 'pc-e500']) expect(supportsSerial(m)).toBe(false);
+	});
 	it('preserves UTF-8, hex binary values and explicit line endings', () => {
 		expect([...serialInput('UART OK', 'text', 'crlf')]).toEqual([...new TextEncoder().encode('UART OK\r\n')]);
 		expect([...serialInput('00 0A ff 1b', 'hex', 'none')]).toEqual([0, 10, 255, 27]);
