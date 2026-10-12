@@ -90,6 +90,20 @@ normal 2 + 3 = input. Optical communication exits with C/CE. Opening an applicat
 does not qualify its complete behavior or a physical exchange. Drawing points
 reach the native saved notice; reopening that stored drawing remains unresolved.
 
+Native consumers can configure the verified PA-9C3 before execution with
+`configure_pvf1_pa9c3_candidate(rom, sram)`. The PV-F1 acquisition confirms both
+128 KiB ROM views match that card image. The adapter separates MMIO,
+external-media and main-RAM views, then mounts immutable ROM and passive card
+SRAM. The prior broad callback shadowed executable card ROM and failed scheduler
+preflight at native entry 59F94. MMIO remains quarantined from instruction fetch.
+Image, duplicate, profile and running-state guards are checked.
+
+SSR.CI (bit1) presence and SRAM aliases remain explicit wiring/mapping candidates.
+Normal PV-F1 initialization now executes the card ROM and reaches its foreground
+input screen. Card auto-run, correct card UI geometry, storage operations, serial
+transport and browser mounting remain open. This API does not inject an
+application event or start a physical capture.
+
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
 when Rust's four-millisecond host deadline expires before the first batch.
 Input holds advance only by executed scheduler boundaries. Invalid budgets,
