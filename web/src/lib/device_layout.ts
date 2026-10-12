@@ -80,13 +80,21 @@ export function deviceLayout(model: RomModel, paInput: PaInputMode = 'native'): 
 		};
 	}
 	if (model === 'pv-f1') {
-		add('ON', 24, 575, 90, 32);
-		add('FOCUS', 124, 575, 90, 32, 'Focus');
+		['ON', 'CLEAR', 'MENU', 'FUNCTION', 'PREV', 'NEXT', 'OFF', 'UP', 'LEFT', 'RIGHT', 'DOWN'].forEach((id, index) =>
+			add(
+				id,
+				24 + (index % 6) * 103,
+				575 + Math.floor(index / 6) * 40,
+				96,
+				32,
+				existing.find((key) => key.code === (id === 'ON' ? 'on' : physicalKey(model, id)))?.label ?? id,
+			),
+		);
 		return {
 			version: 1,
 			model,
 			width: 660,
-			height: 620,
+			height: 660,
 			lcd: { x: 24, y: 36, w: 612, h: (612 * 292) / 336 },
 			keys,
 			provenance: 'functional-input-layout',
