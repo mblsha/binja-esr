@@ -51,6 +51,7 @@ pub struct Hardware {
     auxiliary: Option<auxiliary::Auxiliary>,
     expansion_absent: bool,
     pub card: Option<crate::pa9500::card::Pa9c3Card>,
+    card_presence_candidate: bool,
     pub tablet: Option<crate::oz9600::tablet::Tablet>,
     halt_main_timer_candidate: bool,
     pub halt_main_timer_units: u64,
@@ -109,6 +110,7 @@ impl Hardware {
             },
             expansion_absent: profile != BootstrapProfile::Strict,
             card: None,
+            card_presence_candidate: false,
             halt_main_timer_candidate: false,
             halt_main_timer_units: 0,
             start_timers_at_first_halt_candidate: false,
@@ -249,6 +251,13 @@ impl BoundaryDevice for Boundary {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
         self.2 = c.elapsed_timing_units;
         let mut h = self.0.lock().unwrap();
+        if h.card_presence_candidate {
+            // Native card startup samples SSR.CI (bit1). This is an explicit
+            // presence-wiring candidate; no card IRQ or menu event is injected.
+            let ssr = c.memory.read_internal_byte_silent(0xff).unwrap_or(0);
+            c.memory
+                .write_internal_byte(0xff, if h.card.is_some() { ssr | 2 } else { ssr & !2 });
+        }
         if let Some(e) = &h.fault {
             return Err(CoreError::Other(e.clone()));
         }
@@ -335,30 +344,20 @@ pub fn configure(
     *rt.timer = TimerContext::new(false, 0, 0);
     rt.load_rom(fixed, 0xe0000);
     rt.memory.set_readonly_ranges(vec![(0xe0000, 0xfffff)]);
-    // One closed low bus and one high-RAM overlay. Preflight uses peek;
-    // LCD data/block ports mutate only on architectural reads.
-    {
-        let (start, end) = (0, 0xbffff);
-        let read = hardware.clone();
-        let peek = hardware.clone();
-        let write = hardware.clone();
-        rt.memory.add_overlay(MemoryOverlay {
-            start,
-            end,
-            name: "pvf1_bus".into(),
-            data: None,
-            read_only: false,
-            read_handler: Some(Box::new(move |a, pc| {
-                Some(read.lock().unwrap().read(a, pc))
-            })),
-            preflight_read_handler: Some(Box::new(move |a, _| peek.lock().unwrap().peek(a))),
-            write_handler: Some(Box::new(move |a, v, pc| {
-                write.lock().unwrap().write(a, v, pc);
-                true
-            })),
-            perfetto_thread: None,
-        });
+    // Keep MMIO, external media and passive owned RAM in separate views.
+    // A broad callback must not shadow executable immutable card ROM.
+    for (start, end, name) in [
+        (0, 0x1ffff, "pvf1_bus"),
+        (0x20000, 0x7ffff, "pvf1_expansion"),
+        (0x80000, 0xbffff, "pvf1_ram"),
+    ] {
+        add_bus_view(&mut rt, &hardware, start, end, name);
     }
+    // Boundary devices never write this RAM or change its address mapping.
+    // Native guest writes remain ordinary mutable instruction bytes.
+    rt.memory
+        .declare_passive_instruction_ram("pvf1_ram")
+        .map_err(|e| e.to_string())?;
     sync_bank(&hardware, &mut rt.memory)?;
     rt.power_on_reset().map_err(|e| e.to_string())?;
     rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None, 0)))
@@ -399,6 +398,42 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Mount verified PA-9C3 backing in an explicit PV-F1 card candidate.
+    /// ROM mirrors are acquired evidence; SRAM aliases/presence are candidates.
+    pub fn configure_pvf1_pa9c3_candidate(
+        &mut self,
+        rom: &[u8],
+        sram: &[u8],
+    ) -> Result<(), String> {
+        let hardware = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .clone();
+        let card = crate::pa9500::card::Pa9c3Card::from_images(rom, sram)?;
+        {
+            let mut h = hardware.lock().unwrap();
+            if h.tablet.is_none()
+                || h.card.is_some()
+                || h.card_presence_candidate
+                || self.instruction_count() != 0
+                || self.elapsed_timing_units() != 0
+            {
+                return Err("PV-F1 card candidate must be configured once before execution".into());
+            }
+            h.card = Some(card);
+            h.card_presence_candidate = true;
+        }
+        self.memory.remove_overlay("pvf1_expansion");
+        add_bus_view(self, &hardware, 0x20000, 0x3ffff, "pvf1_card_ram");
+        // Card backing is passive: device ticks do not write SRAM or remap it.
+        self.memory
+            .declare_passive_instruction_ram("pvf1_card_ram")
+            .map_err(|e| e.to_string())?;
+        self.memory
+            .add_rom_overlay(0x40000, &rom.repeat(2), "pvf1_card_rom");
+        Ok(())
+    }
     /// Infer a power-wake level from enabled RTC alarm sources A0/A1.
     /// This pre-execution policy does not manufacture a cause or CPU frame.
     pub fn configure_pvf1_alarm_wake_candidate(&mut self, enabled: bool) -> Result<(), String> {
@@ -578,4 +613,26 @@ impl CoreRuntime {
             json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"irq_imr_only_candidate":self.pvf1_irq_imr_only_candidate,"on_input_live_candidate":self.pvf1_on_input_live_candidate,"alarm_wake_candidate":self.pvf1_alarm_wake_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
+}
+
+fn add_bus_view(rt: &mut CoreRuntime, hardware: &SharedHardware, start: u32, end: u32, name: &str) {
+    let read = hardware.clone();
+    let peek = hardware.clone();
+    let write = hardware.clone();
+    rt.memory.add_overlay(MemoryOverlay {
+        start,
+        end,
+        name: name.into(),
+        data: None,
+        read_only: false,
+        read_handler: Some(Box::new(move |a, pc| {
+            Some(read.lock().unwrap().read(a, pc))
+        })),
+        preflight_read_handler: Some(Box::new(move |a, _| peek.lock().unwrap().peek(a))),
+        write_handler: Some(Box::new(move |a, v, pc| {
+            write.lock().unwrap().write(a, v, pc);
+            true
+        })),
+        perfetto_thread: None,
+    });
 }
