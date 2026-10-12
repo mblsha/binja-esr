@@ -72,7 +72,14 @@ impl Hardware {
                 BootstrapProfile::Strict => None,
                 BootstrapProfile::AbsentAuxiliary => Some(auxiliary::Auxiliary::absent()),
                 BootstrapProfile::ControlCandidate | BootstrapProfile::Firmware => {
-                    Some(auxiliary::Auxiliary::control())
+                    let mut aux = auxiliary::Auxiliary::control();
+                    if profile == BootstrapProfile::Firmware {
+                        aux.configure_sample_period(Some(
+                            auxiliary::CAPTURE_SAMPLE_PERIOD_CANDIDATE,
+                        ))
+                        .expect("positive PV-F1 sample clock candidate");
+                    }
+                    Some(aux)
                 }
             },
             expansion_absent: profile != BootstrapProfile::Strict,
@@ -240,7 +247,11 @@ impl BoundaryDevice for Boundary {
             && c.memory.read_internal_byte_silent(0xfe).unwrap_or(0) & 0x80 != 0)
             .then_some(c.timer.next_mti);
         if let Some(aux) = &mut h.auxiliary {
-            aux.advance(c.cycles);
+            // F19F7 selects BFE06; its native FF575 callback samples the ADC.
+            // F1A6D clears GA source3 and acknowledges80 through08A07=7F.
+            if aux.advance(c.cycles) {
+                h.gate[0x12] |= 8;
+            }
         }
         // F19A7/F19AC gate sources through pending & mask; F1AA5
         // consumes RTC mask/cause B. Opt-in profiles model that wiring.
@@ -395,6 +406,20 @@ impl CoreRuntime {
         h.halt_main_timer_candidate = enabled;
         Ok(())
     }
+    pub fn configure_pvf1_capture_clock_candidate(
+        &mut self,
+        period: Option<u64>,
+    ) -> Result<(), String> {
+        self.pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap()
+            .auxiliary
+            .as_mut()
+            .ok_or("requires an explicit auxiliary candidate")?
+            .configure_sample_period(period)
+    }
     pub fn pvf1_status(&self) -> Result<Value, String> {
         let h = self
             .pvf1_hardware
@@ -403,7 +428,7 @@ impl CoreRuntime {
             .lock()
             .unwrap();
         Ok(
-            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
+            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
 }

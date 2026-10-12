@@ -44,6 +44,15 @@ by PV-F1 firmware bytes, absent expansion reads FF, and tablet pressure is 1023.
 Timers start at the first native HALT. The main timer then advances during HALT
 only when LCC bit 7 is set, excluding OFF. These choices reproduce the bounded
 firmware path; they are not measured oscillator, peripheral or CPU contracts.
+Firmware also selects an auxiliary capture clock candidate of 4096 native
+cycles. With 03FC capture active and control 06 bit7 set, a sample-ready latch
+raises GA source 3 (08); 05 exposes 80 until 07=7F acknowledges it. Native
+FF575/FE DB508 then sample the shared ADC and build guest pen events. Control 06
+reads back through 04 as established by the acquired diagnostic. No host
+character or recognition/query reply is fabricated. The cadence and edge
+wiring remain hardware hypotheses; the runtime API can disable or vary the
+candidate. ControlCandidate retains a disabled sample clock.
+
 Direct `pvf1::configure` callers can select `Strict`, `AbsentAuxiliary` or
 `ControlCandidate` instead. A loaded PV-F1 reset requires constructing a fresh
 runtime so board state cannot survive accidentally.
@@ -59,7 +68,11 @@ The main 336×240 viewport accepts press, movement and release; the remaining
 52 controller-storage rows are excluded. Native conversion fixtures and normal
 WASM/browser clicks open New Entry and its description editor. Physical
 calibration, auxiliary capture/recognition and typing inside that editor remain
-unqualified. ON and matrix Focus are
+unqualified. The native auxiliary sample-ready route now opens Board Switch
+and Typewriter; normal calibrated contacts produce a full-width Latin TEST
+payload and the firmware's saved-data notification. Native Rust and WASM
+agree on eleven foreground frames and both observed RAM copies. Reopening
+and restart retention remain unverified. ON and matrix Focus are
 the currently verified virtual keys. There is no inferred alphabetic mapping.
 
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`

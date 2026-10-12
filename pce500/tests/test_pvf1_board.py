@@ -7,6 +7,68 @@ from pce500.pvf1.compatibility import entered_legacy
 from pce500.pvf1.hardware import Hardware
 
 
+def test_auxiliary_control_readback_matches_the_native_diagnostic():
+    board = Hardware({}, "control-candidate")
+    for value in (0xAA, 0x55):
+        board.write(0x8A06, value)
+        assert board.peek(0x8A04) == board.read_mutated(0x8A04) == value
+
+
+def test_capture_clock_is_opt_in_latched_and_acknowledged_without_query_data():
+    board = Hardware({}, "control-candidate")
+    aux = board.auxiliary
+    for i, byte in enumerate(b"\xfc\x03"):
+        board.write(0x8A20 + i, byte)
+    board.write(0x8A02, 0x80)
+    aux.advance(32)
+    board.write(0x8A03, 0xBF)
+    board.write(0x8A06, 0x80)
+    assert not aux.advance(10000) and board.peek(0x8A05) == 0
+    aux.configure_sample_period(4096)
+    assert not aux.advance(100) and not aux.advance(4195)
+    assert aux.advance(4196)
+    for _ in range(3):
+        assert board.peek(0x8A05) == 0x80 and board.peek(0x8A41) is None
+    assert not aux.advance(100000)
+    board.write(0x8A07, 0xFF)
+    assert board.peek(0x8A05) == 0x80
+    board.write(0x8A07, 0x7F)
+    assert board.peek(0x8A05) == 0 and not aux.advance(100000)
+    assert aux.advance(104096)
+    assert aux.snapshot()["sample_events"] == 2
+    # Disabling the configured candidate cancels its latch; normal controls persist.
+    aux.configure_sample_period(None)
+    assert board.peek(0x8A04) == 0x80 and board.peek(0x8A05) == 0
+    assert not aux.advance(200000)
+    aux.configure_sample_period(4096)
+    board.write(0x8A01, 0xFD)
+    board.write(0x8A01, 2)
+    assert aux.snapshot()["sample_period_candidate"] == 4096
+    assert not aux.snapshot()["capture_active"] and not aux.advance(500000)
+
+
+def test_firmware_capture_clock_asserts_only_the_native_auxiliary_gate_source():
+    board = Hardware({}, "firmware")
+    board.write(0x4010, 8)
+    for i, byte in enumerate(b"\xfc\x03"):
+        board.write(0x8A20 + i, byte)
+    board.write(0x8A02, 0x80)
+    board.write(0x8A06, 0x80)
+    assert not board.external_irq()
+    board.cycle = 4096
+    assert board.external_irq() and board.gate[0x12] == 8
+    assert board.tablet.data_reads == 0
+    board.write(0x4012, 0)
+    assert (
+        not board.external_irq()
+    )  # held ready status does not reassert a cleared edge
+    assert board.peek(0x8A05) == 0x80
+    board.write(0x8A07, 0x7F)
+    assert not board.external_irq()
+    board.cycle = 8192
+    assert board.external_irq() and board.gate[0x12] == 8
+
+
 def test_cpu_hypotheses_belong_to_explicit_pvf1_candidates():
     assert Hardware({}).cpu_options == {
         "block_transfer_policy": "independent",
