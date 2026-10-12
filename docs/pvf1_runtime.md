@@ -251,7 +251,8 @@ physical timing and stroke classification remain open.
 ## Portable handwriting inference
 
 `configure_pvf1_recognizer(Some(model_bytes))` attaches a replaceable
-Zinnia-compatible model before boot. The pure Rust shared `handwriting` module
+Zinnia-compatible model before boot or with the native capture editor closed.
+The pure Rust shared `handwriting` module
 loads version-1 sparse linear models and extracts ordered-stroke features.
 PV-F1 owns the native markers, four character slots, canvas geometry, CP932
 conversion and result transport. Reset preserves the model and clears gesture
@@ -267,8 +268,18 @@ loaded externally; its license/source and model identity belong to that data
 package. It is not embedded in the CPU or an implementation of Sharp's original
 recognizer. The default unconfigured controller still has no provider.
 
-Recognition/rendering now has a native regression. Native commit/reopen of the
-handwritten result is still unresolved, and the first tests reach the older TEST
-record after restart. Broader handwriting accuracy, Latin coverage, multiple
-character slots, type-2 notifications and frontend model provisioning remain
-open. No claim of complete handwriting or emulator functionality follows.
+Native recognition, adoption, save and fresh-boot reopen now have regressions.
+The initial persistence driver selected an older TEST record; selecting the
+second day-list row at (100,98) normally reopens the saved handwritten `い`.
+Stored TEST remains intact; storage code needed no repair.
+
+The native runner accepts `--pvf1-handwriting-model PATH`. The browser's
+Handwriting model input installs a version-1 `.model` asset while paused, keeps
+it for subsequent ROM reloads in the session and rejects replacement during
+active capture. Host model replacement preserves native canvas geometry.
+The browser also exports `.pvram` RAM/scratch/RTC backups and restores compatible
+backing with the selected model into a fresh paused runtime. ROM/bank identity,
+payload checksum and model validation complete before the old machine changes.
+Broader handwriting accuracy, Latin coverage, multiple character slots, type-2
+notifications and remaining application/card workflows stay open. Routine
+behavioral checks use standalone Rust; WASM checks only the changed bindings.

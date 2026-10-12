@@ -587,6 +587,40 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Replaceable model asset; an empty slice disables recognition. The ROM
+    /// still owns pen sampling, candidate selection, text insertion and storage.
+    pub fn configure_pvf1_recognizer(&mut self, model: &[u8]) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        self.runtime
+            .configure_pvf1_recognizer((!model.is_empty()).then_some(model))
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn export_pvf1_retained(&self) -> Result<Uint8Array, JsValue> {
+        let bytes = self
+            .runtime
+            .pvf1_retained_state()
+            .map_err(|e| JsValue::from_str(&e))?;
+        Ok(Uint8Array::from(bytes.as_slice()))
+    }
+
+    /// Validate ROM-bound backing and the optional model before replacing the
+    /// runtime. The new CPU, peripherals and pen state start fresh and paused.
+    pub fn restore_pvf1_retained(&mut self, retained: &[u8], model: &[u8]) -> Result<(), JsValue> {
+        if self.model != DeviceModel::PvF1 || retained.is_empty() {
+            return Err(JsValue::from_str(
+                "PV-F1 restore requires loaded firmware and nonempty backing",
+            ));
+        }
+        self.install_rom_with_pvf1_model(
+            &self.rom_image.clone(),
+            self.model,
+            self.oz9600_profile,
+            retained,
+            model,
+        )
+    }
+
     /// Explicit clock experiment; normal PI loads leave both candidates disabled.
     pub fn configure_pi3000_rtc_candidate(
         &mut self,

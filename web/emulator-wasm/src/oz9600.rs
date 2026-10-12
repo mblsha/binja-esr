@@ -3,6 +3,7 @@
 // PY_SOURCE: pce500/oz9600/retained.py
 // PY_SOURCE: pce500/oz9600/audio.py
 // PY_SOURCE: pce500/pi3000/retained.py
+// PY_SOURCE: pce500/pvf1/retained.py
 //! Browser model replacement is atomic; retained backing is not a CPU snapshot.
 use super::*;
 use js_sys::{Int16Array, Reflect};
@@ -15,6 +16,17 @@ impl Sc62015Emulator {
         model: DeviceModel,
         profile: ExecutionProfile,
         retained: &[u8],
+    ) -> Result<(), JsValue> {
+        self.install_rom_with_pvf1_model(rom, model, profile, retained, &[])
+    }
+
+    pub(crate) fn install_rom_with_pvf1_model(
+        &mut self,
+        rom: &[u8],
+        model: DeviceModel,
+        profile: ExecutionProfile,
+        retained: &[u8],
+        handwriting_model: &[u8],
     ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
         if rom.is_empty() {
@@ -29,6 +41,17 @@ impl Sc62015Emulator {
             if !retained.is_empty() {
                 candidate
                     .restore_pi3000_retained_state(retained)
+                    .map_err(|e| JsValue::from_str(&e))?;
+            }
+        } else if model == DeviceModel::PvF1 {
+            if !retained.is_empty() {
+                candidate
+                    .restore_pvf1_retained_state(retained)
+                    .map_err(|e| JsValue::from_str(&e))?;
+            }
+            if !handwriting_model.is_empty() {
+                candidate
+                    .configure_pvf1_recognizer(Some(handwriting_model))
                     .map_err(|e| JsValue::from_str(&e))?;
             }
         } else if model == DeviceModel::Oz9600 {

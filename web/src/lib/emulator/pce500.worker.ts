@@ -56,6 +56,17 @@ type WorkerRequest =
 			paCardSram?: Uint8Array;
 			paUart?: boolean;
 			paRetained?: Uint8Array;
+			pvHandwritingModel?: Uint8Array;
+	  }
+	| { id: number; type: 'pv_recognizer'; bytes: Uint8Array; generation: number }
+	| { id: number; type: 'pv_retained_export'; generation: number }
+	| {
+			id: number;
+			type: 'pv_retained_restore';
+			bytes: Uint8Array;
+			model: Uint8Array;
+			generation: number;
+			nextGeneration: number;
 	  }
 	| { id: number; type: 'oz_retained_export'; generation?: number }
 	| { id: number; type: 'oz_battery_identity'; bytes: Uint8Array }
@@ -772,6 +783,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				const emu = await ensureEmulator();
 				if (signal?.aborted) throw new ExecutionCancelled(0);
 				const model = msg.model ?? romModel;
+				if (msg.pvHandwritingModel?.length && model !== 'pv-f1') throw new Error('Handwriting model requires PV-F1');
 				if (model === 'oz-9600')
 					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
 				else if (model === 'pa-9500')
@@ -787,6 +799,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
 					emu.load_rom_with_model(msg.bytes, model);
+					if (model === 'pv-f1' && msg.pvHandwritingModel?.length)
+						emu.configure_pvf1_recognizer(msg.pvHandwritingModel);
 				}
 				romModel = model;
 				perfettoSymbolsPromise = null;
@@ -804,6 +818,31 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				lastLcdTextUpdateMs = 0;
 				lastLcdText = null;
 				requestFrame(true);
+				replyOk(msg.id);
+				return;
+			}
+			case 'pv_recognizer': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale PV-F1 model generation');
+				if (romModel !== 'pv-f1' || !emulator?.has_rom()) throw new Error('Requires loaded PV-F1');
+				emulator.configure_pvf1_recognizer(msg.bytes);
+				replyOk(msg.id);
+				return;
+			}
+			case 'pv_retained_export': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
+					throw new Error('Requires idle current PV-F1 generation');
+				replyOk(msg.id, emulator.export_pvf1_retained());
+				return;
+			}
+			case 'pv_retained_restore': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
+					throw new Error('Stale PV-F1 backup generation');
+				emulator.restore_pvf1_retained(msg.bytes, msg.model);
+				machineGeneration = msg.nextGeneration;
+				inputs.clear();
+				tabletInputs.discard();
+				resetSerial();
+				requestFrame(true, true);
 				replyOk(msg.id);
 				return;
 			}
@@ -1173,6 +1212,8 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'oz_retained_restore',
 			'pi_retained_restore',
 			'pi_rtc_candidate',
+			'pv_recognizer',
+			'pv_retained_restore',
 			'oz_reset',
 			'pa_reset',
 			'oz_replay',

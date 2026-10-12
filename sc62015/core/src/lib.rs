@@ -9,11 +9,11 @@ pub mod async_driver;
 pub mod bus_trace;
 pub mod device;
 pub mod generated_key_input;
+#[cfg(feature = "pi3000")]
+pub mod handwriting;
 mod interrupt_codec;
 pub mod iq7000;
 pub mod iq7000_annunciators;
-#[cfg(feature = "pi3000")]
-pub mod handwriting;
 pub mod keyboard;
 pub mod lcd;
 pub mod lcd_capture;
