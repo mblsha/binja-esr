@@ -72,8 +72,14 @@ unqualified. The native auxiliary sample-ready route now opens Board Switch
 and Typewriter; normal calibrated contacts produce a full-width Latin TEST
 payload and the firmware's saved-data notification. Native Rust and WASM
 agree on eleven foreground frames and both observed RAM copies. Native ROM
-checks also reopen the entry after a retained-state restart. ON and matrix Focus are
-the currently verified virtual keys. There is no inferred alphabetic mapping.
+checks also reopen the entry after a retained-state restart. The panel exposes
+ON and the ten contacts in the ROM's two-column keyboard table. The former
+"Focus" contact1 is C/CE: raw0C translates to001A and dismisses the native
+Daily Alarm notification. Menu6 opens Edit; C/CE closes it. Contacts9/13 move
+to the previous/next calendar month; Function5 followed by C/CE opens date
+entry. The panel uses Escape for C/CE, F7 for Menu, F9 for Function, Page Up/Down
+for previous/next and Pause for OFF. These are functional aliases; physical
+case geometry/legends remain unverified. There is no inferred alphabetic mapping.
 
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
 when Rust's four-millisecond host deadline expires before the first batch.
@@ -92,7 +98,8 @@ displays the ROM notification and rearms the next day. Firmware infers an
 ON/power-wake level only from enabled RTC alarm causesA0/A1, excluding periodic
 sources. Strict preserves its prior policy; ControlCandidate has a guarded
 pre-execution `configure_pvf1_alarm_wake_candidate` comparison. Physical wiring
-and timing are unverified. C/CE notification dismissal remains an input gap.
+and timing are unverified. C/CE notification dismissal and normal Menu return
+have focused native Rust checks and a UI-map-to-WASM smoke.
 Remaining work includes broader applications, auxiliary-mode input, remaining
 clock/date/city paths and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
@@ -117,6 +124,7 @@ alarm/power wiring, HOLD behavior and recognition remain unqualified. Calendar
 progression and retained restart have subsequent native Rust checks. The RTC
 component and Python logical reference are separate
 from the firmware-specific mapper and auxiliary protocol.
+
 ## Retained restart backing
 
 `CoreRuntime::pvf1_retained_state()` exports the board's main RAM, scratch RAM

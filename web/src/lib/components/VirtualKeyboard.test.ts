@@ -7,6 +7,26 @@ import { virtualKeysForModel } from '../keymap';
 describe('VirtualKeyboard', () => {
 	afterEach(() => cleanup());
 
+	it('delivers PV-F1 C/CE and Menu contacts from the functional panel', async () => {
+		const onPress = vi.fn();
+		const onRelease = vi.fn();
+		const { getByRole } = render(VirtualKeyboard, {
+			model: 'pv-f1',
+			layout: deviceLayout('pv-f1'),
+			onPress,
+			onRelease,
+		});
+		for (const [label, contact] of [
+			['C/CE', 1],
+			['MENU', 6],
+		] as const) {
+			await fireEvent.pointerDown(getByRole('button', { name: label }));
+			await fireEvent.pointerUp(window);
+			expect(onPress).toHaveBeenLastCalledWith(contact, expect.any(String));
+			expect(onRelease).toHaveBeenLastCalledWith(contact, expect.any(String), false);
+		}
+	});
+
 	it('distinguishes host-held keys from contacts delivered to Rust', () => {
 		const { getByTestId } = render(VirtualKeyboard, {
 			model: 'iq-7000',
