@@ -15,6 +15,7 @@ export const PV_APPLICATIONS = [
 	{ label: 'Optical communication', raw: [980, 640] },
 	{ label: 'Add-in Software', raw: [900, 770] },
 	{ label: 'Action Planner', raw: [900, 900] },
+	{ label: 'Search', raw: [980, 900] },
 ] as const;
 // Displayed controller storage is336x292; the firmware main viewport ends239.
 // Conversion to ADC belongs to the worker's live native calibration, not UI.
