@@ -377,6 +377,10 @@ pub fn configure(
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
     rt.pvf1_hardware = Some(hardware.clone());
     if profile == BootstrapProfile::Firmware {
+        // Native power/context paths can leave the diagnostic handler monitor
+        // active without RETI. Guest IMR.IRM and source masks still own every
+        // hardware IRQ admission; retain monitor gating in Strict profiles.
+        rt.pvf1_irq_imr_only_candidate = true;
         rt.memory.write_internal_byte(0xec, 0xd0);
         hardware.lock().unwrap().halt_main_timer_candidate = true;
         hardware
@@ -388,6 +392,23 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// An explicit ROM-derived candidate: IMR.IRM and source masks own IRQ
+    /// admission even when firmware abandons a monitored interrupt frame.
+    pub fn configure_pvf1_irq_imr_candidate(&mut self, enabled: bool) -> Result<(), String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if h.tablet.is_none() || self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err(
+                "PV-F1 IRQ policy requires an explicit board candidate before execution".into(),
+            );
+        }
+        self.pvf1_irq_imr_only_candidate = enabled;
+        Ok(())
+    }
     /// Export restart backing without executing instructions or mapped reads.
     pub fn pvf1_retained_state(&self) -> Result<Vec<u8>, String> {
         let h = self
@@ -511,7 +532,7 @@ impl CoreRuntime {
             .lock()
             .unwrap();
         Ok(
-            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
+            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"irq_imr_only_candidate":self.pvf1_irq_imr_only_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
 }
