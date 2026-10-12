@@ -18,6 +18,7 @@ pub mod compatibility;
 mod lcd_view;
 pub mod retained;
 mod rtc_clock;
+pub(crate) use rtc_clock::alarm_wake_level;
 pub const WIDTH: usize = 336;
 pub const HEIGHT: usize = 292;
 pub const FIXED_SHA256: &str = "4ba7105476b2da9d28f10df6ff7ae41466357dd0acd3915d592de3ebde3b37a9";
@@ -384,6 +385,9 @@ pub fn configure(
         // SSR backing can retain an old sampled ONK bit. The external
         // contact owns that input on every read.
         rt.pvf1_on_input_live_candidate = true;
+        // FAB25..FABCB retains the enabled A0/A1 alarm causes across OFF.
+        // Their inferred power level uses the ordinary CPU wake/ROM path.
+        rt.pvf1_alarm_wake_candidate = true;
         rt.memory.write_internal_byte(0xec, 0xd0);
         hardware.lock().unwrap().halt_main_timer_candidate = true;
         hardware
@@ -395,6 +399,24 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Infer a power-wake level from enabled RTC alarm sources A0/A1.
+    /// This pre-execution policy does not manufacture a cause or CPU frame.
+    pub fn configure_pvf1_alarm_wake_candidate(&mut self, enabled: bool) -> Result<(), String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if h.tablet.is_none() || self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err(
+                "PV-F1 alarm wake policy requires an explicit board candidate before execution"
+                    .into(),
+            );
+        }
+        self.pvf1_alarm_wake_candidate = enabled;
+        Ok(())
+    }
     /// Sample the live ON input instead of a retained SSR backing bit. This
     /// candidate changes reads only; it does not clear guest ISR/abort state.
     pub fn configure_pvf1_on_input_candidate(&mut self, enabled: bool) -> Result<(), String> {
@@ -553,7 +575,7 @@ impl CoreRuntime {
             .lock()
             .unwrap();
         Ok(
-            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"irq_imr_only_candidate":self.pvf1_irq_imr_only_candidate,"on_input_live_candidate":self.pvf1_on_input_live_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
+            json!({"model":"pv-f1","pc":self.get_reg("PC"),"instructions":self.instruction_count(),"cycles":self.cycle_count(),"halted":self.state.is_halted(),"selector":h.selector,"gate":h.gate.to_vec(),"lcd_geometry":[WIDTH,HEIGHT],"lcd_counters":[h.lcd.data_reads,h.lcd.data_writes,h.lcd.block_operations],"timer_enabled":self.timer.enabled,"halt_clock_candidate":h.halt_main_timer_candidate,"irq_imr_only_candidate":self.pvf1_irq_imr_only_candidate,"on_input_live_candidate":self.pvf1_on_input_live_candidate,"alarm_wake_candidate":self.pvf1_alarm_wake_candidate,"auxiliary":h.auxiliary.as_ref().map(|a|a.snapshot()),"rtc":h.rtc.registers(),"rtc_clock":h.rtc_clock.snapshot(),"calendar_clock":h.calendar_clock.snapshot(),"legacy":self.pvf1_compatibility.as_ref().map(|c|c.status()),"physical_verified":false}),
         )
     }
 }

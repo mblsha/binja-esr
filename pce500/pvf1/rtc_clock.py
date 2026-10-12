@@ -82,3 +82,8 @@ class HalfSecondClock:
             "cause_A": 4,
             "physical_verified": False,
         }
+
+
+def alarm_wake_level(rtc):
+    """Candidate OFF wake from enabled A0/A1; periodic sources never wake."""
+    return bool(rtc.read(8) & rtc.read(10) & 3)
