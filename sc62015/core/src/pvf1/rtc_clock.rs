@@ -1,8 +1,15 @@
 // PY_SOURCE: pce500/pvf1/rtc_clock.py
 //! PV-F1 RTC A2 clock candidate. Native F1BEB dispatches BFE15=F210A;
 //! that callback owns BFE32. The oscillator period is uncalibrated.
-use crate::oz9600::rtc::{Rtc, CONTROL, HOLD};
+use crate::oz9600::rtc::{Rtc, CAUSE_A, CONTROL, HOLD, MASK_A};
 use serde_json::{json, Value};
+
+/// Native FAB25..FABCB retains alarm sources A0/A1 across OFF, while
+/// discarding periodic causes. Their connection to power wake is a candidate;
+/// periodic A2..A6 never assert this inferred ON/power level.
+pub fn alarm_wake_level(rtc: &Rtc) -> bool {
+    rtc.read(MASK_A) & rtc.read(CAUSE_A) & 3 != 0
+}
 
 /// Calendar progression at a nominal model period. PV-F1 FC C01F6/C0228
 /// copies these packed fields; CA856..CA8D4 independently extract them.
