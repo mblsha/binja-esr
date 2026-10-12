@@ -81,6 +81,15 @@ entry. The panel uses Escape for C/CE, F7 for Menu, F9 for Function, Page Up/Dow
 for previous/next and Pause for OFF. These are functional aliases; physical
 case geometry/legends remain unverified. There is no inferred alphabetic mapping.
 
+The functional application panel sends normal raw pen contacts through the
+ROM's two-column region table beyond the main LCD. It exposes Calendar,
+Schedule, Telephone, Business cards, Action List, Memo, World Clock, Drawing,
+Calculator, Optical communication, Add-in Software and Action Planner. Native
+Rust checks open these routes; a focused calculator consumer displays 5 after
+normal 2 + 3 = input. Optical communication exits with C/CE. Opening an application
+does not qualify its complete behavior or a physical exchange. Drawing points
+reach the native saved notice; reopening that stored drawing remains unresolved.
+
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
 when Rust's four-millisecond host deadline expires before the first batch.
 Input holds advance only by executed scheduler boundaries. Invalid budgets,
