@@ -71,8 +71,8 @@ calibration, auxiliary capture/recognition and typing inside that editor remain
 unqualified. The native auxiliary sample-ready route now opens Board Switch
 and Typewriter; normal calibrated contacts produce a full-width Latin TEST
 payload and the firmware's saved-data notification. Native Rust and WASM
-agree on eleven foreground frames and both observed RAM copies. Reopening
-and restart retention remain unverified. ON and matrix Focus are
+agree on eleven foreground frames and both observed RAM copies. Native ROM
+checks also reopen the entry after a retained-state restart. ON and matrix Focus are
 the currently verified virtual keys. There is no inferred alphabetic mapping.
 
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
@@ -86,8 +86,8 @@ The acquisition and private proof repository retain the source-bound native,
 WASM and browser receipts. All 39 LCD IOCS slots have a static inventory and
 all 31 non-error commands have successful focused native cases. These cases
 do not qualify every context, raster mode, font, codec or error branch.
-Remaining work includes broader applications, auxiliary-mode input, RTC, power,
-retention and PV-F1 card/serial routing. No physical LCD or timing qualification
+Remaining work includes broader applications, auxiliary-mode input, RTC clock
+setting/alarms, held-ON behavior and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
 
 ## Native saved-entry wait and RTC A2 candidate
@@ -105,9 +105,10 @@ The unmodified ROM now stores Typewriter text, leaves the notification for its
 day view, and reconstructs the editor text through Modify. Native and WASM
 consumers agree on the reopened frame and full-width Latin CP932 bytes. A
 slower divider trial reaches the same stored text with a different cursor
-phase. This is software qualification of a nominal timing candidate; calendar
-progression, alarm/power wiring, HOLD behavior, restart retention and recognition
-remain unqualified. The RTC component and Python logical reference are separate
+phase. This is software qualification of a nominal timing candidate; physical
+alarm/power wiring, HOLD behavior and recognition remain unqualified. Calendar
+progression and retained restart have subsequent native Rust checks. The RTC
+component and Python logical reference are separate
 from the firmware-specific mapper and auxiliary protocol.
 ## Retained restart backing
 
@@ -123,7 +124,7 @@ after a fresh restart through normal calendar/Modify contacts.
 The standalone `pce500` CLI accepts `--pvf1-retained PATH` and
 `--pvf1-retained-out PATH` with `--model pv-f1 --rom verified.pvrom` and the
 `pvf1` build feature. It preserves PV-F1 factory ownership of reset, card
-mapping and first-HALT timer initialization. Calendar time progression,
+mapping and first-HALT timer initialization. Normal UI clock setting,
 alarm wake and handwriting recognition remain incomplete.
 
 ## Advancing calendar candidate
@@ -143,3 +144,21 @@ and the native Typewriter save/restart/reopen regression still passes with
 progression enabled. Cyclic/deadline matching, HOLD freeze and the oscillator
 rate remain candidates; normal UI clock-setting and alarm/ON behavior need
 further foreground checks. This is not hardware timing qualification.
+
+## Native OFF/ON resume
+
+The Firmware profile admits hardware IRQs using the guest IMR master and source
+masks even when the diagnostic interrupt monitor remains active after a native
+context change. Strict retains monitor gating; an explicit pre-execution
+`configure_pvf1_irq_imr_candidate` switch supports bounded comparisons. This
+change is specific to PV-F1 and does not alter the related model policies.
+
+A normal physical matrix contact at column0/row7 reaches the acquired system41
+power routine and its OFF instruction. CPU execution stops while RTC time
+continues. Releasing that contact and briefly pressing ON resumes the native
+calendar, RTC callbacks and saved-entry Modify operation. The private Rust
+suite includes this flow and all25 cases pass. The matrix contact's physical
+key label and electrical timing remain unverified. Longer ON holds can leave
+the native abort flag set and stop subsequent tablet input; that separate
+foreground issue remains open. No guest flags, queues, counters or pixels are
+patched to produce this result, and alarm wake is not yet qualified.
