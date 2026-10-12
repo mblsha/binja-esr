@@ -40,7 +40,8 @@ impl Tablet {
     }
 
     /// Explicit model pressure hypothesis. The existing boards retain their
-    /// full-scale default; PV-F1 FE DB7F4 accepts high bytes 40..C7 instead.
+    /// full-scale default. Coordinate routing and held conversion are shared;
+    /// voltage interpretation and pressure thresholds belong to each board.
     pub fn with_contact_sample(contact_sample: u16) -> Result<Self, String> {
         if contact_sample > 1023 {
             return Err("contact pressure sample must be ten-bit".into());
