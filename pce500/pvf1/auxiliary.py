@@ -1,4 +1,4 @@
-"""PV-F1 confirmed two-byte controls over the shared handshake engine."""
+"""PV-F1 confirmed status controls over the shared handshake engine."""
 
 from pce500.pi3000.auxiliary import Auxiliary as ControlEngine
 
@@ -48,6 +48,8 @@ class Auxiliary:
                     0x00F9,
                     0x01F9,
                     0x02F9,
+                    0x04FE,
+                    0x03FE,
                 ):
                     raise ValueError(
                         f"unrecovered PV-F1 auxiliary command {command:04X}"
