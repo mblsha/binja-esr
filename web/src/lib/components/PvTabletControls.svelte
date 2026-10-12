@@ -20,7 +20,7 @@
 			>Hold pen down</OzTabletSurface
 		>
 	</div>
-	<p>Raw tablet samples, 0–1023. Screen calibration is still being checked.</p>
+	<p>Click the LCD or use raw tablet samples, 0–1023. Pen capture is experimental.</p>
 </div>
 
 <style>

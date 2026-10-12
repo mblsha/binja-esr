@@ -36,6 +36,14 @@ type DebugOptions = {
 type WorkerRequest =
 	| {
 			id: number;
+			type: 'pv_lcd';
+			contact: import('../pvf1_panel').LcdTabletContact;
+			owner: string;
+			cancel?: boolean;
+			generation: number;
+	  }
+	| {
+			id: number;
 			type: 'load_rom';
 			bytes: Uint8Array;
 			romSource?: string | null;
@@ -895,6 +903,18 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				syncAudio(true);
 				resetSerial();
 				requestFrame(true, true);
+				replyOk(msg.id);
+				return;
+			}
+			case 'pv_lcd': {
+				if (!emulator || romModel !== 'pv-f1') throw new Error('LCD tablet model mismatch');
+				if (msg.generation !== machineGeneration) throw new Error('Stale tablet generation');
+				if (ozReplayActive) throw new Error('Physical replay owns input until it finishes or Stop is acknowledged');
+				const { pixel_x: x, pixel_y: y, pressed } = msg.contact;
+				if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= 336 || y < 0 || y >= 240)
+					throw new Error('LCD contact outside PV-F1 main window');
+				const [raw_x, raw_y] = pressed ? emulator.pvf1_lcd_to_raw(x, y) : [0, 0];
+				tabletInputs.set(msg.owner, { raw_x, raw_y, pressed }, msg.cancel);
 				replyOk(msg.id);
 				return;
 			}

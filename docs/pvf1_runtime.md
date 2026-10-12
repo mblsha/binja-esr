@@ -15,7 +15,7 @@ port gating and GPIO feedback. It reuses the shared LCD controller, RTC and
 tablet ADC with explicit PV-F1 geometry and pressure parameters. It also
 implements the PV-F1 packed-pixel expansion port at `0401E–0401F`:
 one written byte returns sixteen little-endian bits with each pixel doubled.
-The acquired generated-font routine uses it to produce a16×32 glyph from8×16
+The acquired generated-font routine uses it to produce a 16×32 glyph from 8×16
 source data; native Rust and Python getter/render consumers check that result.
 The mapped-port operation is checked in WASM, separately from native IOCS proof.
 The shared ESR-H CPU uses a separate PV-F1 bus and gateway coordinator. Native and legacy
@@ -38,7 +38,8 @@ view. The factory validates a replacement before altering the running machine.
 Equal logical banks remain separate views with acquisition provenance.
 
 The factory's `Firmware` profile enables explicit candidates: BP starts at D0,
-LCD save/restore uses coupled predecrement, auxiliary control replies are gated
+LCD save/restore uses coupled predecrement, byte arithmetic truncates wide sources
+with the explicit `LowByte` candidate, auxiliary control replies are gated
 by PV-F1 firmware bytes, absent expansion reads FF, and tablet pressure is 1023.
 Timers start at the first native HALT. The main timer then advances during HALT
 only when LCC bit 7 is set, excluding OFF. These choices reproduce the bounded
@@ -53,7 +54,12 @@ Serve a locally generated bundle using `PVF1_ROM_PATH`, then select `pv-f1` or
 open `/?model=pv-f1`. The browser starts paused. Resume, send a raw tablet contact
 at X=362/Y=585 to accept the fresh-memory initialization dialog, then use
 X=940/Y=64 to open the schedule view. The raw controls accept ten-bit samples;
-screen-coordinate calibration is still unresolved. ON and matrix Focus are
+LCD clicks read live IOCS calibration coefficients and sample each pixel center.
+The main 336×240 viewport accepts press, movement and release; the remaining
+52 controller-storage rows are excluded. Native conversion fixtures and normal
+WASM/browser clicks open New Entry and its description editor. Physical
+calibration, auxiliary capture/recognition and typing inside that editor remain
+unqualified. ON and matrix Focus are
 the currently verified virtual keys. There is no inferred alphabetic mapping.
 
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
@@ -64,9 +70,9 @@ missing results and false zero-progress budget completion still fail closed.
 ## Evidence limits
 
 The acquisition and private proof repository retain the source-bound native,
-WASM and browser receipts. All39 LCD IOCS slots have a static inventory and
-all31 non-error commands have successful focused native cases. These cases
+WASM and browser receipts. All 39 LCD IOCS slots have a static inventory and
+all 31 non-error commands have successful focused native cases. These cases
 do not qualify every context, raster mode, font, codec or error branch.
-Remaining work includes broader applications, input calibration, RTC, power,
+Remaining work includes broader applications, auxiliary-mode input, RTC, power,
 retention and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.

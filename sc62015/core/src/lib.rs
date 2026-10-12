@@ -62,6 +62,7 @@ pub mod pa9500;
 pub mod pi3000;
 #[cfg(feature = "pvf1")]
 pub mod pvf1;
+pub mod tablet_geometry;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,

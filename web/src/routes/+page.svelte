@@ -1904,6 +1904,20 @@
 			fallbackStepAbort = null;
 		}
 	}
+	function lcdTabletContact(contact: import('$lib/pvf1_panel').LcdTabletContact, owner: string, cancel: boolean) {
+		if (!romLoaded || romModel !== 'pv-f1' || functionRunnerBusy) return;
+		if (worker)
+			void workerCall('pv_lcd', { contact, owner, cancel, generation: romLoadGeneration }).catch((error) => {
+				lastError = String(error);
+			});
+		else
+			try {
+				const [raw_x, raw_y] = contact.pressed ? emulator.pvf1_lcd_to_raw(contact.pixel_x, contact.pixel_y) : [0, 0];
+				fallbackTablet.set(owner, { raw_x, raw_y, pressed: contact.pressed }, cancel);
+			} catch (error) {
+				lastError = String(error);
+			}
+	}
 	function tabletContact(contact: TabletContact, owner: string, cancel: boolean) {
 		if (!romLoaded || !['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel) || functionRunnerBusy) return;
 		if (worker)
@@ -2547,6 +2561,7 @@
 				model={romModel}
 				disabled={!romLoaded || workerHealth !== 'ready' || functionRunnerBusy}
 				onTablet={tabletContact}
+				onLcdTablet={lcdTabletContact}
 				{hostKeyboardMode}
 				{paInput}
 				{physicalHighlights}
