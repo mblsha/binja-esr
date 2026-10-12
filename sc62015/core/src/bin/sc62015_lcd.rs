@@ -194,7 +194,9 @@ fn lcd_geometry(model: DeviceModel) -> (usize, usize) {
             (rows, cols)
         }
         DeviceModel::Iq7000 => (IQ7000_TEXT_ROWS, IQ7000_TEXT_COLS),
-        DeviceModel::Oz9600 | DeviceModel::Pa9500 | DeviceModel::Pi3000 => (0, 0), // Banked boards use controller pixels.
+        DeviceModel::Oz9600 | DeviceModel::Pa9500 | DeviceModel::Pi3000 | DeviceModel::PvF1 => {
+            (0, 0)
+        } // Banked boards use controller pixels.
     }
 }
 
@@ -915,6 +917,7 @@ fn default_bnida_path(model: DeviceModel) -> PathBuf {
         DeviceModel::Pa9500 => root.join("rom-analysis/pa-9500/bnida.json"),
         DeviceModel::Oz9600 => root.join("rom-analysis/oz-9600/bnida.json"),
         DeviceModel::Pi3000 => root.join("rom-analysis/pi-3000/bnida.json"),
+        DeviceModel::PvF1 => root.join("rom-analysis/pv-f1/bnida.json"),
     }
 }
 

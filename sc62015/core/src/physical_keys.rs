@@ -9,7 +9,7 @@ include!(concat!(env!("OUT_DIR"), "/physical_keys.rs"));
 
 pub fn matrix_key(model: DeviceModel, name: &str) -> Option<u8> {
     let keys = match model {
-        DeviceModel::Pi3000 => &[], // PI contacts await firmware-table recovery.
+        DeviceModel::Pi3000 | DeviceModel::PvF1 => &[], // Contacts await model-specific recovery.
         DeviceModel::Iq7000 => IQ_7000_KEYS,
         DeviceModel::Oz9600 => OZ_9600_KEYS,
         DeviceModel::Pa9500 => &[], // PA matrix legends are not yet recovered.
