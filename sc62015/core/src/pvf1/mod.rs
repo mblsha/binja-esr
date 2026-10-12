@@ -31,6 +31,7 @@ pub enum BootstrapProfile {
 pub struct Hardware {
     pub selector: u8,
     pub gate: [u8; 64],
+    pixel_expansion: u16,
     pub lcd: LcdController,
     pub rtc: Rtc,
     pub ram: Vec<u8>,
@@ -55,6 +56,7 @@ impl Hardware {
         Self {
             selector: 7,
             gate: [0; 64],
+            pixel_expansion: 0,
             lcd: LcdController::with_geometry(WIDTH, HEIGHT),
             rtc: Rtc::default(),
             ram: vec![0; 0x40000],
@@ -88,6 +90,9 @@ impl Hardware {
         match a {
             0..=0x3fff => Some(self.scratch[a as usize]),
             0x4021 => Some(self.selector),
+            // F2CDA/F2CFA write a packed column and read the little-endian
+            // sixteen-bit result. Each input pixel becomes two adjacent bits.
+            0x401e..=0x401f => Some((self.pixel_expansion >> (8 * (a - 0x401e))) as u8),
             0x4000..=0x403f => Some(self.gate[(a - 0x4000) as usize]),
             0x8000..=0x801f => Some(self.rtc.read((a - 0x8000) as usize)),
             // FC:D27B7 read/modify/writes the control latch at its write port.
@@ -140,6 +145,17 @@ impl Hardware {
         match a {
             0..=0x3fff => self.scratch[a as usize] = v,
             0x4021 => self.selector = v,
+            0x401e => {
+                self.gate[0x1e] = v;
+                self.pixel_expansion = (0..8).fold(0, |result, bit| {
+                    result
+                        | (if v & (1 << bit) != 0 {
+                            3 << (2 * bit)
+                        } else {
+                            0
+                        })
+                });
+            }
             0x4000..=0x403f => self.gate[(a - 0x4000) as usize] = v,
             0x8000..=0x801f => self.rtc.write((a - 0x8000) as usize, v),
             0x8420..=0x843f => {

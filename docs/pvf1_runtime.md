@@ -12,8 +12,13 @@ model; physical calibration and broader application behavior are incomplete.
 
 `pvf1::Hardware` owns the PV-F1 bank selector, gate registers, RAM, auxiliary
 port gating and GPIO feedback. It reuses the shared LCD controller, RTC and
-tablet ADC with explicit PV-F1 geometry and pressure parameters. The shared
-ESR-H CPU uses a separate PV-F1 bus and gateway coordinator. Native and legacy
+tablet ADC with explicit PV-F1 geometry and pressure parameters. It also
+implements the PV-F1 packed-pixel expansion port at `0401E–0401F`:
+one written byte returns sixteen little-endian bits with each pixel doubled.
+The acquired generated-font routine uses it to produce a16×32 glyph from8×16
+source data; native Rust and Python getter/render consumers check that result.
+The mapped-port operation is checked in WASM, separately from native IOCS proof.
+The shared ESR-H CPU uses a separate PV-F1 bus and gateway coordinator. Native and legacy
 instructions retain separate counters; legacy instructions do not manufacture
 native cycles. `LcdView` observes the board's existing pixel owner.
 
@@ -59,8 +64,9 @@ missing results and false zero-progress budget completion still fail closed.
 ## Evidence limits
 
 The acquisition and private proof repository retain the source-bound native,
-WASM and browser receipts. Thirty-nine LCD IOCS slots have a static inventory;
-six non-error commands still lack a successful focused native case.
+WASM and browser receipts. All39 LCD IOCS slots have a static inventory and
+all31 non-error commands have successful focused native cases. These cases
+do not qualify every context, raster mode, font, codec or error branch.
 Remaining work includes broader applications, input calibration, RTC, power,
 retention and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
