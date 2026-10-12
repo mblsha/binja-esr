@@ -1,4 +1,7 @@
 /** Host byte transport only. The Rust UART owns timing, flags and IRQs. */
+export function supportsSerial(model: string): boolean {
+	return ['oz-9600', 'pa-9500', 'pv-f1'].includes(model);
+}
 export const SERIAL_INPUT_CAPACITY = 4096;
 export const SERIAL_DELIVERY_CAPACITY = 16384;
 export const SERIAL_PACKET_CAPACITY = 4096;

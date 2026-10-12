@@ -34,6 +34,7 @@
 		SerialCapture,
 		SerialDelivery,
 		serialInput,
+		supportsSerial,
 		queueSerialInput,
 		type SerialFormat,
 		type SerialEnding,
@@ -127,6 +128,10 @@
 	let pvHandwritingBusy = false;
 	let pvBackupStatus = '';
 	let pvBackupError = '';
+	let pvCardRom = new Uint8Array();
+	let pvCardSram = new Uint8Array();
+	let pvCardNames = { rom: '', sram: '' };
+	let pvCardError = '';
 	let running = false;
 	let soundEnabled = false;
 	let soundBusy = false;
@@ -157,7 +162,7 @@
 		serialNotice = serialError = '';
 	}
 	function pumpFallbackSerial() {
-		if (!worker && ['oz-9600', 'pa-9500'].includes(romModel) && emulator?.has_rom())
+		if (!worker && supportsSerial(romModel) && emulator?.has_rom())
 			fallbackSerial.pump(() => emulator.sio_drain_tx_bytes());
 	}
 	async function sendSerial() {
@@ -1072,6 +1077,7 @@
 		source: string | null,
 		generation: number,
 		paRetained = new Uint8Array(),
+		pvRetained = new Uint8Array(),
 	) {
 		const originalBytes = bytes.slice();
 		if (generation !== romLoadGeneration) return;
@@ -1119,7 +1125,14 @@
 						model,
 						generation,
 						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
-						...(model === 'pv-f1' ? { pvHandwritingModel: pvHandwritingModel.slice() } : {}),
+						...(model === 'pv-f1'
+							? {
+									pvHandwritingModel: pvHandwritingModel.slice(),
+									pvRetained,
+									pvCardRom: pvCardRom.slice(),
+									pvCardSram: pvCardSram.slice(),
+								}
+							: {}),
 						...(model === 'pa-9500'
 							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice(), paRetained }
 							: {}),
@@ -1134,9 +1147,9 @@
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
 				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
+				else if (model === 'pv-f1') emu.load_pvf1(bytes, pvRetained, pvHandwritingModel, pvCardRom, pvCardSram);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
-				if (model === 'pv-f1' && pvHandwritingModel.length) emu.configure_pvf1_recognizer(pvHandwritingModel);
 				fallbackInputs.clear();
 				resetFallbackSerial();
 				refreshAllNow();
@@ -1734,8 +1747,97 @@
 		}
 	}
 
+	async function selectPvCard(event: Event, kind: 'rom' | 'sram') {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		try {
+			if (file.size !== (kind === 'rom' ? 0x20000 : 0x8000))
+				throw new Error(kind === 'rom' ? 'Card ROM must be 128 KiB' : 'Card SRAM must be 32 KiB');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (kind === 'rom') pvCardRom = bytes;
+			else pvCardSram = bytes;
+			pvCardNames = { ...pvCardNames, [kind]: file.name };
+			pvCardError = '';
+		} catch (error) {
+			pvCardError = String(error);
+		}
+	}
+	async function exportPvCard() {
+		if (!romLoaded || romModel !== 'pv-f1' || !(await stop())) return;
+		try {
+			const bytes = worker
+				? await workerCall('pv_card_export', { generation: romLoadGeneration })
+				: emulator.pvf1_card_sram();
+			if (!bytes.length) throw new Error('No PV-F1 card loaded');
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pa9c3-sram.bin');
+		} catch (error) {
+			pvCardError = String(error);
+		}
+	}
+	async function reloadPvCard(remove = false) {
+		if (!installedRom || installedRom.model !== 'pv-f1' || loadingRom || !(await stop())) return;
+		const generation = romLoadGeneration;
+		let next = generation;
+		const oldRom = pvCardRom,
+			oldSram = pvCardSram,
+			oldNames = pvCardNames;
+		loadingRom = true;
+		try {
+			const retained = Uint8Array.from(
+				worker ? await workerCall('pv_retained_export', { generation }) : emulator.export_pvf1_retained(),
+			);
+			if (remove) {
+				pvCardRom = new Uint8Array();
+				pvCardSram = new Uint8Array();
+				pvCardNames = { rom: '', sram: '' };
+			}
+			next = ++romLoadGeneration;
+			await installRom(installedRom.bytes.slice(), 'pv-f1', installedRom.source, next, new Uint8Array(), retained);
+			pvCardError = '';
+		} catch (error) {
+			if (romLoadGeneration === next) {
+				pvCardError = String(error);
+				romLoadGeneration = generation;
+				pvCardRom = oldRom;
+				pvCardSram = oldSram;
+				pvCardNames = oldNames;
+			}
+		} finally {
+			if (romLoadGeneration === generation || romLoadGeneration === next) loadingRom = false;
+		}
+	}
 	async function resetSession() {
 		if (!installedRom || loadingRom) return;
+		if (installedRom.model === 'pv-f1' && workerHealth === 'ready') {
+			if (!(await stop())) return;
+			const generation = romLoadGeneration;
+			loadingRom = true;
+			releaseAllPhysicalHeldCodes();
+			releaseInputSource('virtual');
+			romLoadGeneration = generation + 1;
+			try {
+				const model = pvHandwritingModel.slice();
+				if (worker) await workerCall('pv_reset', { model, generation, nextGeneration: generation + 1 }, [model.buffer]);
+				else {
+					emulator.reset_pvf1(model);
+					fallbackInputs.clear();
+					fallbackTablet.discard();
+				}
+				if (!worker) resetFallbackSerial();
+				refreshAllNow();
+				lastError = null;
+			} catch (error) {
+				if (romLoadGeneration === generation + 1) {
+					romLoadGeneration = generation;
+					lastError = String(error);
+				}
+			} finally {
+				if (romLoadGeneration === generation || romLoadGeneration === generation + 1) loadingRom = false;
+			}
+			return;
+		}
 		if (installedRom.model === 'pa-9500' && workerHealth === 'ready') {
 			if (!(await stop())) return;
 			try {
@@ -2588,7 +2690,7 @@
 			</p>
 		</section>
 	{/if}
-	{#if romModel === 'oz-9600' || romModel === 'pa-9500'}
+	{#if supportsSerial(romModel)}
 		<details class="serial-panel" data-testid="serial-panel">
 			<summary>Serial</summary>
 			<label
@@ -2765,6 +2867,44 @@
 						: 'Load a Zinnia version-1 model to recognize pen strokes.'} Loading pauses the emulator; Resume to continue.
 				</p>
 				{#if pvHandwritingError}<p role="alert">{pvHandwritingError}</p>{/if}
+			</section>
+			<section aria-label="PV-F1 card" data-testid="pv-card">
+				<label
+					>PA-9C3 ROM <input
+						type="file"
+						accept=".bin"
+						data-testid="pv-card-rom"
+						disabled={loadingRom}
+						on:change={(e) => selectPvCard(e, 'rom')}
+					/></label
+				>
+				<label
+					>PA-9C3 SRAM <input
+						type="file"
+						accept=".bin"
+						data-testid="pv-card-sram"
+						disabled={loadingRom}
+						on:change={(e) => selectPvCard(e, 'sram')}
+					/></label
+				>
+				<p class="hint">
+					Selected for next load: {pvCardNames.rom || 'no ROM'} / {pvCardNames.sram || 'no SRAM'}. Card SRAM is saved
+					separately from organizer backups.
+				</p>
+				<button
+					data-testid="pv-card-load"
+					disabled={!romLoaded || loadingRom || !pvCardRom.length || !pvCardSram.length}
+					on:click={() => reloadPvCard()}>Import card and restart</button
+				>
+				<button data-testid="pv-card-remove" disabled={!romLoaded || loadingRom} on:click={() => reloadPvCard(true)}
+					>Restart without card</button
+				>
+				<button
+					data-testid="pv-card-export"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy}
+					on:click={exportPvCard}>Export current card SRAM</button
+				>
+				{#if pvCardError}<p role="alert">{pvCardError}</p>{/if}
 			</section>
 		{/if}
 

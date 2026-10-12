@@ -14,7 +14,7 @@ import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from '
 import { piPanelCapture } from '$lib/pi3000_panel';
 import { TabletInputs } from './tablet_inputs';
 import { AudioDelivery } from './oz_audio';
-import { SerialDelivery, queueSerialInput } from './oz_serial';
+import { SerialDelivery, queueSerialInput, supportsSerial } from './oz_serial';
 import {
 	loadPa9500,
 	resetPa9500,
@@ -57,9 +57,14 @@ type WorkerRequest =
 			paUart?: boolean;
 			paRetained?: Uint8Array;
 			pvHandwritingModel?: Uint8Array;
+			pvRetained?: Uint8Array;
+			pvCardRom?: Uint8Array;
+			pvCardSram?: Uint8Array;
 	  }
 	| { id: number; type: 'pv_recognizer'; bytes: Uint8Array; generation: number }
 	| { id: number; type: 'pv_retained_export'; generation: number }
+	| { id: number; type: 'pv_card_export'; generation: number }
+	| { id: number; type: 'pv_reset'; model: Uint8Array; generation: number; nextGeneration: number }
 	| {
 			id: number;
 			type: 'pv_retained_restore';
@@ -236,8 +241,7 @@ function resetSerial() {
 	self.postMessage({ type: 'serial_reset', ...serial.reset(machineGeneration) });
 }
 function pumpSerial() {
-	if ((romModel === 'oz-9600' || romModel === 'pa-9500') && emulator?.has_rom())
-		serial.pump(() => emulator.sio_drain_tx_bytes());
+	if (supportsSerial(romModel) && emulator?.has_rom()) serial.pump(() => emulator.sio_drain_tx_bytes());
 }
 
 function syncAudio(force = false) {
@@ -727,7 +731,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'serial_send': {
 				if (msg.generation !== machineGeneration) throw new Error('Stale serial generation');
 				if (operations.busy) throw new Error('Wait for the current replay or step to finish before sending');
-				if (!['oz-9600', 'pa-9500'].includes(romModel) || !emulator?.has_rom())
+				if (!supportsSerial(romModel) || !emulator?.has_rom())
 					throw new Error('Requires a loaded serial-capable model');
 				replyOk(msg.id, { queued: queueSerialInput(emulator, msg.bytes) });
 				return;
@@ -741,7 +745,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (operations.busy) throw new Error('Wait for the current replay or step to finish');
 				replyOk(msg.id, {
 					delivery: serial.snapshot(),
-					uart: ['oz-9600', 'pa-9500'].includes(romModel) && emulator?.has_rom() ? emulator.sio_uart_report() : null,
+					uart: supportsSerial(romModel) && emulator?.has_rom() ? emulator.sio_uart_report() : null,
 				});
 				return;
 			}
@@ -784,7 +788,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				const emu = await ensureEmulator();
 				if (signal?.aborted) throw new ExecutionCancelled(0);
 				const model = msg.model ?? romModel;
-				if (msg.pvHandwritingModel?.length && model !== 'pv-f1') throw new Error('Handwriting model requires PV-F1');
+				if (
+					model !== 'pv-f1' &&
+					[msg.pvHandwritingModel, msg.pvRetained, msg.pvCardRom, msg.pvCardSram].some((bytes) => bytes?.length)
+				)
+					throw new Error('PV-F1 assets require PV-F1');
 				if (model === 'oz-9600')
 					emu.load_oz9600(msg.bytes, msg.retained ?? new Uint8Array(), msg.ozProfile ?? 'strict');
 				else if (model === 'pa-9500')
@@ -797,11 +805,17 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 						msg.paUart === true,
 						msg.paRetained,
 					);
+				else if (model === 'pv-f1')
+					emu.load_pvf1(
+						msg.bytes,
+						msg.pvRetained ?? new Uint8Array(),
+						msg.pvHandwritingModel ?? new Uint8Array(),
+						msg.pvCardRom ?? new Uint8Array(),
+						msg.pvCardSram ?? new Uint8Array(),
+					);
 				else {
 					if (msg.retained || msg.ozProfile) throw new Error('OZ settings require OZ-9600');
 					emu.load_rom_with_model(msg.bytes, model);
-					if (model === 'pv-f1' && msg.pvHandwritingModel?.length)
-						emu.configure_pvf1_recognizer(msg.pvHandwritingModel);
 				}
 				romModel = model;
 				perfettoSymbolsPromise = null;
@@ -833,6 +847,24 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
 					throw new Error('Requires idle current PV-F1 generation');
 				replyOk(msg.id, emulator.export_pvf1_retained());
+				return;
+			}
+			case 'pv_card_export': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
+					throw new Error('Requires idle current PV-F1 generation');
+				replyOk(msg.id, emulator.pvf1_card_sram());
+				return;
+			}
+			case 'pv_reset': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
+					throw new Error('Stale PV-F1 reset generation');
+				emulator.reset_pvf1(msg.model);
+				machineGeneration = msg.nextGeneration;
+				inputs.clear();
+				tabletInputs.discard();
+				resetSerial();
+				requestFrame(true, true);
+				replyOk(msg.id);
 				return;
 			}
 			case 'pv_retained_restore': {
@@ -1215,6 +1247,7 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'pi_rtc_candidate',
 			'pv_recognizer',
 			'pv_retained_restore',
+			'pv_reset',
 			'oz_reset',
 			'pa_reset',
 			'oz_replay',
