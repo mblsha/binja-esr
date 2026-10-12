@@ -16,6 +16,7 @@ pub mod auxiliary;
 pub mod bundle;
 pub mod compatibility;
 mod lcd_view;
+pub mod retained;
 mod rtc_clock;
 pub const WIDTH: usize = 336;
 pub const HEIGHT: usize = 292;
@@ -367,6 +368,22 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Export restart backing without executing instructions or mapped reads.
+    pub fn pvf1_retained_state(&self) -> Result<Vec<u8>, String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?;
+        Ok(retained::retained_state(self, h))
+    }
+    /// Load compatible RAM/RTC backing before the first scheduler boundary.
+    pub fn restore_pvf1_retained_state(&mut self, image: &[u8]) -> Result<(), String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?;
+        retained::restore_retained_state(self, h, image)
+    }
     /// Logical LCD pixel center to raw ADC using coefficients owned by native IOCS.
     /// The visible main window is 336x240; 292 is controller storage height.
     pub fn pvf1_lcd_to_raw(&self, x: u16, y: u16) -> Result<[u16; 2], String> {

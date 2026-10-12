@@ -223,6 +223,14 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     oz9600_retained_out: Option<PathBuf>,
 
+    /// PV-F1 RAM/scratch/RTC backing loaded before the first ROM boundary.
+    #[arg(long, value_name = "PATH")]
+    pvf1_retained: Option<PathBuf>,
+
+    /// Export PV-F1 restart backing after successful execution.
+    #[arg(long, value_name = "PATH")]
+    pvf1_retained_out: Option<PathBuf>,
+
     /// Verified OZ-707 ROM; opts into the provisional logical card view.
     #[arg(long, value_name = "PATH", requires = "oz9600_card_sram")]
     oz9600_card_rom: Option<PathBuf>,
@@ -4959,7 +4967,10 @@ fn apply_core_card_profile(
 ) -> sc62015_core::Result<()> {
     // The OZ factory owns the 4-B bus. A generic absent CE1 overlay would
     // shadow its card descriptor with zero bytes at 40000-4FFFF.
-    if !matches!(model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
+    if !matches!(
+        model,
+        DeviceModel::Oz9600 | DeviceModel::Pi3000 | DeviceModel::PvF1
+    ) {
         profile.apply(memory)?;
     }
     Ok(())
@@ -5015,14 +5026,21 @@ fn run_core_runtime_path(
 
     let mut runtime = CoreRuntime::for_model(args.model, rom_bytes)?;
     apply_core_card_profile(args.model, card_profile, &mut runtime.memory)?;
-    if !matches!(args.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
+    if !matches!(
+        args.model,
+        DeviceModel::Oz9600 | DeviceModel::Pi3000 | DeviceModel::PvF1
+    ) {
         runtime.timer.enabled = !args.disable_timers;
     }
     if let Some(seed) = iq7000_clock_seed {
         runtime.set_iq7000_clock_seed_yyyymmddhhmm(seed.clock.as_ascii())?;
     }
-    if args.model != DeviceModel::Pi3000 {
+    if !matches!(args.model, DeviceModel::Pi3000 | DeviceModel::PvF1) {
         runtime.power_on_reset()?;
+    }
+    #[cfg(feature = "pvf1")]
+    if let Some(path) = &args.pvf1_retained {
+        runtime.restore_pvf1_retained_state(&fs::read(path)?)?;
     }
     if args.model == DeviceModel::Oz9600 {
         if let Some(path) = &args.oz9600_retained {
@@ -5140,6 +5158,10 @@ fn run_core_runtime_path(
     if let Some(path) = &args.oz9600_retained_out {
         fs::write(path, runtime.oz9600_retained_state()?)?;
     }
+    #[cfg(feature = "pvf1")]
+    if let Some(path) = &args.pvf1_retained_out {
+        fs::write(path, runtime.pvf1_retained_state()?)?;
+    }
     if let Some(path) = &args.oz9600_card_sram_out {
         fs::write(
             path,
@@ -5190,6 +5212,21 @@ fn run_core_runtime_path(
 
 fn run(mut args: Args) -> Result<(), Box<dyn Error>> {
     apply_scenario(&mut args)?;
+    if (args.pvf1_retained.is_some() || args.pvf1_retained_out.is_some())
+        && args.model != DeviceModel::PvF1
+    {
+        return Err("--pvf1-retained* options require --model pv-f1".into());
+    }
+    if args.model == DeviceModel::PvF1 {
+        if !matches!(args.runtime, RuntimeEngine::Core) {
+            return Err("PV-F1 requires --runtime core".into());
+        }
+        if matches!(args.card, CardMode::Present) {
+            return Err(
+                "PV-F1 requires explicit organizer card media; use --card auto or absent".into(),
+            );
+        }
+    }
     if args.model == DeviceModel::Pi3000 {
         if !matches!(args.runtime, RuntimeEngine::Core) {
             return Err("PI-3000 requires --runtime core".into());
