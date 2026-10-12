@@ -684,6 +684,8 @@ pub struct CoreRuntime {
     pub(crate) pa9500_irq_imr_only_candidate: bool,
     #[cfg(feature = "pvf1")]
     pub(crate) pvf1_irq_imr_only_candidate: bool,
+    #[cfg(feature = "pvf1")]
+    pub(crate) pvf1_on_input_live_candidate: bool,
     #[cfg(feature = "pa9500")]
     pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
     #[cfg(feature = "oz9600")]
@@ -743,6 +745,8 @@ impl CoreRuntime {
             pa9500_irq_imr_only_candidate: false,
             #[cfg(feature = "pvf1")]
             pvf1_irq_imr_only_candidate: false,
+            #[cfg(feature = "pvf1")]
+            pvf1_on_input_live_candidate: false,
             #[cfg(feature = "pa9500")]
             pa9500_compatibility: None,
             #[cfg(feature = "oz9600")]
@@ -1980,6 +1984,11 @@ impl CoreRuntime {
             )));
         }
         let on_key_ssr_mask = self.device_model().on_key_ssr_mask();
+        #[cfg(feature = "pvf1")]
+        let on_input_live =
+            self.device_model() == DeviceModel::PvF1 && self.pvf1_on_input_live_candidate;
+        #[cfg(not(feature = "pvf1"))]
+        let on_input_live = false;
         // Execute real instructions through the LLAMA evaluator instead of bumping PC.
         /// Device and host hooks fixed for one `step_scheduler_boundaries`
         /// call; each boundary's `RuntimeBus` borrows them by pointer.
@@ -1996,6 +2005,7 @@ impl CoreRuntime {
             iq7000_rtc: *mut iq7000::Iq7000RtcPeripheral,
             timer_ptr: *mut TimerContext,
             on_key_ssr_mask: u8,
+            on_input_live: bool,
             tracing_active: bool,
             meta_ptr: *const SnapshotMetadata,
             lcd_bus_capture: *mut LcdBusCapture,
@@ -2135,6 +2145,9 @@ impl CoreRuntime {
                         let offset = (addr - INTERNAL_MEMORY_START) & INTERNAL_ADDR_MASK;
                         if offset == 0xFF {
                             let mut val = (*self.mem).read_internal_byte(offset).unwrap_or(0);
+                            if self.dev().on_input_live {
+                                val &= !self.dev().on_key_ssr_mask;
+                            }
                             if self.onk_level {
                                 val |= self.dev().on_key_ssr_mask;
                             }
@@ -2467,6 +2480,9 @@ impl CoreRuntime {
                         }
                         if offset == IMEM_SSR_OFFSET {
                             let mut value = (*self.mem).read_internal_byte_silent(offset)?;
+                            if self.dev().on_input_live {
+                                value &= !self.dev().on_key_ssr_mask;
+                            }
                             if self.onk_level {
                                 value |= self.dev().on_key_ssr_mask;
                             }
@@ -2583,6 +2599,7 @@ impl CoreRuntime {
                 }),
             timer_ptr: self.timer.as_mut() as *mut TimerContext,
             on_key_ssr_mask,
+            on_input_live,
             tracing_active: perfetto_active,
             meta_ptr: &self.metadata as *const SnapshotMetadata,
             lcd_bus_capture: self
