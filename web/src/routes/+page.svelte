@@ -275,6 +275,7 @@
 		() => romModel === 'oz-9600' && emulator.oz9600_tablet_mailbox_busy(),
 		() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 		() => (romModel === 'pv-f1' ? 50_000 : 0),
+		() => (romModel === 'pv-f1' ? 20_000 : 0),
 	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),

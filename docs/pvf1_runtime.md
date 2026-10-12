@@ -284,6 +284,14 @@ active capture. Host model replacement preserves native canvas geometry.
 The browser also exports `.pvram` RAM/scratch/RTC backups and restores compatible
 backing with the selected model into a fresh paused runtime. ROM/bank identity,
 payload checksum and model validation complete before the old machine changes.
-Broader handwriting accuracy, Latin coverage, deferred host pen trajectories,
-type-2 notifications and remaining application/card workflows stay open. Routine
+The PV host queue preserves ordered deferred motion while paused or behind
+another stroke. Distinct points replay at20,000 scheduler boundaries; tap holds
+and50,000-boundary stroke gaps remain. The4096-point bound cancels overflow,
+and clear/discard cancels held/pending movement. PI/OZ use their existing default
+policy. One changed-host integration submits both い strokes before execution,
+delivers all55 distinct coordinate/release updates and renders い through the
+normal native controller. With the old queue and the same core binary, the
+incomplete path instead renders 八. This is assisted input, not measured timing.
+Broader handwriting accuracy, Latin coverage, type-2 notifications and remaining
+application/card workflows stay open. Routine
 behavioral checks use standalone Rust; WASM checks only the changed bindings.
