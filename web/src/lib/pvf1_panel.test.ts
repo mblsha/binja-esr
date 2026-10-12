@@ -17,6 +17,10 @@ describe('PV-F1 logical LCD pen', () => {
 		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 900, raw_y: 640, pressed: true }, 'tablet:Calculator:2', false);
 		await fireEvent.pointerCancel(window, { pointerId: 2 });
 		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 900, raw_y: 640, pressed: false }, 'tablet:Calculator:2', true);
+		await fireEvent.pointerDown(getByTestId('pv-app-search'), { button: 0, pointerId: 3 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 980, raw_y: 900, pressed: true }, 'tablet:Search:3', false);
+		await fireEvent.pointerUp(window, { pointerId: 3 });
+		expect(onContact).toHaveBeenLastCalledWith({ raw_x: 980, raw_y: 900, pressed: false }, 'tablet:Search:3', false);
 	});
 	it('keeps storage rows outside the main viewport and preserves native pixel locations', () => {
 		expect(pvLcdPixels(222.5 / 336, 16.5 / 292)).toEqual([222, 16]);
