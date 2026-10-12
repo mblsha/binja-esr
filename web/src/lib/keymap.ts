@@ -12,6 +12,7 @@ const maps: Record<string, Record<string, number>> = physicalMaps;
 // calendar this same contact opens date entry. Physical legends remain open.
 const piControls: Record<string, number> = { DATE: 1, MENU: 6, PREV: 9, NEXT: 13, CLEAR: 14, OFF: 7 };
 export function physicalKey(model: RomModel, name: string, paInput: PaInputMode = 'native'): number | null {
+	if (model === 'pv-f1') return name === 'FOCUS' ? 1 : null;
 	if (model === 'pi-3000') return piControls[name] ?? null;
 	if (model === 'pa-9500') {
 		const table: Record<string, number> = { ...paMaps.common, ...paMaps[paInput] };
@@ -119,15 +120,17 @@ const piHost: Record<string, string> = {
 	Pause: 'OFF',
 };
 const modelHost = (model: RomModel) =>
-	model === 'iq-7000'
-		? iqHost
-		: model === 'oz-9600'
-			? ozHost
-			: model === 'pa-9500'
-				? paHost
-				: model === 'pi-3000'
-					? piHost
-					: pcHost;
+	model === 'pv-f1'
+		? { Tab: 'FOCUS' }
+		: model === 'iq-7000'
+			? iqHost
+			: model === 'oz-9600'
+				? ozHost
+				: model === 'pa-9500'
+					? paHost
+					: model === 'pi-3000'
+						? piHost
+						: pcHost;
 function hostName(code: string, model: RomModel): string | null {
 	if (/^Key[A-Z]$/.test(code)) return code.slice(3);
 	if (/^(Digit|Numpad)[0-9]$/.test(code)) return code.slice(-1);
@@ -229,6 +232,11 @@ export const KEY_TO_MATRIX_CODE: Record<string, InputContact> = Object.fromEntri
 );
 
 export function virtualKeysForModel(model: RomModel, paInput: PaInputMode = 'native'): VirtualKey[] {
+	if (model === 'pv-f1')
+		return [
+			{ label: 'ON', code: 'on', testId: 'vk-on' },
+			{ label: 'Focus', code: 1, testId: 'vk-focus' },
+		];
 	if (model === 'pi-3000')
 		return [
 			{ label: 'ON', code: 'on', testId: 'vk-on' },

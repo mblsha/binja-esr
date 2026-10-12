@@ -78,10 +78,13 @@ export function automaticHostSlice(
 		waitMs > 4 ||
 		(result.plan.action === 'wait'
 			? planned !== 0 || result.slice != null
-			: result.plan.action !== 'run' || (planned > 0 && used === 0 && result.slice?.reason !== 'host_yield'))
+			: result.plan.action !== 'run' ||
+				(planned > 0 && (result.slice == null || (used === 0 && result.slice.reason !== 'host_yield'))))
 	) {
 		throw new Error('Invalid automatic pacing progress from Rust/WASM');
 	}
+	// Rust checks the host deadline before its first batch. A host_yield with
+	// zero progress is valid: the caller yields and input holds remain pending.
 	// Input holds are defined in executed scheduler boundaries, not CPU timing,
 	// host milliseconds, elapsed OFF time, or the requested budget.
 	inputs.advance(used);

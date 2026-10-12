@@ -79,6 +79,8 @@ describe('automatic Rust pacing adapter', () => {
 		expect(inputs.advance).toHaveBeenCalledWith(0);
 		result.slice!.reason = 'boundary_budget';
 		expect(() => automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toThrow('Invalid automatic');
+		result.slice = null;
+		expect(() => automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toThrow('Invalid automatic');
 	});
 	it('keeps buffered input pending after an immediate typing catch-up yield', () => {
 		const emu = {
