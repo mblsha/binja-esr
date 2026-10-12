@@ -612,13 +612,53 @@ impl Sc62015Emulator {
                 "PV-F1 restore requires loaded firmware and nonempty backing",
             ));
         }
-        self.install_rom_with_pvf1_model(
+        let (rom, sram) = self.pvf1_card_images()?;
+        self.install_rom_with_pvf1_media(
             &self.rom_image.clone(),
             self.model,
             self.oz9600_profile,
             retained,
-            model,
+            oz9600::PvF1Assets {
+                model,
+                card_rom: &rom,
+                card_sram: &sram,
+            },
         )
+    }
+
+    pub fn load_pvf1(
+        &mut self,
+        bundle: &[u8],
+        retained: &[u8],
+        model: &[u8],
+        card_rom: &[u8],
+        card_sram: &[u8],
+    ) -> Result<(), JsValue> {
+        self.install_rom_with_pvf1_media(
+            bundle,
+            DeviceModel::PvF1,
+            Default::default(),
+            retained,
+            oz9600::PvF1Assets {
+                model,
+                card_rom,
+                card_sram,
+            },
+        )
+    }
+
+    pub fn pvf1_card_sram(&self) -> Result<Uint8Array, JsValue> {
+        let (_, sram) = self.pvf1_card_images()?;
+        Ok(Uint8Array::from(sram.as_slice()))
+    }
+
+    /// Fresh native CPU/peripherals, current RAM/RTC and current card media.
+    pub fn reset_pvf1(&mut self, model: &[u8]) -> Result<(), JsValue> {
+        let retained = self
+            .runtime
+            .pvf1_retained_state()
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.restore_pvf1_retained(&retained, model)
     }
 
     /// Explicit clock experiment; normal PI loads leave both candidates disabled.

@@ -99,10 +99,11 @@ preflight at native entry 59F94. MMIO remains quarantined from instruction fetch
 Image, duplicate, profile and running-state guards are checked.
 
 SSR.CI (bit1) presence and SRAM aliases remain explicit wiring/mapping candidates.
-Normal PV-F1 initialization now executes the card ROM and reaches its foreground
-input screen. Card auto-run, correct card UI geometry, storage operations, serial
-transport and browser mounting remain open. This API does not inject an
-application event or start a physical capture.
+Normal PV-F1 initialization executes the card ROM and reaches its foreground
+input screen. Native AUTO arithmetic, serial SAVE/LOAD and pen PRO line editing
+have fresh-SRAM restart checks. Full card UI/mode coverage and a complete
+emulated bank-dumper session remain open. The SRAM alias, presence and input
+buffer are functional candidates, without physical mapping verification.
 
 Firmware now installs the shared register-only UART with the PV nominal
 1,024,000-unit clock and divisor two. Native serial 43 maps format code 60
@@ -112,8 +113,33 @@ can opt in with `configure_pvf1_uart_candidate`; Strict remains unchanged.
 There are no PC IOCS replacements, automatic peer replies or guest receive-data
 writes. Native serial 41 sends ABC as scheduled completed frames. Public FFFD8
 consumes incoming Z and parity/framing variants once and returns their status.
-Those checks use an explicitly initialized IOCS workspace. Foreground open,
-receive IRQ/software buffers, other formats/rates and peer protocols remain open.
+Those IOCS checks use an explicitly initialized workspace. Native foreground
+open/RX IRQ/ring consumers and a Port15 peer transfer are also checked:189 bytes
+reach a receiver, which reopens TEST after a fresh RAM/RTC-backed restart.
+Other formats/rates and broader peer protocols remain open.
+
+The browser exposes the shared Serial panel for PV-F1. It admits bytes only
+while the native UART is enabled, keeps raw output separate from LCD delivery,
+and resets capture credit on a new machine generation. A changed-host smoke
+transfers the same 189-byte native Port15 payload through `SerialDelivery` and
+`queueSerialInput`, then reopens TEST with a fresh receiver. The normal firmware
+controls UART setup, IRQ processing and storage; the host supplies wire bytes.
+
+The PV-F1 card controls select the verified 128 KiB PA-9C3 ROM and 32 KiB SRAM for
+the next load. Import card and restart preserves organizer RAM/RTC and installs
+selected card assets into a fresh paused machine. Export current card SRAM
+saves the firmware-mutated card separately from organizer backups. Session reset
+and organizer backup restore preserve the currently mounted ROM/SRAM; selecting
+new media and importing it explicitly replaces that media. Restart without card
+keeps organizer backing. Plain ROM replacement still loads the selected assets.
+
+`load_pvf1(bundle, retained, model, card_rom, card_sram)` validates all assets in
+a candidate before replacing the current runtime. Empty retained/model/card
+arguments select fresh main backing, no recognizer and no card respectively.
+The changed-binding smoke rejects malformed/incorrect ROM, SRAM, retained state
+and model without replacement, checks native AUTO BASIC5, and checks reset,
+restore and removal preservation. This reuses native Rust behavioral evidence;
+it does not qualify physical card mapping or a hardware transfer.
 
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
 when Rust's four-millisecond host deadline expires before the first batch.
