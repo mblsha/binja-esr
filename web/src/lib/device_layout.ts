@@ -79,6 +79,19 @@ export function deviceLayout(model: RomModel, paInput: PaInputMode = 'native'): 
 			provenance: 'functional-input-layout',
 		};
 	}
+	if (model === 'pv-f1') {
+		add('ON', 24, 575, 90, 32);
+		add('FOCUS', 124, 575, 90, 32, 'Focus');
+		return {
+			version: 1,
+			model,
+			width: 660,
+			height: 620,
+			lcd: { x: 24, y: 36, w: 612, h: (612 * 292) / 336 },
+			keys,
+			provenance: 'functional-input-layout',
+		};
+	}
 	if (model === 'pa-9500') {
 		// Functional controls for ROM-derived contacts, not a physical case scan.
 		existing.forEach((key, index) =>

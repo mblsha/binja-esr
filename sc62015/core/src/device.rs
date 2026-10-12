@@ -503,8 +503,18 @@ impl DeviceModel {
 
     pub(crate) fn configure_fresh_runtime(&self, rt: &mut CoreRuntime, rom: &[u8]) -> Result<()> {
         if *self == Self::PvF1 {
+            #[cfg(feature = "pvf1")]
+            {
+                *rt = crate::pvf1::bundle::from_rom_bundle(
+                    rom,
+                    crate::pvf1::BootstrapProfile::Firmware,
+                )
+                .map_err(crate::CoreError::Other)?;
+                return Ok(());
+            }
+            #[cfg(not(feature = "pvf1"))]
             return Err(crate::CoreError::Other(
-                "PV-F1 requires the verified organizer board adapter".into(),
+                "PV-F1 requires the pvf1 feature".into(),
             ));
         }
         if *self == Self::Pi3000 {
