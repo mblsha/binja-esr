@@ -4,6 +4,7 @@
 //! handshake engine, gated to PV-F1-confirmed request/response contracts only.
 use crate::pi3000::auxiliary::Auxiliary as ControlEngine;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 /// Provisional sample cadence, independent of the acquired register/IRQ ABI.
 pub const CAPTURE_SAMPLE_PERIOD_CANDIDATE: u64 = 4096;
@@ -38,6 +39,15 @@ impl CaptureClock {
     }
 }
 
+/// Explicit controller-response fixture. It does not recognize pen strokes.
+#[derive(Default)]
+pub struct CandidateResults {
+    ready: bool,
+    irq_sent: bool,
+    pages: BTreeMap<u8, Vec<[u8; 3]>>,
+    response: Option<Vec<u8>>,
+}
+
 pub enum Auxiliary {
     Absent {
         request: [u8; 32],
@@ -54,6 +64,7 @@ pub enum Auxiliary {
         sample_uploads: u64,
         completed_strokes: u64,
         last_samples: Vec<[u16; 2]>,
+        results: CandidateResults,
     },
 }
 impl Auxiliary {
@@ -75,7 +86,48 @@ impl Auxiliary {
             sample_uploads: 0,
             completed_strokes: 0,
             last_samples: vec![],
+            results: CandidateResults::default(),
         }
+    }
+    /// Supply an opaque type-1 result from a controller fixture or replay.
+    /// Native FF463 and DD4DF assign four query indices; DD511 accepts 0..10
+    /// three-byte records. No text, PC or guest workspace is modified here.
+    pub fn supply_candidate_result_fixture(
+        &mut self,
+        index: u8,
+        candidates: Vec<[u8; 3]>,
+    ) -> Result<(), String> {
+        if index >= 4 || candidates.len() > 10 {
+            return Err("PV-F1 result requires index 0..3 and at most 10 records".into());
+        }
+        let Self::Control { results, .. } = self else {
+            return Err("controller result fixture requires the auxiliary candidate".into());
+        };
+        if results.ready || results.pages.contains_key(&index) {
+            return Err("PV-F1 result fixture would replace an unconsumed result".into());
+        }
+        results.pages.insert(index, candidates);
+        results.ready = true;
+        results.irq_sent = false;
+        Ok(())
+    }
+    /// Separate GA source6 edge, enabled by native08A06.bit6. Acknowledgment
+    /// at08A08=BF clears this notification but preserves indexed query data.
+    pub fn take_result_irq_edge(&mut self) -> bool {
+        let Self::Control {
+            results,
+            controls,
+            enabled,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        if *enabled && controls[0] & 0x40 != 0 && results.ready && !results.irq_sent {
+            results.irq_sent = true;
+            return true;
+        }
+        false
     }
     pub fn configure_sample_period(&mut self, period: Option<u64>) -> Result<(), String> {
         if period == Some(0) {
@@ -107,9 +159,10 @@ impl Auxiliary {
                 sample_uploads,
                 completed_strokes,
                 last_samples,
+                results,
                 ..
             } => {
-                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples})
+                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples,"result_fixture_ready":results.ready,"result_fixture_indices":results.pages.keys().collect::<Vec<_>>() })
             }
         }
     }
@@ -126,7 +179,20 @@ impl Auxiliary {
             (0x8a04, Self::Absent { controls, .. } | Self::Control { controls, .. }) => {
                 Some(controls[0])
             }
-            (0x8a05, Self::Control { clock, .. }) => Some(if clock.ready { 0x80 } else { 0 }),
+            (0x8a05, Self::Control { clock, results, .. }) => {
+                Some(if clock.ready { 0x80 } else { 0 } | if results.ready { 0x40 } else { 0 })
+            }
+            (0x8a09, Self::Control { results, .. }) => Some(u8::from(results.ready)),
+            (
+                0x8a41..=0x8a5f,
+                Self::Control {
+                    engine, results, ..
+                },
+            ) if engine.status() & 0x40 != 0 => results
+                .response
+                .as_ref()
+                .and_then(|r| r.get((address - 0x8a41) as usize))
+                .copied(),
             (0x8a05 | 0x8a09, _) => Some(0),
             (0x8a40, Self::Control { engine, .. }) => engine.response(0),
             _ => None,
@@ -192,10 +258,14 @@ impl Auxiliary {
                     Self::Absent { controls, .. } | Self::Control { controls, .. } => controls,
                 };
                 controls[(address - 0x8a06) as usize] = value;
-                if let Self::Control { clock, .. } = self {
+                if let Self::Control { clock, results, .. } = self {
                     if address == 0x8a07 && value & 0x80 == 0 {
                         clock.ready = false;
                         clock.next = None;
+                    }
+                    if address == 0x8a08 && value & 0x40 == 0 {
+                        results.ready = false;
+                        results.irq_sent = false;
                     }
                 }
                 Ok(())
@@ -211,9 +281,22 @@ impl Auxiliary {
                     sample_uploads,
                     completed_strokes,
                     last_samples,
+                    results,
                     ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
+                    if command == 0x02fc {
+                        let index = request[2];
+                        let page = results.pages.get(&index).ok_or_else(|| {
+                            format!("PV-F1 query index {index} has no controller result fixture")
+                        })?;
+                        engine.start_packet(request, cycle, 3, None, true)?;
+                        let mut response = vec![page.len() as u8];
+                        response.extend(page.iter().flatten());
+                        results.response = Some(response);
+                        results.pages.remove(&index);
+                        return Ok(());
+                    }
                     if command == 0x00fc {
                         // DBF57/DBF60 ends the upload with the same busy-only
                         // start. Candidate-result IRQ/data remain unresolved.
@@ -267,7 +350,13 @@ impl Auxiliary {
             },
             0x8a03 if value == 0xbf => match self {
                 Self::Absent { .. } => Ok(()),
-                Self::Control { engine, .. } => engine.acknowledge(value),
+                Self::Control {
+                    engine, results, ..
+                } => {
+                    engine.acknowledge(value)?;
+                    results.response = None;
+                    Ok(())
+                }
             },
             _ => Err(format!(
                 "unrecovered PV-F1 auxiliary write {address:05X}={value:02X}"
@@ -285,6 +374,44 @@ mod tests {
             a.write(0x8a20 + i as u32, b, cycle).unwrap();
         }
         a.write(0x8a02, 0x80, cycle).unwrap();
+    }
+
+    #[test]
+    fn result_fixture_irq_ack_and_query_ack_are_independent() {
+        let mut a = Auxiliary::control();
+        a.supply_candidate_result_fixture(2, vec![[0x82, 0x60, 7]])
+            .unwrap();
+        assert!(!a.take_result_irq_edge());
+        assert_eq!(a.peek(0x8a05), Some(0x40));
+        assert_eq!(a.peek(0x8a09), Some(1));
+        assert!(a.supply_candidate_result_fixture(2, vec![]).is_err());
+        a.write(0x8a06, 0x40, 0).unwrap();
+        assert!(a.take_result_irq_edge());
+        assert!(!a.take_result_irq_edge());
+        a.write(0x8a07, 0x7f, 1).unwrap();
+        assert_eq!(a.peek(0x8a05), Some(0x40));
+        a.write(0x8a08, 0xbf, 2).unwrap();
+        assert_eq!(a.peek(0x8a05), Some(0));
+        assert!(!a.take_result_irq_edge());
+        for (i, b) in [0xfc, 2, 2].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 3).unwrap();
+        }
+        a.write(0x8a02, 0x80, 3).unwrap();
+        assert_eq!(a.peek(0x8a41), None);
+        a.advance(35);
+        assert_eq!(a.peek(0x8a41), Some(1));
+        assert_eq!(a.peek(0x8a42), Some(0x82));
+        assert_eq!(a.peek(0x8a44), Some(7));
+        a.write(0x8a03, 0xbf, 35).unwrap();
+        assert_eq!(a.peek(0x8a41), None);
+        assert!(a.supply_candidate_result_fixture(4, vec![]).is_err());
+        assert!(a
+            .supply_candidate_result_fixture(0, vec![[0; 3]; 11])
+            .is_err());
+        a.supply_candidate_result_fixture(2, vec![]).unwrap();
+        a.write(0x8a01, 2, 40).unwrap();
+        assert_eq!(a.peek(0x8a05), Some(0));
+        assert_eq!(a.snapshot()["result_fixture_indices"], json!([]));
     }
 
     #[test]
