@@ -34,6 +34,7 @@ class Auxiliary:
         self.sample_uploads, self.last_samples = 0, []
         self.completed_strokes = 0
         self.result_ready, self.result_irq_sent = False, False
+        self.result_notification_type = 0
         self.result_pages, self.result_response = {}, None
         self.recognizer = None
         self.recognition_width, self.recognition_height = 0, 0
@@ -127,6 +128,18 @@ class Auxiliary:
             raise ValueError("PV-F1 result fixture would replace an unconsumed result")
         self.result_pages[index] = page
         self.result_ready, self.result_irq_sent = True, False
+        self.result_notification_type = 1
+
+    def supply_type2_notification_fixture(self):
+        """Replay an opaque type-2 notification, without inventing its trigger."""
+        if not self.control:
+            raise ValueError("controller notification requires the auxiliary candidate")
+        if self.result_ready:
+            raise ValueError(
+                "PV-F1 notification would replace an unacknowledged notification"
+            )
+        self.result_ready, self.result_irq_sent = True, False
+        self.result_notification_type = 2
 
     def take_result_irq_edge(self):
         if (
@@ -186,7 +199,7 @@ class Auxiliary:
                 0x40 if self.result_ready else 0
             )
         if address == 0x8A09 and self.control:
-            return int(self.result_ready)
+            return self.result_notification_type
         if (
             0x8A41 <= address <= 0x8A5F
             and self.engine
@@ -236,6 +249,7 @@ class Auxiliary:
                 self.clock.ready, self.clock.next = False, None
             if address == 0x8A08 and value & 0x40 == 0:
                 self.result_ready, self.result_irq_sent = False, False
+                self.result_notification_type = 0
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
