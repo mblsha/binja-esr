@@ -89,3 +89,23 @@ do not qualify every context, raster mode, font, codec or error branch.
 Remaining work includes broader applications, auxiliary-mode input, RTC, power,
 retention and PV-F1 card/serial routing. No physical LCD or timing qualification
 is claimed, and this checkpoint does not establish a fully working emulator.
+
+## Native saved-entry wait and RTC A2 candidate
+
+Firmware now enables a PV-specific nominal half-second RTC A2 divider. Fixed
+F1BEB loads BFE15=F210A; that native callback increments BFE32. IOCS0049 with
+CL14 waits on this counter, independently of the CPU MTI/STI handlers. Without
+A2, the normal saved-data notification remains visible. The shared RTC latch
+and native acknowledgement own delivery; no guest counters, masks or queues
+are patched. The divider consumes completed timing units in running, HALT and
+OFF states. Strict stays disabled; ControlCandidate enables it only through
+configure_pvf1_rtc_half_second_candidate. Period zero is rejected atomically.
+
+The unmodified ROM now stores Typewriter text, leaves the notification for its
+day view, and reconstructs the editor text through Modify. Native and WASM
+consumers agree on the reopened frame and full-width Latin CP932 bytes. A
+slower divider trial reaches the same stored text with a different cursor
+phase. This is software qualification of a nominal timing candidate; calendar
+progression, alarm/power wiring, HOLD behavior, restart retention and recognition
+remain unqualified. The RTC component and Python logical reference are separate
+from the firmware-specific mapper and auxiliary protocol.

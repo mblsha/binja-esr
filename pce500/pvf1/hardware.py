@@ -8,6 +8,7 @@ from pce500.oz9600.lcd import LcdController
 from pce500.oz9600.rtc import Rtc
 from pce500.oz9600.tablet import Tablet
 from pce500.pvf1.auxiliary import Auxiliary, CAPTURE_SAMPLE_PERIOD_CANDIDATE
+from pce500.pvf1.rtc_clock import HalfSecondClock
 from pce500.tablet_geometry import quarter_to_adc
 
 WIDTH, HEIGHT = 336, 292
@@ -61,6 +62,9 @@ class Hardware:
         self.pixel_expansion = 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
+        self.rtc_clock = HalfSecondClock()
+        if profile == "firmware":
+            self.rtc_clock.configure(512_000)  # Nominal half-second candidate.
         self.startup = bytearray(3)
         self.mapping_unlock = 0
         self.auxiliary = (
@@ -178,6 +182,15 @@ class Hardware:
         return (
             self.halt_main_timer_candidate and halted and not off and bool(lcc & 0x80)
         )
+
+    def configure_rtc_half_second_candidate(self, period):
+        if self.tablet is None:
+            raise ValueError("RTC timing requires an explicit board candidate")
+        self.rtc_clock.configure(period)
+
+    def advance_rtc_timing(self, elapsed):
+        if self.rtc_clock.advance(elapsed):
+            self.rtc.raise_causes(4, 0)
 
     def external_irq(self):
         if self.auxiliary and self.auxiliary.advance(self.cycle):

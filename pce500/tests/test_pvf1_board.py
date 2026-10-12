@@ -7,6 +7,36 @@ from pce500.pvf1.compatibility import entered_legacy
 from pce500.pvf1.hardware import Hardware
 
 
+def test_rtc_a2_candidate_latches_through_the_native_gate_and_not_guest_ram():
+    board = Hardware({}, "control-candidate")
+    board.configure_rtc_half_second_candidate(4)
+    board.advance_rtc_timing(3)
+    assert board.rtc.read(10) == 0
+    with pytest.raises(ValueError, match="positive"):
+        board.configure_rtc_half_second_candidate(0)
+    board.advance_rtc_timing(1)
+    assert board.rtc.read(10) == 4 and not board.external_irq()
+    board.write(0x8008, 4)
+    board.write(0x4010, 1)
+    assert board.external_irq() and board.gate[0x12] == 1
+    board.write(0x4012, 0)
+    assert (
+        board.external_irq()
+    )  # RTC cause is a held level until native acknowledgement.
+    board.write(0x800A, 0)
+    board.write(0x4012, 0)
+    assert not board.external_irq()
+    board.advance_rtc_timing(8)
+    assert board.rtc.read(10) == 4 and board.rtc_clock.snapshot()["ticks"] == 3
+    assert board.rtc.registers()[:5] == bytes(5)
+    assert board.ram[0x3FE32:0x3FE35] == bytes(3)
+    board.configure_rtc_half_second_candidate(None)
+    board.advance_rtc_timing(100)
+    assert board.rtc_clock.snapshot()["ticks"] == 3
+    with pytest.raises(ValueError, match="explicit board"):
+        Hardware({}).configure_rtc_half_second_candidate(4)
+
+
 def test_auxiliary_control_readback_matches_the_native_diagnostic():
     board = Hardware({}, "control-candidate")
     for value in (0xAA, 0x55):
