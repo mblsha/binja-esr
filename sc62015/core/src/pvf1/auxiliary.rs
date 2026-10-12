@@ -45,6 +45,7 @@ impl CaptureClock {
 #[derive(Default)]
 pub struct CandidateResults {
     ready: bool,
+    notification_type: u8,
     irq_sent: bool,
     pages: BTreeMap<u8, Vec<[u8; 3]>>,
     response: Option<Vec<u8>>,
@@ -224,6 +225,22 @@ impl Auxiliary {
         }
         results.pages.insert(index, candidates);
         results.ready = true;
+        results.notification_type = 1;
+        results.irq_sent = false;
+        Ok(())
+    }
+    /// Replay the acquired type-2 notification. FF476 sets BFF20.bit0 and
+    /// FE DB5FC/DBFBC then suppress uploads. Its physical trigger is unknown;
+    /// no character page or inferred completion is supplied by this fixture.
+    pub fn supply_type2_notification_fixture(&mut self) -> Result<(), String> {
+        let Self::Control { results, .. } = self else {
+            return Err("controller notification requires the auxiliary candidate".into());
+        };
+        if results.ready {
+            return Err("PV-F1 notification would replace an unacknowledged notification".into());
+        }
+        results.ready = true;
+        results.notification_type = 2;
         results.irq_sent = false;
         Ok(())
     }
@@ -299,7 +316,7 @@ impl Auxiliary {
             (0x8a05, Self::Control { clock, results, .. }) => {
                 Some(if clock.ready { 0x80 } else { 0 } | if results.ready { 0x40 } else { 0 })
             }
-            (0x8a09, Self::Control { results, .. }) => Some(u8::from(results.ready)),
+            (0x8a09, Self::Control { results, .. }) => Some(results.notification_type),
             (
                 0x8a41..=0x8a5f,
                 Self::Control {
@@ -387,6 +404,7 @@ impl Auxiliary {
                     }
                     if address == 0x8a08 && value & 0x40 == 0 {
                         results.ready = false;
+                        results.notification_type = 0;
                         results.irq_sent = false;
                     }
                 }
@@ -431,6 +449,7 @@ impl Auxiliary {
                             }
                             results.pages.insert(index, records);
                             results.ready = true;
+                            results.notification_type = 1;
                             results.irq_sent = false;
                         }
                         return Ok(());
@@ -514,6 +533,38 @@ mod tests {
             a.write(0x8a20 + i as u32, b, cycle).unwrap();
         }
         a.write(0x8a02, 0x80, cycle).unwrap();
+    }
+
+    #[test]
+    fn type2_notification_preserves_pages_and_uses_the_result_irq_ack() {
+        let mut absent = Auxiliary::absent();
+        assert!(absent.supply_type2_notification_fixture().is_err());
+        let mut a = Auxiliary::control();
+        a.supply_candidate_result_fixture(2, vec![[0x82, 0x60, 0]])
+            .unwrap();
+        let before = a.snapshot();
+        assert!(a.supply_type2_notification_fixture().is_err());
+        assert_eq!(a.snapshot(), before);
+        a.write(0x8a08, 0xbf, 0).unwrap();
+        a.supply_type2_notification_fixture().unwrap();
+        assert_eq!(a.peek(0x8a09), Some(2));
+        assert_eq!(a.peek(0x8a05), Some(0x40));
+        assert!(!a.take_result_irq_edge());
+        a.write(0x8a06, 0x40, 0).unwrap();
+        assert!(a.take_result_irq_edge());
+        assert!(!a.take_result_irq_edge());
+        assert!(a.supply_candidate_result_fixture(1, vec![]).is_err());
+        a.write(0x8a07, 0x7f, 1).unwrap();
+        assert_eq!(a.peek(0x8a09), Some(2));
+        a.write(0x8a08, 0xbf, 2).unwrap();
+        assert_eq!(a.peek(0x8a09), Some(0));
+        assert_eq!(a.peek(0x8a05), Some(0));
+        assert!(!a.take_result_irq_edge());
+        assert_eq!(a.snapshot()["result_fixture_indices"], json!([2]));
+        a.supply_type2_notification_fixture().unwrap();
+        a.write(0x8a01, 2, 3).unwrap();
+        assert_eq!(a.peek(0x8a09), Some(0));
+        assert_eq!(a.snapshot()["result_fixture_indices"], json!([]));
     }
 
     #[test]

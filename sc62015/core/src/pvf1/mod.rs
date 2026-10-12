@@ -642,6 +642,19 @@ impl CoreRuntime {
             .ok_or("requires an explicit auxiliary candidate")?
             .supply_candidate_result_fixture(index, candidates)
     }
+    /// Replay the acquired type-2 peripheral notification, without a result
+    /// page or an assumption about its original hardware trigger.
+    pub fn supply_pvf1_type2_notification_fixture(&mut self) -> Result<(), String> {
+        self.pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap()
+            .auxiliary
+            .as_mut()
+            .ok_or("requires an explicit auxiliary candidate")?
+            .supply_type2_notification_fixture()
+    }
     pub fn configure_pvf1_capture_clock_candidate(
         &mut self,
         period: Option<u64>,
