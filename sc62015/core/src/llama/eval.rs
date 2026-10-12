@@ -1556,7 +1556,13 @@ impl LlamaExecutor {
         let mask = Self::mask_for_width(bits);
         let val = state.get_reg(reg) & mask;
         let res = op(val, bits) & mask;
-        state.set_reg(reg, res);
+        if reg == RegName::IL {
+            // INC/DEC modify the low byte. The IL value-load setter clears IH,
+            // which would destroy words inspected by the native keyword matcher.
+            state.set_reg(RegName::I, (state.get_reg(RegName::I) & 0xFF00) | res);
+        } else {
+            state.set_reg(reg, res);
+        }
         Self::set_flags_for_result(state, res, None);
         res
     }
@@ -6796,6 +6802,47 @@ mod tests {
         assert_eq!(state.get_reg(RegName::X), 0x000000);
         assert_eq!(state.get_reg(RegName::FZ), 1);
         assert_eq!(state.pc(), 2);
+    }
+
+    #[test]
+    fn inc_dec_il_preserves_ih_and_sets_zero_from_the_low_byte() {
+        for (opcode, initial, expected) in [
+            (0x6C, 0x8264, 0x8265),
+            (0x7C, 0x8265, 0x8264),
+            (0x6C, 0x82FF, 0x8200),
+            (0x7C, 0x8200, 0x82FF),
+        ] {
+            for carry in [0, 1] {
+                let mut bus = MemBus::with_size(4);
+                bus.mem[..2].copy_from_slice(&[opcode, 0x01]);
+                let mut state = LlamaState::new();
+                state.set_reg(RegName::I, initial);
+                state.set_reg(RegName::FC, carry);
+                let mut exec = LlamaExecutor::new();
+                assert_eq!(exec.execute(opcode, &mut state, &mut bus).unwrap(), 2);
+                assert_eq!(state.get_reg(RegName::I), expected);
+                assert_eq!(state.get_reg(RegName::FC), carry);
+                assert_eq!(state.get_reg(RegName::FZ), u32::from(expected & 0xFF == 0));
+            }
+        }
+    }
+
+    #[test]
+    fn pvf1_keyword_low_byte_check_keeps_the_word_for_comparison() {
+        // Native FC:C4B37..C4B3D: INC IL; DEC IL; SUB BA,I.
+        let mut bus = MemBus::with_size(8);
+        bus.mem[..6].copy_from_slice(&[0x6C, 0x01, 0x7C, 0x01, 0x4C, 0x23]);
+        let mut state = LlamaState::new();
+        state.set_reg(RegName::I, 0x8264);
+        state.set_reg(RegName::BA, 0x8264);
+        let mut exec = LlamaExecutor::new();
+        for opcode in [0x6C, 0x7C, 0x4C] {
+            exec.execute(opcode, &mut state, &mut bus).unwrap();
+        }
+        assert_eq!(state.get_reg(RegName::I), 0x8264);
+        assert_eq!(state.get_reg(RegName::BA), 0);
+        assert_eq!(state.get_reg(RegName::FZ), 1);
+        assert_eq!(state.get_reg(RegName::FC), 0);
     }
 
     #[test]
