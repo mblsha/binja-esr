@@ -104,6 +104,17 @@ input screen. Card auto-run, correct card UI geometry, storage operations, seria
 transport and browser mounting remain open. This API does not inject an
 application event or start a physical capture.
 
+Firmware now installs the shared register-only UART with the PV nominal
+1,024,000-unit clock and divisor two. Native serial 43 maps format code 60
+to UCR 70; this gives nominal 9600/8E1, matching the acquired stream settings.
+The clock/divider remains a functional timing candidate. ControlCandidate
+can opt in with `configure_pvf1_uart_candidate`; Strict remains unchanged.
+There are no PC IOCS replacements, automatic peer replies or guest receive-data
+writes. Native serial 41 sends ABC as scheduled completed frames. Public FFFD8
+consumes incoming Z and parity/framing variants once and returns their status.
+Those checks use an explicitly initialized IOCS workspace. Foreground open,
+receive IRQ/software buffers, other formats/rates and peer protocols remain open.
+
 The browser's automatic pacing adapter accepts a zero-progress `host_yield`
 when Rust's four-millisecond host deadline expires before the first batch.
 Input holds advance only by executed scheduler boundaries. Invalid budgets,

@@ -377,6 +377,9 @@ pub fn configure(
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
     rt.pvf1_hardware = Some(hardware.clone());
     if profile == BootstrapProfile::Firmware {
+        // Native serial43 maps format60 to UCR70. Divisor2 yields nominal
+        //9600/8E1, matching the acquired stream; silicon clock remains uncalibrated.
+        rt.configure_pvf1_uart_candidate(2)?;
         // Native power/context paths can leave the diagnostic handler monitor
         // active without RETI. Guest IMR.IRM and source masks still own every
         // hardware IRQ admission; retain monitor gating in Strict profiles.
@@ -398,6 +401,34 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Register-only UART using the PV scheduler clock and an explicit divisor.
+    /// This does not install IOCS replacements, peer replies or receive-ring writes.
+    pub fn configure_pvf1_uart_candidate(&mut self, baud_divisor: u64) -> Result<(), String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if baud_divisor == 0
+            || h.tablet.is_none()
+            || self.sio.is_some()
+            || self.instruction_count() != 0
+            || self.elapsed_timing_units() != 0
+        {
+            return Err(
+                "PV-F1 UART candidate requires a positive divisor once before execution".into(),
+            );
+        }
+        drop(h);
+        let mut uart = crate::sio::SioStub::register_only(
+            DeviceModel::PvF1.timer_profile().timebase_hz,
+            baud_divisor,
+        );
+        uart.init(&mut self.memory);
+        self.sio = Some(uart);
+        Ok(())
+    }
     /// Mount verified PA-9C3 backing in an explicit PV-F1 card candidate.
     /// ROM mirrors are acquired evidence; SRAM aliases/presence are candidates.
     pub fn configure_pvf1_pa9c3_candidate(
