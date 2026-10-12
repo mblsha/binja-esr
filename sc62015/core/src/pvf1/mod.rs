@@ -315,6 +315,12 @@ pub fn configure(
         rt.state.set_block_transfer_policy(
             crate::llama::state::BlockTransferPolicy::CoupledPredecrement,
         );
+        // Acquired FD:CEE20 uses4E03 (SUB A,I) during normal New Entry.
+        // Keep the ESR-P low-byte source hypothesis in this opt-in board
+        // profile; the shared SC62015 strict decoder remains unchanged.
+        rt.state.set_byte_arithmetic_source_policy(
+            crate::llama::state::ByteArithmeticSourcePolicy::LowByte,
+        );
     }
 
     rt.lcd = Some(Box::new(lcd_view::LcdView(hardware.clone())));
@@ -331,6 +337,32 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Logical LCD pixel center to raw ADC using coefficients owned by native IOCS.
+    /// The visible main window is 336x240; 292 is controller storage height.
+    pub fn pvf1_lcd_to_raw(&self, x: u16, y: u16) -> Result<[u16; 2], String> {
+        if x >= WIDTH as u16 || y >= 240 {
+            return Err("LCD contact outside PV-F1 main window".into());
+        }
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        let ws = (0..3).fold(0u32, |v, i| {
+            v | ((self.memory.read_internal_byte_silent(0xe6 + i).unwrap_or(0) as u32) << (8 * i))
+        });
+        if !(0x80000..=0xbff66).contains(&ws) {
+            return Err("PV-F1 tablet workspace is unavailable".into());
+        }
+        let mut words = [0i16; 6];
+        for (i, w) in words.iter_mut().enumerate() {
+            let a = ws + 0x8e + 2 * i as u32;
+            *w = i16::from_le_bytes([h.peek(a).unwrap(), h.peek(a + 1).unwrap()]);
+        }
+        crate::tablet_geometry::TabletCalibration(words)
+            .from_quarter([(x * 4 + 2) as i16, (y * 4 + 2) as i16])
+    }
     pub fn pvf1_hardware(&self) -> Option<&SharedHardware> {
         self.pvf1_hardware.as_ref()
     }

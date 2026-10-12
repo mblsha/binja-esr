@@ -569,6 +569,15 @@ impl Sc62015Emulator {
             .map_err(|e| JsValue::from_str(&e))
     }
 
+    pub fn pvf1_lcd_to_raw(&self, x: u16, y: u16) -> Result<JsValue, JsValue> {
+        self.require_no_active_call()?;
+        let raw = self
+            .runtime
+            .pvf1_lcd_to_raw(x, y)
+            .map_err(|e| JsValue::from_str(&e))?;
+        serde_wasm_bindgen::to_value(&raw).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     pub fn pvf1_state(&self) -> Result<JsValue, JsValue> {
         self.require_no_active_call()?;
         self.runtime

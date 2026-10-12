@@ -5,6 +5,7 @@
 	import OzTabletSurface from './OzTabletSurface.svelte';
 	import PvTabletControls from './PvTabletControls.svelte';
 	import { piLcdTablet } from '../pi3000_panel';
+	import { pvLcdPixels, type LcdTabletContact } from '../pvf1_panel';
 	import { OZ_PANEL } from '../oz9600_panel';
 	import type { TabletContact } from '../emulator/oz9600_replay';
 	import VirtualKeyboard from './VirtualKeyboard.svelte';
@@ -20,6 +21,10 @@
 	export let onPress: (code: InputContact, owner: string) => void;
 	export let onRelease: (code: InputContact, owner: string, cancel: boolean) => void;
 	export let onTablet: (contact: TabletContact, owner: string, cancel: boolean) => void = () => {};
+	export let onLcdTablet: (contact: LcdTabletContact, owner: string, cancel: boolean) => void = () => {};
+	function pvLcdContact(contact: TabletContact, owner: string, cancel: boolean) {
+		onLcdTablet({ pixel_x: contact.raw_x, pixel_y: contact.raw_y, pressed: contact.pressed }, owner, cancel);
+	}
 	export let onCancelAll: () => void;
 	$: layout = deviceLayout(model, paInput);
 </script>
@@ -92,6 +97,13 @@
 						testPrefix="pi-tablet"
 						{disabled}
 						onContact={onTablet}><slot /></OzTabletSurface
+					>{:else if model === 'pv-f1'}<OzTabletSurface
+						label="LCD"
+						coordinates={pvLcdPixels}
+						testPrefix="pv-tablet"
+						trackMovement
+						{disabled}
+						onContact={pvLcdContact}><slot /></OzTabletSurface
 					>{:else}<slot />{/if}
 			</div>
 			<VirtualKeyboard
