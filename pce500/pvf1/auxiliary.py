@@ -2,6 +2,27 @@
 
 from pce500.pi3000.auxiliary import Auxiliary as ControlEngine
 
+CAPTURE_SAMPLE_PERIOD_CANDIDATE = 4096
+
+
+class CaptureClock:
+    def __init__(self):
+        self.period, self.next, self.ready, self.events = None, None, False, 0
+
+    def advance(self, active, cycle):
+        if not active or self.period is None:
+            self.next, self.ready = None, False
+            return False
+        if self.ready:
+            return False
+        if self.next is None:
+            self.next = min(cycle + self.period, (1 << 64) - 1)
+        if cycle < self.next:
+            return False
+        self.next, self.ready = None, True
+        self.events += 1
+        return True
+
 
 class Auxiliary:
     def __init__(self, control=False):
@@ -9,12 +30,43 @@ class Auxiliary:
         self.request, self.controls = bytearray(32), bytearray(3)
         self.enabled, self.starts = True, 0
         self.engine = ControlEngine() if control else None
+        self.clock = CaptureClock()
+
+    def configure_sample_period(self, period):
+        if period is not None and (not isinstance(period, int) or period <= 0):
+            raise ValueError("PV-F1 capture sample period must be positive")
+        if not self.control:
+            raise ValueError("capture clock requires the auxiliary control candidate")
+        self.clock.period, self.clock.next, self.clock.ready = period, None, False
+
+    def snapshot(self):
+        result = {
+            "control_candidate": self.control,
+            "controls": list(self.controls),
+            "enabled": self.enabled,
+        }
+        if not self.engine:
+            result["starts"] = self.starts
+        else:
+            result.update(
+                capture_active=self.engine.capture_active,
+                accepted_controls=list(self.engine.accepted),
+                accepted_count=self.engine.accepted_count,
+                sample_period_candidate=self.clock.period,
+                sample_ready=self.clock.ready,
+                sample_events=self.clock.events,
+            )
+        return result
 
     def peek(self, address):
         if address == 0x8A00:
             status = self.engine.status() if self.engine else 0
             return (status & ~2) | (2 if self.enabled else 0)
-        if address in (0x8A04, 0x8A05, 0x8A09):
+        if address == 0x8A04:
+            return self.controls[0]
+        if address == 0x8A05 and self.control:
+            return 0x80 if self.clock.ready else 0
+        if address in (0x8A05, 0x8A09):
             return 0
         if address == 0x8A40 and self.engine:
             return self.engine.response(0)
@@ -23,10 +75,20 @@ class Auxiliary:
     def advance(self, cycle):
         if self.engine:
             self.engine.advance(cycle)
+            return self.clock.advance(
+                self.enabled
+                and self.engine.capture_active
+                and self.controls[0] & 0x80 != 0,
+                cycle,
+            )
+        return False
 
     def write(self, address, value, cycle):
         if address == 0x8A01 and value in (2, 0xFD):
+            period = self.clock.period
             self.__init__(self.control)
+            if self.control:
+                self.configure_sample_period(period)
             self.enabled = value == 2
         elif 0x8A20 <= address <= 0x8A3F:
             offset = address - 0x8A20
@@ -35,6 +97,8 @@ class Auxiliary:
                 self.engine.mark_written(offset)
         elif 0x8A06 <= address <= 0x8A08:
             self.controls[address - 0x8A06] = value
+            if address == 0x8A07 and value & 0x80 == 0:
+                self.clock.ready, self.clock.next = False, None
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
