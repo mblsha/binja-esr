@@ -258,7 +258,7 @@ PV-F1 owns the native markers, four character slots, canvas geometry, CP932
 conversion and result transport. Reset preserves the model and clears gesture
 state. The Python mirror implements the same component boundaries.
 
-Native uploads use 8000/index to start a stroke for a character slot, FFFF/FFFF
+Native uploads use 8000/index to select a character slot, FFFF/FFFF
 to end a pen stroke, and 00FC to finish the idle character. In the qualified
 Handwriting case, native03FE supplies a 138-by-222 canvas. Normal pen movement
 for two-stroke hiragana `い` produces126 uploads, one classification and one
@@ -269,6 +269,10 @@ package. It is not embedded in the CPU or an implementation of Sharp's original
 recognizer. The default unconfigured controller still has no provider.
 
 Native recognition, adoption, save and fresh-boot reopen now have regressions.
+Four successive native boxes query indices0..3 and retain/reopen `い井い井`
+in order. The native foreground finishes each character's recognition before
+the next begins. Rapid overlapping trials can upload incomplete strokes and
+produce different candidates; they are not qualified accuracy results.
 The initial persistence driver selected an older TEST record; selecting the
 second day-list row at (100,98) normally reopens the saved handwritten `い`.
 Stored TEST remains intact; storage code needed no repair.
@@ -280,6 +284,6 @@ active capture. Host model replacement preserves native canvas geometry.
 The browser also exports `.pvram` RAM/scratch/RTC backups and restores compatible
 backing with the selected model into a fresh paused runtime. ROM/bank identity,
 payload checksum and model validation complete before the old machine changes.
-Broader handwriting accuracy, Latin coverage, multiple character slots, type-2
-notifications and remaining application/card workflows stay open. Routine
+Broader handwriting accuracy, Latin coverage, deferred host pen trajectories,
+type-2 notifications and remaining application/card workflows stay open. Routine
 behavioral checks use standalone Rust; WASM checks only the changed bindings.
