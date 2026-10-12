@@ -1,7 +1,7 @@
 // PY_SOURCE: pce500/pvf1/auxiliary.py
 //! PV-F1 FF406/FF40E control transport. Absent mode exposes the acquired idle
 //! status and lets ROM time out. The opt-in control candidate reuses the shared
-//! two-byte handshake engine, gated to PV-F1-confirmed commands only.
+//! handshake engine, gated to PV-F1-confirmed request/response contracts only.
 use crate::pi3000::auxiliary::Auxiliary as ControlEngine;
 
 pub enum Auxiliary {
@@ -101,8 +101,10 @@ impl Auxiliary {
                     request, engine, ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
-                    // FE DD77B..DD7B3 sends these two-byte controls,
-                    // consumes only status 01 at 08A40, and acknowledges BF.
+                    // FE DD77B..DD7B3 sends two-byte controls; DD55E sends
+                    // 04FE plus one parameter (3 bytes); DD589 sends 03FE plus geometry
+                    // (8 bytes). These callers consume only status 01 at 08A40
+                    // and acknowledge BF; recognition/query bytes remain absent.
                     // Their successful status is an explicit candidate.
                     if !matches!(
                         command,
@@ -115,6 +117,8 @@ impl Auxiliary {
                             | 0x00f9
                             | 0x01f9
                             | 0x02f9
+                            | 0x04fe
+                            | 0x03fe
                     ) {
                         return Err(format!("unrecovered PV-F1 auxiliary command {command:04X}"));
                     }

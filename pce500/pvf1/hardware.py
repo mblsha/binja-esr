@@ -8,11 +8,37 @@ from pce500.oz9600.lcd import LcdController
 from pce500.oz9600.rtc import Rtc
 from pce500.oz9600.tablet import Tablet
 from pce500.pvf1.auxiliary import Auxiliary
+from pce500.tablet_geometry import quarter_to_adc
 
 WIDTH, HEIGHT = 336, 292
 
 
 class Hardware:
+    def lcd_to_raw(self, x, y, workspace):
+        if (
+            not isinstance(x, int)
+            or not isinstance(y, int)
+            or not 0 <= x < 336
+            or not 0 <= y < 240
+        ):
+            raise ValueError("LCD contact outside PV-F1 main window")
+        if not 0x80000 <= workspace <= 0xBFF66:
+            raise ValueError("PV-F1 tablet workspace is unavailable")
+        words = [
+            int.from_bytes(
+                bytes(
+                    [
+                        self.peek(workspace + 0x8E + 2 * i),
+                        self.peek(workspace + 0x8F + 2 * i),
+                    ]
+                ),
+                "little",
+                signed=True,
+            )
+            for i in range(6)
+        ]
+        return quarter_to_adc((4 * x + 2, 4 * y + 2), words)
+
     def __init__(self, banks, profile="strict"):
         if profile not in (
             "strict",
@@ -22,6 +48,14 @@ class Hardware:
         ):
             raise ValueError("unknown PV-F1 profile")
         self.banks, self.profile = banks, profile
+        self.cpu_options = {
+            "block_transfer_policy": "independent"
+            if profile == "strict"
+            else "coupled_predecrement",
+            "byte_arithmetic_source_policy": "strict"
+            if profile == "strict"
+            else "low_byte",
+        }
         self.selector, self.cycle, self.fault = 7, 0, None
         self.gate, self.gpio = bytearray(64), bytearray(18)
         self.pixel_expansion = 0

@@ -7,6 +7,56 @@ from pce500.pvf1.compatibility import entered_legacy
 from pce500.pvf1.hardware import Hardware
 
 
+def test_cpu_hypotheses_belong_to_explicit_pvf1_candidates():
+    assert Hardware({}).cpu_options == {
+        "block_transfer_policy": "independent",
+        "byte_arithmetic_source_policy": "strict",
+    }
+    for profile in ("absent-auxiliary", "control-candidate", "firmware"):
+        assert Hardware({}, profile).cpu_options == {
+            "block_transfer_policy": "coupled_predecrement",
+            "byte_arithmetic_source_policy": "low_byte",
+        }
+
+
+def test_lcd_contact_uses_live_coefficients_and_rejects_storage_rows():
+    board = Hardware({}, "firmware")
+    ws = 0x80000
+    for i, value in enumerate((1132, 650, -123, 812, 737, -68)):
+        for j, byte in enumerate(value.to_bytes(2, "little", signed=True)):
+            board.write(ws + 0x8E + 2 * i + j, byte)
+    assert board.lcd_to_raw(0, 0, ws) == (71, 63)
+    assert board.lcd_to_raw(222, 16, ws) == (581, 121)
+    assert board.lcd_to_raw(335, 239, ws) == (841, 931)
+    for x, y in ((336, 0), (0, 240), (-1, 0)):
+        with pytest.raises(ValueError, match="main window"):
+            board.lcd_to_raw(x, y, ws)
+    board.write(ws + 0x90, 0x8B)
+    assert board.lcd_to_raw(222, 16, ws) == (582, 121)
+    assert board.tablet.data_reads == 0 and not board.tablet.pressed
+
+
+@pytest.mark.parametrize("header,count", [(0x04FE, 3), (0x03FE, 8)])
+def test_editor_parameter_controls_require_exact_native_packet_lengths(header, count):
+    board = Hardware({}, "firmware")
+    packet = header.to_bytes(2, "little") + bytes(range(count - 2))
+    for i, byte in enumerate(packet[:-1]):
+        board.write(0x8A20 + i, byte)
+    with pytest.raises(ValueError, match="written bytes"):
+        board.write(0x8A02, 0x80)
+    board.write(0x8A20 + count - 1, packet[-1])
+    board.write(0x8A02, 0x80)
+    assert board.peek(0x8A40) is None
+    board.auxiliary.advance(32)
+    assert board.peek(0x8A40) == 1 and board.peek(0x8A41) is None
+    board.write(0x8A03, 0xBF)
+    for i, byte in enumerate(packet):
+        board.write(0x8A20 + i, byte)
+    board.write(0x8A20 + count, 0)
+    with pytest.raises(ValueError, match="written bytes"):
+        board.write(0x8A02, 0x80)
+
+
 @pytest.mark.parametrize(
     "value, expanded", [(0, 0), (255, 65535), (129, 49155), (90, 13260)]
 )

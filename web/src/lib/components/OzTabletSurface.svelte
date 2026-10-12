@@ -5,7 +5,8 @@
 	export let disabled = false;
 	export let label: string;
 	export let fixed: readonly [number, number] | null = null;
-	export let coordinates = ozLcdTablet;
+	export let coordinates: (x: number, y: number) => [number, number] | null = ozLcdTablet;
+	export let trackMovement = false;
 	export let testPrefix = 'oz-tablet';
 	export let onContact: (contact: TabletContact, owner: string, cancel: boolean) => void;
 	let held: { x: number; y: number; owner: string; pointer?: number } | null = null;
@@ -27,9 +28,20 @@
 		if (event.button !== 0 || disabled || held) return;
 		event.preventDefault();
 		const box = element.getBoundingClientRect();
-		const [x, y] = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+		const point = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+		if (!point) return;
+		const [x, y] = point;
 		press(`tablet:${label}:${event.pointerId}`, x, y, event.pointerId);
 		element.setPointerCapture?.(event.pointerId);
+	}
+	function move(event: PointerEvent) {
+		if (!trackMovement || !held || held.pointer !== event.pointerId || disabled) return;
+		const box = element.getBoundingClientRect();
+		const point = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+		if (!point) return;
+		held.x = point[0];
+		held.y = point[1];
+		onContact({ raw_x: held.x, raw_y: held.y, pressed: true }, held.owner, false);
 	}
 	$: if (disabled) release(true);
 	onDestroy(() => release(true));
@@ -59,6 +71,7 @@
 	data-testid={`${testPrefix}-${label.toLowerCase().replaceAll(' ', '-')}`}
 	class="surface"
 	on:pointerdown={down}
+	on:pointermove={move}
 	on:lostpointercapture={() => release(true)}
 	on:keydown={(e) => {
 		if (fixed && ['Enter', ' '].includes(e.key)) {
