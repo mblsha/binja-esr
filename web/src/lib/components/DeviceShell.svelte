@@ -3,6 +3,7 @@
 	import type { InputContact } from '../emulator/host_inputs';
 	import { deviceLayout, rectStyle } from '../device_layout';
 	import OzTabletSurface from './OzTabletSurface.svelte';
+	import PvTabletControls from './PvTabletControls.svelte';
 	import { piLcdTablet } from '../pi3000_panel';
 	import { OZ_PANEL } from '../oz9600_panel';
 	import type { TabletContact } from '../emulator/oz9600_replay';
@@ -38,7 +39,9 @@
 			data-layout-version={layout.version}
 			style={`aspect-ratio:${layout.width}/${layout.height};`}
 		>
-			{#if model === 'pi-3000'}
+			{#if model === 'pv-f1'}
+				<div class="pi-brand">SHARP PV-F1</div>
+			{:else if model === 'pi-3000'}
 				<div class="pi-brand">SHARP PI-3000</div>
 			{:else if model === 'pa-9500'}
 				<div class="pa-brand" style={`top:${((layout.lcd.y + layout.lcd.h + 25) / layout.height) * 100}%;`}>
@@ -105,6 +108,7 @@
 			/>
 		</div>
 	</div>
+	{#if model === 'pv-f1'}<PvTabletControls {disabled} onContact={onTablet} />{/if}
 	{#if model === 'pi-3000'}
 		<div class="pi-app-controls" aria-label="Applications">
 			<OzTabletSurface label="Schedule" fixed={[200, 128]} testPrefix="pi-tablet" {disabled} onContact={onTablet}
@@ -142,7 +146,8 @@
 		color: #f2f4eb;
 		cursor: pointer;
 	}
-	.pi-3000 {
+	.pi-3000,
+	.pv-f1 {
 		width: 100%;
 		min-width: 360px;
 		max-width: 760px;

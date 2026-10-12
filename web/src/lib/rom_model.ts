@@ -1,4 +1,4 @@
-export type RomModel = 'iq-7000' | 'pc-e500' | 'oz-9600' | 'pa-9500' | 'pi-3000';
+export type RomModel = 'iq-7000' | 'pc-e500' | 'oz-9600' | 'pa-9500' | 'pi-3000' | 'pv-f1';
 
 export function normalizeRomModel(raw: string | null | undefined): RomModel | null {
 	const trimmed = raw?.trim().toLowerCase();
@@ -8,6 +8,7 @@ export function normalizeRomModel(raw: string | null | undefined): RomModel | nu
 	if (['oz-9600', 'oz9600', 'oz_9600'].includes(trimmed)) return 'oz-9600';
 	if (['pa-9500', 'pa9500', 'db-z', 'dbz'].includes(trimmed)) return 'pa-9500';
 	if (['pi-3000', 'pi3000', 'pi_3000'].includes(trimmed)) return 'pi-3000';
+	if (['pv-f1', 'pvf1', 'pv_f1'].includes(trimmed)) return 'pv-f1';
 	return null;
 }
 
@@ -21,6 +22,8 @@ export function romBasename(model: RomModel): string {
 			return 'pa-9500.parom';
 		case 'pi-3000':
 			return 'pi-3000.pirom';
+		case 'pv-f1':
+			return 'pv-f1.pvrom';
 		case 'pc-e500':
 			return 'pc-e500-en.bin';
 	}

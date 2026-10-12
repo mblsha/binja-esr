@@ -57,6 +57,12 @@ describe('host letters and symbols', () => {
 });
 
 describe('matrixCodeForKeyEvent', () => {
+	it('PV-F1 exposes the qualified focus/ON controls without inheriting desktop letter keys', () => {
+		expect(matrixCodeForKeyEvent({ code: 'Tab' } as KeyboardEvent, 'pv-f1')).toBe(1);
+		expect(matrixCodeForKeyEvent({ code: 'F12' } as KeyboardEvent, 'pv-f1')).toBe('on');
+		expect(physicalKey('pv-f1', 'A')).toBeNull();
+		expect(virtualKeysForModel('pv-f1').map((k) => k.code)).toEqual(['on', 1]);
+	});
 	it('uses PA ROM contacts and keeps native and BASIC letter conversion separate', () => {
 		expect(physicalKey('pa-9500', 'M')).toBe(32);
 		expect(physicalKey('pa-9500', 'A')).toBe(39);

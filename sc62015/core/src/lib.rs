@@ -60,6 +60,8 @@ pub mod oz9600;
 pub mod pa9500;
 #[cfg(feature = "pi3000")]
 pub mod pi3000;
+#[cfg(feature = "pvf1")]
+pub mod pvf1;
 pub use lcd::{
     create_lcd, LcdController, LcdHal, LcdKind, UnknownLcdController, LCD_CHIP_COLS, LCD_CHIP_ROWS,
     LCD_DISPLAY_COLS, LCD_DISPLAY_ROWS,
@@ -690,6 +692,10 @@ pub struct CoreRuntime {
     pub(crate) pi3000_hardware: Option<pi3000::SharedHardware>,
     #[cfg(feature = "pi3000")]
     pub(crate) pi3000_compatibility: Option<pi3000::compatibility::Coordinator>,
+    #[cfg(feature = "pvf1")]
+    pub(crate) pvf1_hardware: Option<pvf1::SharedHardware>,
+    #[cfg(feature = "pvf1")]
+    pub(crate) pvf1_compatibility: Option<pvf1::compatibility::Coordinator>,
 }
 
 impl Default for CoreRuntime {
@@ -743,6 +749,10 @@ impl CoreRuntime {
             pi3000_hardware: None,
             #[cfg(feature = "pi3000")]
             pi3000_compatibility: None,
+            #[cfg(feature = "pvf1")]
+            pvf1_hardware: None,
+            #[cfg(feature = "pvf1")]
+            pvf1_compatibility: None,
         };
         rt.set_device_model(DeviceModel::PcE500)
             .expect("device model settings missing");
@@ -806,6 +816,12 @@ impl CoreRuntime {
     }
 
     pub fn power_on_reset(&mut self) -> Result<()> {
+        #[cfg(feature = "pvf1")]
+        if self.pvf1_hardware.is_some() {
+            return Err(CoreError::Other(
+                "PV-F1 reset requires a fresh board constructor".into(),
+            ));
+        }
         #[cfg(feature = "pi3000")]
         if self.pi3000_hardware.is_some() {
             return Err(CoreError::Other(
@@ -1921,6 +1937,15 @@ impl CoreRuntime {
                 "SC62015 CoreRuntime is poisoned after a failed side-effecting operation; \
                  power-on reset required: {reason}"
             )));
+        }
+        #[cfg(feature = "pvf1")]
+        if let Some(mut coordinator) = self.pvf1_compatibility.take() {
+            let result = (0..boundaries).try_for_each(|_| coordinator.step(self));
+            self.pvf1_compatibility = Some(coordinator);
+            if let Err(error) = &result {
+                self.poisoned = Some(error.clone());
+            }
+            return result.map_err(CoreError::Other);
         }
         #[cfg(feature = "pi3000")]
         if let Some(mut coordinator) = self.pi3000_compatibility.take() {

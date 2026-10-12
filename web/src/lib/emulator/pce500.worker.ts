@@ -73,7 +73,7 @@ type WorkerRequest =
 	| { id: number; type: 'oz_retained_restore'; bytes: Uint8Array }
 	| {
 			id: number;
-			type: 'oz_tablet' | 'pi_tablet';
+			type: 'oz_tablet' | 'pi_tablet' | 'pv_tablet';
 			contact: TabletContact;
 			owner: string;
 			cancel?: boolean;
@@ -192,12 +192,14 @@ let lastLcdText: string[] | null = null;
 const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
 const tabletInputs = new TabletInputs(
 	(c) =>
-		romModel === 'pi-3000'
-			? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
-			: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+		romModel === 'pv-f1'
+			? emulator.set_pvf1_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+			: romModel === 'pi-3000'
+				? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
 	() => romModel !== 'oz-9600' || emulator.oz9600_tablet_contact_release_ready(),
 	() => romModel === 'oz-9600' && emulator.oz9600_tablet_mailbox_busy(),
-	() => (romModel === 'pi-3000' ? 200_000 : 40_000),
+	() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 );
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
@@ -538,7 +540,7 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 		const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 		const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 		const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-		const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+		const fifoAddresses = ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)
 			? null
 			: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 		const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
@@ -576,7 +578,9 @@ function captureFrame(forceText: boolean, forceDisplay = false): Frame {
 	const annunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? new Uint8Array(4);
 	const annunciatorBytesCopy = new Uint8Array(annunciatorBytes);
 	const chipPixels =
-		debugOptions.lcdChipsOpen && !['oz-9600', 'pi-3000'].includes(romModel) ? emulator.lcd_chip_pixels() : undefined;
+		debugOptions.lcdChipsOpen && !['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)
+			? emulator.lcd_chip_pixels()
+			: undefined;
 	const nowMs = performance.now();
 
 	const pc = (() => {
@@ -917,8 +921,9 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				return;
 			}
 			case 'oz_tablet':
+			case 'pv_tablet':
 			case 'pi_tablet': {
-				const expected = msg.type === 'pi_tablet' ? 'pi-3000' : 'oz-9600';
+				const expected = msg.type === 'pv_tablet' ? 'pv-f1' : msg.type === 'pi_tablet' ? 'pi-3000' : 'oz-9600';
 				if (!emulator || romModel !== expected) throw new Error('Tablet model mismatch');
 				if (msg.generation !== machineGeneration) throw new Error('Stale tablet generation');
 				if (ozReplayActive) throw new Error('Physical replay owns input until it finishes or Stop is acknowledged');
@@ -1071,7 +1076,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== undefined && msg.generation !== machineGeneration)
 					throw new Error('Stale input generation');
 				if (ozReplayActive) throw new Error('Physical replay owns input');
-				if (['oz-9600', 'pi-3000'].includes(romModel) && msg.code !== 'on' && (msg.code < 0 || msg.code >= 88))
+				if (['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel) && msg.code !== 'on' && (msg.code < 0 || msg.code >= 88))
 					throw new Error('Unqualified OZ contact');
 				// ON is a priority power contact, never stuck behind a typing backlog.
 				if (msg.code === 'on' && msg.down) inputs.clearTyping();
@@ -1105,7 +1110,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					throw new Error('Stale input generation');
 				if (msg.source !== 'physical' && msg.source !== 'virtual') throw new Error('Invalid host input source');
 				inputs.releaseSource(msg.source);
-				if (msg.source === 'virtual' && ['oz-9600', 'pi-3000'].includes(romModel) && !ozReplayActive)
+				if (msg.source === 'virtual' && ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel) && !ozReplayActive)
 					tabletInputs.clear();
 				(self as any).postMessage({
 					type: 'input_status',

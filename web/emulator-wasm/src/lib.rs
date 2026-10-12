@@ -416,6 +416,7 @@ impl Sc62015Emulator {
                 DeviceModel::Oz9600 => "OZ-9600 uncalibrated timing experiment",
                 DeviceModel::Pa9500 => "PA-9500 uncalibrated bootstrap",
                 DeviceModel::Pi3000 => "PI-3000 uncalibrated firmware candidate",
+                DeviceModel::PvF1 => "PV-F1 uncalibrated firmware candidate",
                 _ => "PC-E500 compatibility timebase; not hardware calibrated",
             },
             dropped_host_ns: self.pacer.dropped_host_ns(),
@@ -526,7 +527,7 @@ impl Sc62015Emulator {
     pub fn load_rom_with_model(&mut self, rom: &[u8], model: &str) -> Result<(), JsValue> {
         let model = DeviceModel::parse(model).ok_or_else(|| {
             JsValue::from_str(&format!(
-                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600|pa-9500|pi-3000)"
+                "unknown model '{model}' (expected: iq-7000|pc-e500|oz-9600|pa-9500|pi-3000|pv-f1)"
             ))
         })?;
         self.install_rom(rom, model, Default::default(), &[])
@@ -554,6 +555,27 @@ impl Sc62015Emulator {
         self.runtime
             .set_pi3000_raw_contact(x, y, pressed)
             .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn set_pvf1_tablet_contact(
+        &mut self,
+        x: u16,
+        y: u16,
+        pressed: bool,
+    ) -> Result<(), JsValue> {
+        self.require_no_active_call()?;
+        self.runtime
+            .set_pvf1_raw_contact(x, y, pressed)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn pvf1_state(&self) -> Result<JsValue, JsValue> {
+        self.require_no_active_call()?;
+        self.runtime
+            .pvf1_status()
+            .map_err(|e| JsValue::from_str(&e))?
+            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Explicit clock experiment; normal PI loads leave both candidates disabled.
@@ -1066,7 +1088,10 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_chip_pixels(&self) -> Result<Uint8Array, JsValue> {
-        if matches!(self.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
+        if matches!(
+            self.model,
+            DeviceModel::Oz9600 | DeviceModel::Pi3000 | DeviceModel::PvF1
+        ) {
             return Err(JsValue::from_str(
                 "This LCD has no HD61202 chip view; use lcd_capture",
             ));
@@ -1101,7 +1126,10 @@ impl Sc62015Emulator {
     }
 
     pub fn lcd_trace(&self) -> Result<JsValue, JsValue> {
-        if matches!(self.model, DeviceModel::Oz9600 | DeviceModel::Pi3000) {
+        if matches!(
+            self.model,
+            DeviceModel::Oz9600 | DeviceModel::Pi3000 | DeviceModel::PvF1
+        ) {
             return Err(JsValue::from_str(
                 "Typed LCD write traces are not available for this model",
             ));
