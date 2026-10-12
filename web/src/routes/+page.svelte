@@ -258,10 +258,12 @@
 	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
 	const fallbackTablet = new TabletInputs(
 		(c) =>
-			romModel === 'pi-3000'
-				? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
-				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
-		() => (romModel === 'pi-3000' ? 200_000 : 40_000),
+			romModel === 'pv-f1'
+				? emulator.set_pvf1_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+				: romModel === 'pi-3000'
+					? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
+					: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+		() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
@@ -710,7 +712,7 @@
 			});
 		else if (emulator) {
 			fallbackInputs.releaseSource(source);
-			if (source === 'virtual' && ['oz-9600', 'pi-3000'].includes(romModel)) fallbackTablet.clear();
+			if (source === 'virtual' && ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)) fallbackTablet.clear();
 			typingStatus = fallbackInputs.typingStatus();
 			pasteStatus = fallbackInputs.pasteStatus();
 			updateDeliveredContacts(emulator.input_contacts());
@@ -1191,7 +1193,7 @@
 			// ignore
 		}
 		lcdAnnunciatorBytes = emulator.lcd_annunciator_bytes?.() ?? null;
-		if (lcdChipsOpen && !['oz-9600', 'pi-3000'].includes(romModel)) lcdChipPixels = emulator.lcd_chip_pixels();
+		if (lcdChipsOpen && !['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)) lcdChipPixels = emulator.lcd_chip_pixels();
 		try {
 			pcReg = emulator.get_reg?.('PC') ?? null;
 		} catch {
@@ -1254,7 +1256,7 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0) ?? null;
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1) ?? null;
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2) ?? null;
-			const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+			const fifoAddresses = ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)
 				? null
 				: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? (emulator.read_u8?.(fifoAddresses.fifoHead) ?? null) : null;
@@ -1299,7 +1301,7 @@
 			const kol = emulator.read_u8?.(IMEM_BASE + 0xf0);
 			const koh = emulator.read_u8?.(IMEM_BASE + 0xf1);
 			const kil = emulator.read_u8?.(IMEM_BASE + 0xf2);
-			const fifoAddresses = ['oz-9600', 'pi-3000'].includes(romModel)
+			const fifoAddresses = ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel)
 				? null
 				: resolvePce500KeyboardFifo((address) => emulator.read_u8?.(address));
 			const fifoHead = fifoAddresses ? emulator.read_u8?.(fifoAddresses.fifoHead) : undefined;
@@ -1903,9 +1905,9 @@
 		}
 	}
 	function tabletContact(contact: TabletContact, owner: string, cancel: boolean) {
-		if (!romLoaded || !['oz-9600', 'pi-3000'].includes(romModel) || functionRunnerBusy) return;
+		if (!romLoaded || !['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel) || functionRunnerBusy) return;
 		if (worker)
-			void workerCall(romModel === 'pi-3000' ? 'pi_tablet' : 'oz_tablet', {
+			void workerCall(romModel === 'pv-f1' ? 'pv_tablet' : romModel === 'pi-3000' ? 'pi_tablet' : 'oz_tablet', {
 				contact,
 				owner,
 				cancel,
@@ -2262,7 +2264,11 @@
 		<section class="quick-options" aria-label="Keyboard shortcuts" data-testid="keyboard-shortcuts">
 			<strong>Keyboard shortcuts</strong>
 			<button on:click={() => (shortcutsOpen = false)}>Close shortcuts</button>
-			{#if romModel === 'pi-3000'}
+			{#if romModel === 'pv-f1'}
+				<p class="hint">
+					F12 sends ON; Tab moves focus. Use the tablet sample controls below the display while Resume is active.
+				</p>
+			{:else if romModel === 'pi-3000'}
 				<p class="hint">
 					Tap the LCD targets while Resume is active. F12 sends ON. Confirmation and other key mappings remain under
 					recovery.
@@ -2596,6 +2602,7 @@
 						<option value="iq-7000">IQ-7000</option>
 						<option value="pc-e500">PC-E500</option>
 						<option value="oz-9600">OZ-9600 (experimental hardware)</option>
+						<option value="pv-f1">PV-F1 (experimental hardware)</option>
 						<option value="pi-3000">PI-3000 (experimental hardware)</option>
 						<option value="pa-9500">PA-9500 / DB-Z (experimental hardware)</option>
 					</select>
@@ -2605,7 +2612,7 @@
 					Load ROM file:
 					<input
 						type="file"
-						accept=".bin,.rom,.img,.ozrom,.parom,.pirom"
+						accept=".bin,.rom,.img,.ozrom,.parom,.pirom,.pvrom"
 						data-testid="rom-file"
 						on:change={onSelectRom}
 					/>

@@ -69,11 +69,23 @@ describe('automatic Rust pacing adapter', () => {
 		result.plan.action = 'explicit_budget_required';
 		expect(() => automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toThrow('explicit Step');
 	});
+	it('yields without charging input when the host deadline expires before the first batch', () => {
+		const inputs = { limitBudget: (n: number) => n, advance: vi.fn() };
+		const result: AutomaticResult = {
+			plan: { action: 'run', boundary_budget: 10, wait_ns: 0 },
+			slice: { reason: 'host_yield', progress: progress(0) },
+		};
+		expect(automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toBe(0);
+		expect(inputs.advance).toHaveBeenCalledWith(0);
+		result.slice!.reason = 'boundary_budget';
+		expect(() => automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toThrow('Invalid automatic');
+		result.slice = null;
+		expect(() => automaticHostSlice({ automatic_slice: () => result }, 10, inputs)).toThrow('Invalid automatic');
+	});
 	it('fails closed on bad progress or a long blocking wait', () => {
 		for (const [planned, used, wait] of [
 			[11, 1, 0],
 			[10, 11, 0],
-			[10, 0, 0],
 			[10, 1, 5e6],
 			[10, 1, NaN],
 		]) {

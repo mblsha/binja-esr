@@ -3,6 +3,13 @@ import { deviceLayout, rectStyle } from './device_layout';
 import { physicalKey, virtualKeysForModel } from './keymap';
 
 describe('reference-based device layouts', () => {
+	it('PV-F1 preserves its full matrix geometry and keeps controls below the display', () => {
+		const layout = deviceLayout('pv-f1');
+		expect(layout.provenance).toBe('functional-input-layout');
+		expect(layout.lcd.w / layout.lcd.h).toBeCloseTo(336 / 292);
+		expect(layout.keys.map((k) => k.code)).toEqual(['on', 1]);
+		for (const key of layout.keys) expect(key.y).toBeGreaterThan(layout.lcd.y + layout.lcd.h);
+	});
 	it('PA exposes functional ROM controls without inheriting a physical PC case', () => {
 		for (const mode of ['native', 'basic'] as const) {
 			const layout = deviceLayout('pa-9500', mode);
