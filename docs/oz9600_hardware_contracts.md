@@ -33,6 +33,12 @@ controls. Its current entry point is
 - `reference/cpu_irq_arrival_20261011/`: interrupt arrival and nesting controls.
 - `reference/cpu_internal_addressing_20261013/physical/physical-proof.json`:
   all 21 addressing cases and full scratch restoration.
+- `reference/cache_helper_controls_20261014/physical/physical-proof.json`:
+  four masked native lookup controls qualify the EF57F near-return adapter,
+  BL-independent module descriptor output and carry on a miss. Physical ROM
+  bytes, cache/callback state and complete card allocation recovery match.
+  Independent model samples verify the near/far frames. This is a prepared
+  experimental consumer, not IRQ/race qualification or a portable ROM address.
 - `reference/rtc_minute_observer_20261014/physical/physical-proof.json`: four
   natural minute callbacks, including COMMICCM→JISATMTL cache eviction; native
   return frames and complete callback/allocation recovery. Foreground PCs miss
