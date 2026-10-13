@@ -20,8 +20,10 @@ impl LcdHal for LcdView {
         LcdKind::Unknown
     }
     fn reset(&mut self) {
-        self.0.lock().unwrap().lcd =
-            super::LcdController::with_geometry(super::WIDTH, super::HEIGHT);
+        let mut h = self.0.lock().unwrap();
+        let ordered = h.lcd.ordered_window_clipping_candidate;
+        h.lcd = super::LcdController::with_geometry(super::WIDTH, super::HEIGHT);
+        h.lcd.ordered_window_clipping_candidate = ordered;
     }
     fn handles(&self, _address: u32) -> bool {
         false
@@ -81,5 +83,36 @@ impl LcdHal for LcdView {
         _payload: &[u8],
     ) -> std::result::Result<(), String> {
         Err("full PV-F1 LCD snapshots are not represented by v4".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pvf1::{BootstrapProfile, Hardware};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn firmware_window_priority_survives_lcd_reset_and_stays_profile_specific() {
+        for profile in [
+            BootstrapProfile::Strict,
+            BootstrapProfile::AbsentAuxiliary,
+            BootstrapProfile::ControlCandidate,
+            BootstrapProfile::Firmware,
+        ] {
+            let h = Arc::new(Mutex::new(Hardware::new(Default::default(), profile)));
+            let expected = profile == BootstrapProfile::Firmware;
+            assert_eq!(
+                h.lock().unwrap().lcd.ordered_window_clipping_candidate,
+                expected
+            );
+            let mut view = LcdView(h.clone());
+            view.reset();
+            assert_eq!(
+                h.lock().unwrap().lcd.ordered_window_clipping_candidate,
+                expected
+            );
+            assert_eq!(view.matrix_frame().pbm().len(), 12275);
+        }
     }
 }

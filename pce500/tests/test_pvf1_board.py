@@ -109,6 +109,10 @@ def test_cpu_hypotheses_belong_to_explicit_pvf1_candidates():
             "block_transfer_policy": "coupled_predecrement",
             "byte_arithmetic_source_policy": "low_byte",
         }
+    for profile in ("strict", "absent-auxiliary", "control-candidate", "firmware"):
+        assert Hardware({}, profile).lcd.ordered_window_clipping_candidate == (
+            profile == "firmware"
+        )
 
 
 def test_lcd_contact_uses_live_coefficients_and_rejects_storage_rows():

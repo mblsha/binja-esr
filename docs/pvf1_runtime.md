@@ -57,6 +57,17 @@ Direct `pvf1::configure` callers can select `Strict`, `AbsentAuxiliary` or
 `ControlCandidate` instead. A loaded PV-F1 reset requires constructing a fresh
 runtime so board state cannot survive accidentally.
 
+Firmware also enables ordered LCD window clipping. PV-F1's native CityChange
+callback draws its list in window2, then Calendar redraws through window3.
+Earlier non-bypass descriptors protect the foreground list from that redraw.
+The same rule preserves active input boards, search controls and the Mini clock
+that were previously erased by parent drawing. A direct Numeric-board contact
+edits the native time field; these controls are active ROM contexts. Native city
+selection and fresh retained restart are checked, and LCD reset preserves this
+profile setting. Other PV-F1 profiles retain selected-window clipping. This is
+software evidence from the acquired firmware; the silicon truth table remains
+unverified.
+
 ## Browser use
 
 Serve a locally generated bundle using `PVF1_ROM_PATH`, then select `pv-f1` or
