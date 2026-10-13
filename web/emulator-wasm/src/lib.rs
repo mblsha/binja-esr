@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
+mod digital_audio;
 mod function_call;
 mod oz9600;
 mod pa9500;
