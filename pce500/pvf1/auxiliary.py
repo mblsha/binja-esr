@@ -28,6 +28,8 @@ class Auxiliary:
     def __init__(self, control=False):
         self.control = control
         self.request, self.controls = bytearray(32), bytearray(3)
+        self.registrations = {}
+        self.registration_response = None
         self.enabled, self.starts = True, 0
         self.engine = ControlEngine() if control else None
         self.clock = CaptureClock()
@@ -200,18 +202,14 @@ class Auxiliary:
             )
         if address == 0x8A09 and self.control:
             return self.result_notification_type
-        if (
-            0x8A41 <= address <= 0x8A5F
-            and self.engine
-            and self.engine.status() & 0x40
-            and self.result_response is not None
-        ):
+        if 0x8A41 <= address <= 0x8A5F and self.engine and self.engine.status() & 0x40:
             offset = address - 0x8A41
-            return (
-                self.result_response[offset]
-                if offset < len(self.result_response)
-                else None
+            reply = (
+                self.registration_response
+                if self.registration_response is not None
+                else self.result_response
             )
+            return reply[offset] if reply is not None and offset < len(reply) else None
         if address in (0x8A05, 0x8A09):
             return 0
         if address == 0x8A40 and self.engine:
@@ -253,6 +251,18 @@ class Auxiliary:
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
+                if command == 0x13FB:
+                    index = self.request[2]
+                    if index >= 10:
+                        raise ValueError(
+                            f"PV-F1 registration slot {index} outside recovered directory"
+                        )
+                    entry = self.registrations.get(index)
+                    self.engine.start_packet(
+                        self.request, cycle, 3, int(entry is not None), True
+                    )
+                    self.registration_response = (entry or 0).to_bytes(2, "little")
+                    return
                 if command == 0x02FC:
                     index = self.request[2]
                     if index not in self.result_pages:
@@ -314,6 +324,7 @@ class Auxiliary:
             if self.engine:
                 self.engine.acknowledge(value)
                 self.result_response = None
+                self.registration_response = None
         else:
             raise ValueError(
                 f"unrecovered PV-F1 auxiliary write {address:05X}={value:02X}"
