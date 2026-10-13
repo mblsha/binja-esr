@@ -52,6 +52,7 @@ pub struct Hardware {
     auxiliary: Option<auxiliary::Auxiliary>,
     expansion_absent: bool,
     pub card: Option<crate::pa9500::card::Pa9c3Card>,
+    pub ram_card: Option<crate::ram_media::RamMedia>,
     card_presence_candidate: bool,
     // PA-9C3 native ROM stages RUN and input text at E000. This separate
     // logical buffer is an explicit card candidate, not a physical RAM alias.
@@ -126,6 +127,7 @@ impl Hardware {
             },
             expansion_absent: profile != BootstrapProfile::Strict,
             card: None,
+            ram_card: None,
             card_presence_candidate: false,
             card_buffer: vec![0; 0x1000],
             halt_main_timer_candidate: false,
@@ -168,8 +170,11 @@ impl Hardware {
             0x8800 => self.tablet.as_ref().map(|t| t.conversion_control),
             0x8c00 => self.tablet.as_ref().map(|t| t.peek_data()),
             0xf01c..=0xf01e => Some(self.startup[(a - 0xf01c) as usize]),
-            0xe000..=0xefff if self.card_presence_candidate && self.startup[0] == 1 => {
+            0xe000..=0xefff if self.card.is_some() && self.startup[0] == 1 => {
                 Some(self.card_buffer[(a - 0xe000) as usize])
+            }
+            0x20000..=0x3ffff if self.ram_card.is_some() => {
+                self.ram_card.as_ref().unwrap().read((a - 0x20000) as usize)
             }
             0x20000..=0x7ffff if self.card.is_some() => {
                 self.card.as_ref().unwrap().read(a).or(Some(255))
@@ -245,12 +250,18 @@ impl Hardware {
                 }
             }
             0xf00c..=0xf00e => self.startup[(a - 0xf00c) as usize] = v,
-            0xe000..=0xefff if self.card_presence_candidate && self.startup[0] == 1 => {
+            0xe000..=0xefff if self.card.is_some() && self.startup[0] == 1 => {
                 self.card_buffer[(a - 0xe000) as usize] = v;
             }
             // F80A9/F80AF and other PV mapper branches emit A5, 5A here.
             // Keep the latch; candidate absent expansion stays read-only.
             0xf103 if matches!(v, 0xa5 | 0x5a) => self.mapping_unlock = v,
+            0x20000..=0x3ffff if self.ram_card.is_some() => {
+                self.ram_card
+                    .as_mut()
+                    .unwrap()
+                    .write((a - 0x20000) as usize, v);
+            }
             0x20000..=0x7ffff if self.card.is_some() => self.card.as_mut().unwrap().write(a, v),
             0x20000..=0x7ffff if self.expansion_absent => {}
             0x80000..=0xbffff => self.ram[(a - 0x80000) as usize] = v,
@@ -291,8 +302,14 @@ impl BoundaryDevice for Boundary {
             // Native card startup samples SSR.CI (bit1). This is an explicit
             // presence-wiring candidate; no card IRQ or menu event is injected.
             let ssr = c.memory.read_internal_byte_silent(0xff).unwrap_or(0);
-            c.memory
-                .write_internal_byte(0xff, if h.card.is_some() { ssr | 2 } else { ssr & !2 });
+            c.memory.write_internal_byte(
+                0xff,
+                if h.card.is_some() || h.ram_card.is_some() {
+                    ssr | 2
+                } else {
+                    ssr & !2
+                },
+            );
         }
         if let Some(e) = &h.fault {
             return Err(CoreError::Other(e.clone()));
@@ -449,6 +466,54 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    /// Nominal linear128KiB S2 medium at20000..3FFFF, derived from the native
+    /// F9BD6 writable probe and F9074 CARDRAM format. Physical aliases/capacity
+    /// are not established. The existing SSR.CI wiring candidate is reused.
+    pub fn configure_pvf1_ram_card_candidate(
+        &mut self,
+        image: &[u8],
+        writable: bool,
+    ) -> Result<(), String> {
+        let media = crate::ram_media::RamMedia::from_image(image, 0x20000, writable)?;
+        let hardware = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .clone();
+        {
+            let mut h = hardware.lock().unwrap();
+            if h.tablet.is_none()
+                || h.card.is_some()
+                || h.ram_card.is_some()
+                || h.card_presence_candidate
+                || self.instruction_count() != 0
+                || self.elapsed_timing_units() != 0
+            {
+                return Err("PV-F1 RAM card must be configured once before execution".into());
+            }
+            h.ram_card = Some(media);
+            h.card_presence_candidate = true;
+        }
+        add_bus_view(self, &hardware, 0x20000, 0x3ffff, "pvf1_ram_card");
+        self.memory
+            .declare_passive_instruction_ram("pvf1_ram_card")
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub fn pvf1_ram_card_image(&self) -> Result<Vec<u8>, String> {
+        let hardware = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        Ok(hardware
+            .ram_card
+            .as_ref()
+            .ok_or("PV-F1 RAM card is absent")?
+            .image()
+            .to_vec())
+    }
     /// Register-only UART using the PV scheduler clock and an explicit divisor.
     /// This does not install IOCS replacements, peer replies or receive-ring writes.
     pub fn configure_pvf1_uart_candidate(&mut self, baud_divisor: u64) -> Result<(), String> {
@@ -761,4 +826,39 @@ fn add_bus_view(rt: &mut CoreRuntime, hardware: &SharedHardware, start: u32, end
         })),
         perfetto_thread: None,
     });
+}
+
+#[cfg(test)]
+mod ram_card_tests {
+    use super::*;
+
+    #[test]
+    fn nominal_ram_card_mount_is_guarded_and_bus_bounds_do_not_alias() {
+        let hardware = Arc::new(Mutex::new(Hardware::new(
+            BTreeMap::new(),
+            BootstrapProfile::ControlCandidate,
+        )));
+        let mut rt = CoreRuntime::new();
+        rt.pvf1_hardware = Some(hardware.clone());
+        assert!(rt
+            .configure_pvf1_ram_card_candidate(&vec![0xff; 65536], true)
+            .is_err());
+        assert!(hardware.lock().unwrap().ram_card.is_none());
+        let mut image = vec![0xff; 0x20000];
+        image[0] = 0x12;
+        image[0x1ffff] = 0x34;
+        rt.configure_pvf1_ram_card_candidate(&image, false).unwrap();
+        rt.memory.write_external_byte(0x20000, 0x56);
+        assert_eq!(rt.pvf1_ram_card_image().unwrap(), image);
+        assert!(rt
+            .configure_pvf1_ram_card_candidate(&vec![0; 0x20000], true)
+            .is_err());
+        assert_eq!(rt.pvf1_ram_card_image().unwrap(), image);
+        let h = hardware.lock().unwrap();
+        assert_eq!(h.peek(0x20000), Some(0x12));
+        assert_eq!(h.peek(0x3ffff), Some(0x34));
+        assert_eq!(h.peek(0x40000), Some(0xff));
+        assert_eq!(h.peek(0x7ffff), Some(0xff));
+        assert!(h.fault.is_none());
+    }
 }
