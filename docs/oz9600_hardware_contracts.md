@@ -15,7 +15,7 @@ CPU-family resemblance alone does not qualify another model.
 | LCD Boolean raster operations and clipping | [Measured raster table and window controls](oz9600_lcd_raster.md); shared Rust/Python controller | Controller branch is OZ-9600 LH1553F; other displays require verification |
 | Native RTC and manual OFF/ON | Actual RTC callbacks, BP-minus-one preservation and one manual OFF/ON return | Does not prove automatic alarm wake or earliest wake cause |
 | LCD completed block count | Native two-row copy returns count zero; fill then copy without reload does no further transfer; explicit reloads work in both directions | Completed-operation model; intermediate decrement and electrical busy timing remain open |
-| SRAM windows | Partial physical aliases and current-view card residency measured | Complete mapper modes, pages and writable capacity remain open |
+| SRAM windows | Paired BASIC/native4400 reads and prior distinct markers establish that the low/top alias is view-dependent | Unconditional alias in the provisional model does not cover BASIC3507FF0002; coupled mapper/GPIO bits, other pages and capacity remain open |
 
 The implementation preserves related models' geometry, PI input hold interval
 and PA runners. It does not add PV-F1 hardware defaults from unqualified
@@ -37,6 +37,12 @@ controls. Its current entry point is
 - `reference/lcd_block_count_20261013/README.md`: consumed-count explanation,
   native/count/increment hardware controls and unchanged-code integration replays.
   The original ineffective copies followed a fill without reloading the count.
+- `reference/memory_native_view_20261014/physical/physical-proof.json`: identical
+  targets in BASIC3507FF0002 and native3007FF0100. B2000 is F6 in BASIC and
+  equals12000 in the native view; ROM/card controls and exact recovery pass.
+  After restoration, BASIC35FCFF0002 also returns F6 at BFB10 while1FB10
+  contains the live cache. This does not isolate the coupled control bits or
+  justify a universal alias.
 - `reference/power_owner_20261013/physical-manual/physical-proof.json`: native
   OFF followed by one manual ON, responsive BASIC and verified restoration.
 
