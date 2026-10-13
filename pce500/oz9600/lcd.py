@@ -20,6 +20,7 @@ class LcdController:
         self.read_latch = 0
         self.data_writes = self.data_reads = self.block_operations = 0
         self.ordered_window_clipping_candidate = False
+        self.firmware_window_candidate = False
 
     def window_descriptor(self, index):
         return bytes(self.windows[index])
@@ -56,7 +57,11 @@ class LcdController:
         value = sum(
             (0x80 >> bit)
             for bit in range(8)
-            if self.pixel(*self.bit_location(x, y, bit))
+            if (
+                self.firmware_window_candidate
+                or self.permits_pixel(*self.bit_location(x, y, bit))
+            )
+            and self.pixel(*self.bit_location(x, y, bit))
         )
         return value & self.registers[3]
 
@@ -66,12 +71,13 @@ class LcdController:
         word = low | (high << 8)
         return word - 65536 if word & 32768 else word
 
-    def permits_write(self, x, y):
+    def permits_pixel(self, x, y):
         if not 0 <= x < self.width or not 0 <= y < self.height:
             return False
         window = self.windows[self.registers[9]]
-        if window[7] & 2:
+        if self.firmware_window_candidate and window[7] & 2:
             return True
+        # The measured extra Y-end bit does not bypass the active bounds.
         coords = [
             self.window_coordinate(window[n], window[n + 1], 3 if n in (0, 4) else 1)
             for n in (0, 2, 4, 6)
@@ -96,19 +102,20 @@ class LcdController:
         for bit in range(8):
             mask = 0x80 >> bit
             px, py = self.bit_location(x, y, bit)
-            if not self.registers[3] & mask or not self.permits_write(px, py):
+            if not self.registers[3] & mask or not self.permits_pixel(px, py):
                 continue
             index = py * self.width + px
-            destination, source = self.pixels[index], int(bool(value & mask))
+            destination = self.pixels[index]
+            source = int(bool(value & mask)) ^ ((self.registers[8] >> 2) & 1)
             combined = (
                 source,
                 destination ^ source,
-                destination | source,
+                destination & source,
                 # Scrapbook live mode 3 matches the saved software OR stroke.
-                # Mode 2 remains an unqualified hypothesis.
+                # Physical OZ controls establish AND and source inversion.
                 destination | source,
             )[self.registers[8] & 3]
-            self.pixels[index] = combined ^ ((self.registers[8] >> 2) & 1)
+            self.pixels[index] = combined
 
     def increment_axis(self, coordinate, nibble):
         if not nibble:

@@ -4,11 +4,11 @@
 //! Register names and timing are still being qualified. These operations cover
 //! Pixel streams, masked blocks, independent read/write coordinates, and
 //! the one-byte read pipeline used by F73A2/F767B. SET (0), XOR (1) and
-//! Scrapbook's OR (3) follow firmware behavior. Mode 2 and inversion of the
-//! combined result remain hypotheses requiring silicon qualification.
+//! OR (3) follow firmware behavior. Physical OZ/LH1553F interior measurements
+//! establish AND (2), source inversion and selected inclusive read/write bounds.
 //! Sixteen window descriptors and register readback are checked against the
-//! F0 diagnostic loops. Ordinary writes clip to inclusive signed window bounds;
-//! the Y-end bit-9 bypass, read clipping, and reset geometry are provisional.
+//! F0 diagnostic loops. The extra Y-end bit retains readback and does not
+//! bypass measured bounds. Other variants, reset geometry and timing stay open.
 //! Access-ready acknowledgment and data-buffer writes follow the paired ROM
 //! guards and VRAM self-test. Their silicon timing/behavior remain provisional.
 
@@ -36,6 +36,10 @@ pub struct LcdController {
     /// ROM-derived experiment: earlier non-bypass windows protect their pixels.
     /// PI FA47E/FA592 reorder descriptors from window 2; silicon is unqualified.
     pub ordered_window_clipping_candidate: bool,
+    /// Related firmware uses extended storage and an extra-bit full-area view.
+    /// Preserve that unmeasured window contract explicitly; OZ uses the
+    /// physically measured inclusive read/write contract by default.
+    pub firmware_window_candidate: bool,
 }
 
 impl Default for LcdController {
@@ -65,6 +69,7 @@ impl LcdController {
             data_reads: 0,
             block_operations: 0,
             ordered_window_clipping_candidate: false,
+            firmware_window_candidate: false,
         }
     }
 }
@@ -117,10 +122,9 @@ impl LcdController {
     fn read_pixels(&self, x: u16, y: u16) -> u8 {
         let mut value = 0;
         for bit in 0..8 {
-            if self
-                .bit_location(x, y, bit)
-                .is_some_and(|(px, py)| self.pixel(px, py))
-            {
+            if self.bit_location(x, y, bit).is_some_and(|(px, py)| {
+                (self.firmware_window_candidate || self.permits_pixel(px, py)) && self.pixel(px, py)
+            }) {
                 value |= 0x80 >> bit;
             }
         }
@@ -139,17 +143,16 @@ impl LcdController {
         i32::from(i16::from_le_bytes([low, high]))
     }
 
-    fn permits_write(&self, x: usize, y: usize) -> bool {
+    fn permits_pixel(&self, x: usize, y: usize) -> bool {
         if x >= self.width || y >= self.height {
             return false;
         }
         let window = self.window_descriptor(usize::from(self.registers[9]));
-        // FA242/FA2CF set this flag for the background/full-area context;
-        // FA3A9 clears it for normal clipping windows. Bypass is inferred
-        // from those paired uses, not established by a controller datasheet.
-        if window[7] & 2 != 0 {
+        if self.firmware_window_candidate && window[7] & 2 != 0 {
             return true;
         }
+        // Physical OZ interior controls retain this bit on readback without
+        // bypassing the measured X/Y bounds; PV geometry remains model-owned.
         let xmin = Self::window_coordinate(window[0], window[1], 3);
         let ymin = Self::window_coordinate(window[2], window[3], 1);
         let xmax = Self::window_coordinate(window[4], window[5], 3);
@@ -180,25 +183,22 @@ impl LcdController {
             let Some((px, py)) = self.bit_location(x, y, bit) else {
                 continue;
             };
-            if self.registers[3] & mask != 0 && self.permits_write(px, py) {
+            if self.registers[3] & mask != 0 && self.permits_pixel(px, py) {
                 let destination = &mut self.pixels[py * self.width + px];
-                let source = u8::from(value & mask != 0);
+                let source = u8::from(value & mask != 0) ^ ((self.registers[8] >> 2) & 1);
                 let combined = match self.registers[8] & 3 {
                     0 => source,
                     1 => *destination ^ source,
-                    2 => *destination | source,
+                    2 => *destination & source,
                     // Scrapbook issues live mode 3 at its native line entry,
                     // then ORs the same stroke into its saved software bitmap.
                     // AND hid live strokes until a later SET bitmap redraw.
                     3 => *destination | source,
                     _ => unreachable!("two-bit raster operation"),
                 };
-                // Calendar's F6E79 solid pattern uses mode 1 over an existing
-                // date: XOR preserves inverse glyphs. Notebook's F7157 uses
-                // mode 5 with zero data to complement its existing title.
-                // Mode 2 retains its unqualified OR hypothesis. Bit-2 result
-                // inversion still needs physical-controller qualification.
-                *destination = combined ^ ((self.registers[8] >> 2) & 1);
+                // Measured AA/3C controls distinguish AND (28), inverted
+                // AND (82) and inverted OR (EB): invert before combining.
+                *destination = combined;
             }
         }
     }
@@ -359,6 +359,105 @@ impl LcdController {
 mod tests {
     use super::*;
 
+    fn measured_window(lcd: &mut LcdController, bounds: [u16; 4]) {
+        for (n, word) in bounds.into_iter().enumerate() {
+            let [low, high] = word.to_le_bytes();
+            lcd.write(24 + n * 2, low).unwrap();
+            lcd.write(25 + n * 2, high).unwrap();
+        }
+    }
+
+    fn measured_group_read(lcd: &mut LcdController) -> u8 {
+        lcd.read(2, 0).unwrap();
+        lcd.read(2, 0).unwrap()
+    }
+
+    #[test]
+    fn physical_window_readback_preserves_excluded_backing_pixels() {
+        // Physical original-window control: each baseline FF, then SET 00.
+        // The clipped read was 00; restoring the descriptor revealed FF/C3/FF.
+        for (bounds, source, backing) in [
+            ([305, 208, 306, 215], 0x00, 0xff),
+            ([304, 210, 304, 213], 0x00, 0xc3),
+            ([302, 208, 303, 0x200], 0x00, 0xff),
+            ([304, 216, 304, 223], 0x3c, 0xff),
+            ([304, 216, 304, 735], 0x3c, 0xff),
+            ([304, 0, 304, 207], 0x3c, 0xff),
+            ([304, 0, 304, 719], 0x3c, 0xff),
+        ] {
+            let mut lcd = LcdController::default();
+            lcd.write(9, 2).unwrap();
+            measured_window(&mut lcd, [0, 0, 319, 239]);
+            lcd.write(3, 255).unwrap();
+            lcd.write(8, 0x80).unwrap();
+            for (offset, word) in [(16, 304u16), (18, 208), (20, 304), (22, 208)] {
+                let [low, high] = word.to_le_bytes();
+                lcd.write(offset, low).unwrap();
+                lcd.write(offset + 1, high).unwrap();
+            }
+            lcd.write(2, 0xff).unwrap();
+            assert_eq!(measured_group_read(&mut lcd), 0xff);
+            measured_window(&mut lcd, bounds);
+            lcd.write(2, source).unwrap();
+            assert_eq!(measured_group_read(&mut lcd), 0, "clipped {bounds:?}");
+            measured_window(&mut lcd, [0, 0, 319, 239]);
+            assert_eq!(measured_group_read(&mut lcd), backing, "backing {bounds:?}");
+        }
+    }
+
+    #[test]
+    fn physical_vertical_raster_modes_match_aa_destination_3c_source() {
+        // Physical OZ-9600/LH1553F, 13 Oct 2026: each baseline AA was
+        // read back before applying source 3C. Modes 2/6/7 distinguish
+        // AND from OR and source inversion from result inversion.
+        let observed = [0x3c, 0x96, 0x28, 0xbe, 0xc3, 0x69, 0x82, 0xeb];
+        for (mode, expected) in observed.into_iter().enumerate() {
+            let mut lcd = LcdController::default();
+            measured_window(&mut lcd, [0, 0, 335, 239]);
+            lcd.write(3, 255).unwrap();
+            lcd.write(16, 48).unwrap();
+            lcd.write(18, 88).unwrap();
+            lcd.write(20, 48).unwrap();
+            lcd.write(22, 88).unwrap();
+            lcd.write(8, 0x80).unwrap();
+            lcd.write(2, 0xaa).unwrap();
+            lcd.read(2, 0).unwrap(); // Prime the read latch.
+            assert_eq!(lcd.read(2, 0).unwrap(), 0xaa);
+            lcd.write(8, 0x80 | mode as u8).unwrap();
+            lcd.write(2, 0x3c).unwrap();
+            lcd.read(2, 0).unwrap();
+            assert_eq!(lcd.read(2, 0).unwrap(), expected, "mode {mode}");
+        }
+    }
+
+    fn full_window(lcd: &mut LcdController) {
+        let bounds = [0, 0, lcd.width as u16 - 1, lcd.height as u16 - 1];
+        measured_window(lcd, bounds);
+    }
+
+    #[test]
+    fn firmware_window_candidate_keeps_extended_storage_separate_from_oz_bounds() {
+        // PV native full-area context has Y end 239 plus the extra bit,
+        // while its independent rectangle fixture reaches working row 288.
+        for candidate in [false, true] {
+            let mut lcd = LcdController::with_geometry(336, 292);
+            lcd.firmware_window_candidate = candidate;
+            measured_window(&mut lcd, [0, 0, 335, 0x200 | 239]);
+            lcd.write(3, 255).unwrap();
+            lcd.write(8, 0x80).unwrap();
+            for (offset, value) in [(16, 304), (18, 288), (20, 304), (22, 288)] {
+                lcd.set_word(offset, value);
+            }
+            lcd.write(2, 255).unwrap();
+            assert_eq!(lcd.pixel(304, 288), candidate);
+            measured_window(&mut lcd, [305, 288, 306, 291]);
+            assert_eq!(
+                measured_group_read(&mut lcd),
+                if candidate { 0xf0 } else { 0 }
+            );
+        }
+    }
+
     #[test]
     fn ordered_window_candidate_preserves_earlier_region_and_advances_masked_blocks() {
         let mut lcd = LcdController::with_geometry(16, 8);
@@ -400,7 +499,7 @@ mod tests {
         lcd.set_word(16, 4);
         lcd.set_word(18, 2);
         lcd.write(2, 0).unwrap();
-        assert!(!lcd.pixel(4, 2)); // Explicit bypass remains available.
+        assert!(!lcd.pixel(4, 2)); // Selected background remains directly writable.
     }
 
     #[test]
@@ -410,7 +509,7 @@ mod tests {
         for vertical in [0, 128] {
             for missing in [1_u16, 2] {
                 let mut lcd = LcdController::default();
-                lcd.write(31, 2).unwrap();
+                full_window(&mut lcd);
                 lcd.write(3, 255).unwrap();
                 lcd.write(8, vertical).unwrap();
                 let (axis, other) = if vertical == 0 { (16, 18) } else { (18, 16) };
@@ -436,7 +535,7 @@ mod tests {
         // Live mode 3 must agree with the ROM's software OR bitmap path.
         for vertical in [0, 128] {
             let mut lcd = LcdController::default();
-            lcd.write(31, 2).unwrap();
+            full_window(&mut lcd);
             lcd.write(3, 255).unwrap();
             lcd.write(16, 48).unwrap();
             lcd.write(18, 88).unwrap();
