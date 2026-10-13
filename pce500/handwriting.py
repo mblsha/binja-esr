@@ -7,6 +7,9 @@ commit 581faa8f6f15e4a7b21964be3a5ec36265c80e5b. See third_party/zinnia/COPYING.
 import math
 import struct
 
+HYBRID_MAGIC = b"PVHW02\0\0"
+SHAPE_POINTS = 32
+
 
 def f32(value):
     return struct.unpack("<f", struct.pack("<f", value))[0]
@@ -89,6 +92,10 @@ def features(strokes, width, height):
 
 class Model:
     def __init__(self, data):
+        self.hybrid = None
+        if data.startswith(HYBRID_MAGIC):
+            self._load_hybrid(data)
+            return
         at = 0
 
         def word():
@@ -132,8 +139,81 @@ class Model:
         if at != len(data):
             raise ValueError("trailing handwriting model bytes")
 
+    def _load_hybrid(self, data):
+        if len(data) < 24:
+            raise ValueError("truncated hybrid model")
+        base_len, count, points, ratio = struct.unpack_from("<IIIf", data, 8)
+        if not 0 < count <= 65536 or points != SHAPE_POINTS or not 0 < ratio < 1:
+            raise ValueError("invalid hybrid model configuration")
+        at = 24
+        base = data[at : at + base_len]
+        if len(base) != base_len or base.startswith(HYBRID_MAGIC):
+            raise ValueError("invalid hybrid base model")
+        self.classes = Model(base).classes
+        at += base_len
+        templates = []
+        for _ in range(count):
+            raw = data[at : at + 16]
+            at += 16
+            if len(raw) != 16 or b"\0" not in raw:
+                raise ValueError("invalid hybrid label")
+            label = raw.split(b"\0")[0].decode("utf-8")
+            if len(label) != 1 or at + 4 > len(data):
+                raise ValueError("invalid hybrid label/strokes")
+            strokes = struct.unpack_from("<I", data, at)[0]
+            at += 4
+            size = strokes * SHAPE_POINTS * 8
+            if not 1 <= strokes <= 64 or at + size > len(data):
+                raise ValueError("invalid hybrid stroke count/points")
+            values = struct.unpack_from(f"<{strokes * SHAPE_POINTS * 2}f", data, at)
+            if any(not math.isfinite(v) or abs(v) > 1 for v in values):
+                raise ValueError("invalid hybrid shape point")
+            at += size
+            templates.append((label, strokes, list(zip(values[::2], values[1::2]))))
+        if at != len(data):
+            raise ValueError("trailing hybrid model bytes")
+        self.hybrid = (ratio, templates)
+
+    def class_count(self):
+        labels = {label for label, _, _ in self.classes}
+        return len(self.classes) + (
+            len(
+                {
+                    label
+                    for label, _, _ in self.hybrid[1]
+                    if label.isascii() and label.isalnum()
+                }
+                - labels
+            )
+            if self.hybrid
+            else 0
+        )
+
     def classify(self, strokes, width, height, limit=10):
         values = features(strokes, width, height)
+        if self.hybrid:
+            ratio, templates = self.hybrid
+            query = shape(strokes, width, height)
+            latin, japanese = [], math.inf
+            for label, count, points in templates:
+                if count != len(strokes):
+                    continue
+                distance = sum(
+                    (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+                    for a, b in zip(query, points)
+                ) / (2 * len(query))
+                if label.isascii() and label.isalnum():
+                    latin.append((label, distance))
+                else:
+                    japanese = min(japanese, distance)
+            latin.sort(key=lambda v: (v[1], v[0]))
+            if latin and latin[0][1] < ratio * japanese:
+                seen, result = set(), []
+                for label, distance in latin:
+                    if label not in seen:
+                        seen.add(label)
+                        result.append((label, f32(-distance)))
+                return result[:limit]
         scored = []
         for label, bias, weights in self.classes:
             a, b, total = 0, 0, 0.0
@@ -147,3 +227,47 @@ class Model:
                     b += 1
             scored.append((label, f32(bias + total)))
         return sorted(scored, key=lambda v: (v[1], v[0]), reverse=True)[:limit]
+
+
+def shape(strokes, width, height):
+    """Aspect-preserving, centered, arc-length samples of ordered strokes.
+
+    Callers validate geometry through features before using this representation.
+    """
+    normalized = [[(x / width, y / height) for x, y in stroke] for stroke in strokes]
+    low = [min(p[j] for s in normalized for p in s) for j in (0, 1)]
+    high = [max(p[j] for s in normalized for p in s) for j in (0, 1)]
+    span = max(high[0] - low[0], high[1] - low[1], 1e-6)
+    center = [(low[j] + high[j]) / 2 for j in (0, 1)]
+    result = []
+    for stroke in normalized:
+        points, distances, length = [], [], 0.0
+        for raw in stroke:
+            point = [(raw[j] - center[j]) / span for j in (0, 1)]
+            if points:
+                step = math.hypot(point[0] - points[-1][0], point[1] - points[-1][1])
+                if step == 0:
+                    continue
+                length += step
+            points.append(point)
+            distances.append(length)
+        segment = 0
+        for i in range(SHAPE_POINTS):
+            target = length * i / (SHAPE_POINTS - 1)
+            while segment + 1 < len(distances) and distances[segment + 1] < target:
+                segment += 1
+            if segment + 1 == len(points):
+                point = points[segment]
+            else:
+                fraction = (target - distances[segment]) / (
+                    distances[segment + 1] - distances[segment]
+                )
+                point = [
+                    points[segment][j]
+                    + (points[segment + 1][j] - points[segment][j]) * fraction
+                    for j in (0, 1)
+                ]
+            result.append([f32(v) for v in point])
+    if any(not math.isfinite(v) for p in result for v in p):
+        raise ValueError("overflowed handwriting shape")
+    return result

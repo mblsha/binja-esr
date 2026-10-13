@@ -280,6 +280,8 @@ physical timing and stroke classification remain open.
 Zinnia-compatible model before boot or with the native capture editor closed.
 The pure Rust shared `handwriting` module
 loads version-1 sparse linear models and extracts ordered-stroke features.
+It also accepts an optional hybrid model containing an unchanged version-1
+Japanese engine and ordered-stroke shape templates for Latin recognition.
 PV-F1 owns the native markers, four character slots, canvas geometry, CP932
 conversion and result transport. Reset preserves the model and clears gesture
 state. The Python mirror implements the same component boundaries.
@@ -304,7 +306,7 @@ second day-list row at (100,98) normally reopens the saved handwritten `い`.
 Stored TEST remains intact; storage code needed no repair.
 
 The native runner accepts `--pvf1-handwriting-model PATH`. The browser's
-Handwriting model input installs a version-1 `.model` asset while paused, keeps
+Handwriting model input installs a supported `.model` asset while paused, keeps
 it for subsequent ROM reloads in the session and rejects replacement during
 active capture. Host model replacement preserves native canvas geometry.
 The browser also exports `.pvram` RAM/scratch/RTC backups and restores compatible
@@ -318,9 +320,42 @@ policy. One changed-host integration submits both い strokes before execution,
 delivers all55 distinct coordinate/release updates and renders い through the
 normal native controller. With the old queue and the same core binary, the
 incomplete path instead renders 八. This is assisted input, not measured timing.
-Broader handwriting accuracy, Latin coverage, type-2 notifications and remaining
+Broader handwriting accuracy, physical type-2 triggers and remaining
 application/card workflows stay open. Routine
 behavioral checks use standalone Rust; WASM checks only the changed bindings.
+
+The hybrid engine centers each character, preserves its aspect ratio and
+resamples each ordered stroke into 32 arc-length points. It compares only
+templates with the same stroke count. Latin recognition is selected only when
+the nearest Latin shape's squared distance is less than the configured fraction
+of the nearest Japanese shape's distance. Ambiguous shapes and stroke counts
+without Latin templates use the original Japanese classifier, including its
+unchanged candidate scores. Latin candidates are ranked by negative shape
+distance and deduplicated by label. These distances are not probabilities and
+are not compared with the original classifier's scores.
+
+One explicit host model uses 4,960 Latin training samples from 40 writers and
+6,410 Japanese routing templates, with a distance ratio of 0.75. It supplies
+6,472 output classes. Standalone Rust evaluation recognizes both captured T
+inputs and preserves the two Japanese い results. All 225 reserved Japanese
+samples retain their original first choice; these samples may have been in the
+original Japanese model's training set. The separate 20 Latin test writers give
+1,747/2,480 first-choice and 2,353/2,480 top-ten hits. These are measured limits,
+not a claim of comprehensive handwriting accuracy or Sharp engine equivalence.
+
+The native ROM regression captures four slots for TいTい, adopts and saves the
+text, exports retained backing, then boots a fresh runtime and reopens it through
+Modify. Both the record and editor contain ASCII54, CP93282A2, ASCII54, CP93282A2;
+the original TEST record is intact. No supplied result or guest memory patch
+provides the text. The existing model remains optional and host supplied.
+
+Hybrid binary format: `PVHW02\0\0`, followed by little-endian base byte length,
+template count, samples-per-stroke (32), and float32 distance ratio. The complete
+version-1 base follows unchanged. Each template contains a NUL-terminated UTF-8
+label in 16 bytes, a little-endian stroke count, then 32 float32 X/Y pairs per
+stroke. The parser rejects nested hybrid bases, invalid configurations, nonfinite
+or out-of-range points, truncation and trailing bytes. Japanese routing templates
+do not introduce new output classes. Legacy version-1 model handling is retained.
 
 ## Action Planner keyword matching
 
