@@ -320,6 +320,13 @@ The native runner accepts `--pvf1-handwriting-model PATH`. The browser's
 Handwriting model input installs a supported `.model` asset while paused, keeps
 it for subsequent ROM reloads in the session and rejects replacement during
 active capture. Host model replacement preserves native canvas geometry.
+For a configured local launch, set `PVF1_HANDWRITING_MODEL_PATH` alongside
+`PVF1_ROM_PATH`. Initial PV-F1 auto-load stages that model with the ROM and
+validates it through the existing Rust loader before the first instruction.
+The selected asset/name is cached only after installation succeeds; a manually
+selected model takes precedence on later ROM reloads. An unconfigured server
+leaves the normal model picker available. No firmware or model is embedded in
+the public source tree.
 The browser also exports `.pvram` RAM/scratch/RTC backups and restores compatible
 backing with the selected model into a fresh paused runtime. ROM/bank identity,
 payload checksum and model validation complete before the old machine changes.
