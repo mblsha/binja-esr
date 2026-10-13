@@ -161,6 +161,10 @@ pub enum Auxiliary {
         last_samples: Vec<[u16; 2]>,
         results: Box<CandidateResults>,
         recognition: Box<Recognition>,
+        // FE DCAE1..DCAFA queries ten user-registration slots. Entry words
+        // remain opaque until their write/learning contract is recovered.
+        registrations: BTreeMap<u8, u16>,
+        registration_response: Option<[u8; 2]>,
     },
 }
 impl Auxiliary {
@@ -184,6 +188,8 @@ impl Auxiliary {
             last_samples: vec![],
             results: Box::default(),
             recognition: Box::default(),
+            registrations: BTreeMap::new(),
+            registration_response: None,
         }
     }
     pub fn configure_recognizer(&mut self, model: Option<Arc<Model>>) -> Result<(), String> {
@@ -320,13 +326,25 @@ impl Auxiliary {
             (
                 0x8a41..=0x8a5f,
                 Self::Control {
-                    engine, results, ..
+                    engine,
+                    results,
+                    registration_response,
+                    ..
                 },
-            ) if engine.status() & 0x40 != 0 => results
-                .response
-                .as_ref()
-                .and_then(|r| r.get((address - 0x8a41) as usize))
-                .copied(),
+            ) if engine.status() & 0x40 != 0 => {
+                let offset = (address - 0x8a41) as usize;
+                registration_response
+                    .as_ref()
+                    .and_then(|r| r.get(offset))
+                    .copied()
+                    .or_else(|| {
+                        results
+                            .response
+                            .as_ref()
+                            .and_then(|r| r.get(offset))
+                            .copied()
+                    })
+            }
             (0x8a05 | 0x8a09, _) => Some(0),
             (0x8a40, Self::Control { engine, .. }) => engine.response(0),
             _ => None,
@@ -423,9 +441,29 @@ impl Auxiliary {
                     last_samples,
                     results,
                     recognition,
+                    registrations,
+                    registration_response,
                     ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
+                    if command == 0x13fb {
+                        let index = request[2];
+                        if index >= 10 {
+                            return Err(format!(
+                                "PV-F1 registration slot {index} outside recovered directory"
+                            ));
+                        }
+                        let entry = registrations.get(&index).copied();
+                        engine.start_packet(
+                            request,
+                            cycle,
+                            3,
+                            Some(u8::from(entry.is_some())),
+                            true,
+                        )?;
+                        *registration_response = Some(entry.unwrap_or(0).to_le_bytes());
+                        return Ok(());
+                    }
                     if command == 0x02fc {
                         let index = request[2];
                         let page = results.pages.get(&index).ok_or_else(|| {
@@ -510,10 +548,14 @@ impl Auxiliary {
             0x8a03 if value == 0xbf => match self {
                 Self::Absent { .. } => Ok(()),
                 Self::Control {
-                    engine, results, ..
+                    engine,
+                    results,
+                    registration_response,
+                    ..
                 } => {
                     engine.acknowledge(value)?;
                     results.response = None;
+                    *registration_response = None;
                     Ok(())
                 }
             },
@@ -527,6 +569,38 @@ impl Auxiliary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registration_query_has_timed_status_word_and_ack_scoped_reply() {
+        let mut a = Auxiliary::control();
+        for index in [0, 9] {
+            for (offset, byte) in [0xfb, 0x13, index].into_iter().enumerate() {
+                a.write(0x8a20 + offset as u32, byte, 100).unwrap();
+            }
+            a.write(0x8a02, 0x80, 100).unwrap();
+            assert_eq!(a.peek(0x8a41), None);
+            a.advance(132);
+            assert_eq!(a.peek(0x8a40), Some(0));
+            assert_eq!(a.peek(0x8a41), Some(0));
+            assert_eq!(a.peek(0x8a42), Some(0));
+            assert_eq!(a.peek(0x8a43), None);
+            a.write(0x8a03, 0xbf, 132).unwrap();
+            assert_eq!(a.peek(0x8a41), None);
+        }
+        // Synthetic component entry tests wire ordering only; no training
+        // or physical word meaning is claimed by this fixture.
+        if let Auxiliary::Control { registrations, .. } = &mut a {
+            registrations.insert(0, 0x8273);
+        }
+        for (offset, byte) in [0xfb, 0x13, 0].into_iter().enumerate() {
+            a.write(0x8a20 + offset as u32, byte, 200).unwrap();
+        }
+        a.write(0x8a02, 0x80, 200).unwrap();
+        a.advance(232);
+        assert_eq!(a.peek(0x8a40), Some(1));
+        assert_eq!(a.peek(0x8a41), Some(0x73));
+        assert_eq!(a.peek(0x8a42), Some(0x82));
+    }
 
     fn start(a: &mut Auxiliary, header: u16, cycle: u64) {
         for (i, b) in header.to_le_bytes().into_iter().enumerate() {
