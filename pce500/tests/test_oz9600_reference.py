@@ -250,9 +250,16 @@ def test_invalid_physical_replay_is_rejected_before_application(data):
         parse_replay(data)
 
 
+def full_lcd_window(lcd):
+    # A component needs a real full descriptor, not the disproved bypass bit.
+    for n, word in enumerate((0, 0, 335, 239)):
+        lcd.write(24 + 2 * n, word & 255)
+        lcd.write(25 + 2 * n, word >> 8)
+
+
 def test_full_frame_owns_pixels_and_invalid_increment_is_atomic():
     lcd = LcdController()
-    lcd.write(31, 2)
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 335)
     lcd.set_word(18, 239)
@@ -272,7 +279,7 @@ def test_rom_highlight_operations_preserve_and_restore_mixed_pixels(mode, data):
     # Calendar's solid pattern uses mode 1/FF; Notebook uses mode 5/00.
     # Both complement existing glyph pixels, then restore on a second pass.
     lcd = LcdController()
-    lcd.write(31, 2)  # explicit full-window bypass for this component fixture
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 24)
     lcd.set_word(18, 40)
@@ -290,7 +297,7 @@ def test_scrapbook_mode_three_adds_stroke_without_erasing_existing_ink(vertical)
     # The ROM's live line uses mode 3, while its saved bitmap ORs the same
     # stroke. Previously AND left an editor blank until Store/reset redraw.
     lcd = LcdController()
-    lcd.write(31, 2)
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 48)
     lcd.set_word(18, 88)
@@ -430,3 +437,45 @@ def test_recognized_irq_session_uses_schema_two_to_fail_closed_in_older_readers(
     ]:
         with pytest.raises(ValueError, match="policy/schema"):
             encode(bad, identity)
+
+
+@pytest.mark.parametrize(
+    "bounds,source,backing",
+    [
+        ((305, 208, 306, 215), 0x00, 0xFF),
+        ((304, 210, 304, 213), 0x00, 0xC3),
+        ((302, 208, 303, 0x200), 0x00, 0xFF),
+        ((304, 216, 304, 223), 0x3C, 0xFF),
+        ((304, 216, 304, 735), 0x3C, 0xFF),
+        ((304, 0, 304, 207), 0x3C, 0xFF),
+        ((304, 0, 304, 719), 0x3C, 0xFF),
+    ],
+)
+def test_physical_window_readback_preserves_excluded_backing_pixels(
+    bounds, source, backing
+):
+    lcd = LcdController()
+    lcd.write(9, 2)
+
+    def window(values):
+        for n, word in enumerate(values):
+            lcd.write(24 + 2 * n, word & 255)
+            lcd.write(25 + 2 * n, word >> 8)
+
+    def read_group():
+        lcd.read(2, 0)
+        return lcd.read(2, 0)
+
+    window((0, 0, 319, 239))
+    lcd.write(3, 255)
+    lcd.write(8, 128)
+    for offset, word in ((16, 304), (18, 208), (20, 304), (22, 208)):
+        lcd.write(offset, word & 255)
+        lcd.write(offset + 1, word >> 8)
+    lcd.write(2, 255)
+    assert read_group() == 255
+    window(bounds)
+    lcd.write(2, source)
+    assert read_group() == 0
+    window((0, 0, 319, 239))
+    assert read_group() == backing

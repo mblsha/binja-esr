@@ -49,7 +49,8 @@ class LcdController:
         value = sum(
             (0x80 >> bit)
             for bit in range(8)
-            if self.pixel(*self.bit_location(x, y, bit))
+            if self.permits_pixel(*self.bit_location(x, y, bit))
+            and self.pixel(*self.bit_location(x, y, bit))
         )
         return value & self.registers[3]
 
@@ -59,12 +60,12 @@ class LcdController:
         word = low | (high << 8)
         return word - 65536 if word & 32768 else word
 
-    def permits_write(self, x, y):
+    def permits_pixel(self, x, y):
         if not 0 <= x < STORAGE_WIDTH or not 0 <= y < HEIGHT:
             return False
         window = self.windows[self.registers[9]]
-        if window[7] & 2:
-            return True
+        # Physical controls preserve this bit in readback; it relaxes neither
+        # tested Y bound and cannot bypass X clipping. Other roles are open.
         coords = [
             self.window_coordinate(window[n], window[n + 1], 3 if n in (0, 4) else 1)
             for n in (0, 2, 4, 6)
@@ -75,7 +76,7 @@ class LcdController:
         for bit in range(8):
             mask = 0x80 >> bit
             px, py = self.bit_location(x, y, bit)
-            if not self.registers[3] & mask or not self.permits_write(px, py):
+            if not self.registers[3] & mask or not self.permits_pixel(px, py):
                 continue
             index = py * STORAGE_WIDTH + px
             destination = self.pixels[index]

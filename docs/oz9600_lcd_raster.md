@@ -27,3 +27,24 @@ qualify clipping, other orientations, busy timing or other controller variants.
 The core regression uses the physical result table; existing real-ROM bitmap
 and highlight tests retain their own mask and stack checks. Schedule's cache
 failure remains a separate unresolved issue.
+
+
+## Physical window readback controls
+
+A baseline FF was followed by SET 00 under an X-excluding or partial-Y window.
+Reads under those descriptors returned00. Restoring the original descriptor,
+before rewriting pixels, revealed FF or C3. Reads therefore mask the pixels
+outside the inclusive window, while writes preserve those backing pixels.
+
+The extra Y-end high-byte bit1 was previously treated as a global bypass.
+Physical X-exclusion and paired Y-minimum/Y-maximum controls disprove that
+assumption. With source3C, both Y-outside pairs retainedFF, and every clipped
+read returned00, with that bit either clear or set. Its readback is retained;
+it is ignored for these ordinary clipping checks. Other possible roles remain
+unqualified. The ordinary Y field stays8 low bits plus high-byte bit0.
+
+Rust/Python regressions use those independent physical values. Component and
+parity fixtures now program a full `(0,0)..(335,239)` descriptor explicitly.
+The original-window control returned normally and restored its descriptor,
+pixels, registers and card allocation. Timing, negative/overflow coordinates,
+other controller variants and glass boundaries remain open.
