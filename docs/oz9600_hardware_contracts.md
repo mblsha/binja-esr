@@ -15,7 +15,7 @@ CPU-family resemblance alone does not qualify another model.
 | LCD Boolean raster operations and clipping | [Measured raster table and window controls](oz9600_lcd_raster.md); shared Rust/Python controller | Controller branch is OZ-9600 LH1553F; other displays require verification |
 | Native Notebook BOX rows | ID16/length16/version/9 fields, exact edited-record recovery and confirmed deletion; accompanying private decoder/record snapshots | One short ASCII note; other record families, long-text hardware, index/format semantics and OFF/reset recovery remain open |
 | Native RTC and manual OFF/ON | Actual RTC callbacks, BP-minus-one preservation and one manual OFF/ON return | Does not prove automatic alarm wake or earliest wake cause |
-| LCD completed block count | Native two-row copy returns count zero; fill then copy without reload does no further transfer; explicit reloads work in both directions | Completed-operation model; intermediate decrement and electrical busy timing remain open |
+| LCD completed block count | Native one/two-row copies return count zero; all four count-write methods transfer exactly one row in the new boundary probe; fill then copy without reload does no further transfer; explicit reloads work in both directions | Completed-operation model; intermediate decrement and electrical busy timing remain open |
 | SRAM windows | Paired BASIC/native4400 reads and prior distinct markers establish that the low/top alias is view-dependent | Unconditional alias in the provisional model does not cover BASIC3507FF0002; coupled mapper/GPIO bits, other pages and capacity remain open |
 
 The implementation preserves related models' geometry, PI input hold interval
@@ -38,6 +38,12 @@ controls. Its current entry point is
 - `reference/lcd_block_count_20261013/README.md`: consumed-count explanation,
   native/count/increment hardware controls and unchanged-code integration replays.
   The original ineffective copies followed a fill without reloading the count.
+- `reference/lcd_count_one_20261014/physical/physical-proof.json`: count-one
+  register/internal word and both byte-order controls plus native F74D8 match;
+  completed count zero, selected pixels/controller/internal records/card restored.
+- `reference/card_helper_views_20261014/proof.json`: selected monitor data
+  signatures match across observed Notebook/BASIC/Notebook endpoints; the earlier
+  transient mismatch and code-fetch/card-overlay causes remain unresolved.
 - `reference/memory_native_view_20261014/physical/physical-proof.json`: identical
   targets in BASIC3507FF0002 and native3007FF0100. B2000 is F6 in BASIC and
   equals12000 in the native view; ROM/card controls and exact recovery pass.
