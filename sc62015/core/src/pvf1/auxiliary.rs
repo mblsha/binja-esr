@@ -2,7 +2,7 @@
 //! PV-F1 FF406/FF40E control transport. Absent mode exposes the acquired idle
 //! status and lets ROM time out. The opt-in control candidate reuses the shared
 //! handshake engine, gated to PV-F1-confirmed request/response contracts only.
-use crate::handwriting::{Model, Strokes};
+use crate::handwriting::{template_distance, Model, Strokes};
 use crate::pi3000::auxiliary::Auxiliary as ControlEngine;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -57,6 +57,9 @@ pub struct Recognition {
     model: Option<Arc<Model>>,
     width: u16,
     height: u16,
+    configuration: u16,
+    input_flags: u8,
+    registration_mode: bool,
     active: Option<u8>,
     strokes: BTreeMap<u8, Strokes>,
     in_stroke: bool,
@@ -64,11 +67,15 @@ pub struct Recognition {
     last_labels: Vec<String>,
 }
 type RecognitionResult = Option<(u8, Vec<[u8; 3]>)>;
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegisteredGlyph {
+    code: u16,
+    width: u16,
+    height: u16,
+    strokes: Strokes,
+}
 impl Recognition {
     fn upload(&mut self, samples: &[[u16; 2]]) -> Result<(), String> {
-        if self.model.is_none() {
-            return Ok(());
-        }
         for &[x, y] in samples {
             if x == 0x8000 && y < 4 {
                 self.active = Some(y as u8);
@@ -100,10 +107,13 @@ impl Recognition {
         }
         Ok(())
     }
-    fn finish(&mut self) -> Result<RecognitionResult, String> {
-        let Some(model) = &self.model else {
+    fn finish(
+        &mut self,
+        bound_samples: &BTreeMap<u8, RegisteredGlyph>,
+    ) -> Result<RecognitionResult, String> {
+        if self.model.is_none() && bound_samples.is_empty() {
             return Ok(None);
-        };
+        }
         let index = self
             .active
             .take()
@@ -113,12 +123,35 @@ impl Recognition {
             .strokes
             .remove(&index)
             .ok_or("recognizer finish without ink")?;
-        let labels = model.classify(
-            &strokes,
-            self.width as f32,
-            self.height as f32,
-            model.class_count(),
-        )?;
+        let mut matched = Vec::new();
+        for glyph in bound_samples.values() {
+            if let Some(distance) = template_distance(
+                &strokes,
+                [self.width as f32, self.height as f32],
+                &glyph.strokes,
+                [glyph.width as f32, glyph.height as f32],
+            )? {
+                // Host template policy, not recovered controller silicon.
+                // Only near repeats precede the ordinary inference model.
+                if distance <= 0.01 {
+                    let bytes = glyph.code.to_le_bytes();
+                    let (text, error) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&bytes);
+                    if !error {
+                        matched.push((text.into_owned(), -(distance as f32)));
+                    }
+                }
+            }
+        }
+        matched.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let mut labels = matched;
+        if let Some(model) = &self.model {
+            labels.extend(model.classify(
+                &strokes,
+                self.width as f32,
+                self.height as f32,
+                model.class_count(),
+            )?);
+        }
         let mut records = Vec::new();
         self.last_labels.clear();
         for (label, _) in labels {
@@ -131,6 +164,9 @@ impl Recognition {
             let text = c.to_string();
             let (bytes, _, error) = encoding_rs::SHIFT_JIS.encode(&text);
             if !error && bytes.len() == 2 {
+                if self.last_labels.contains(&text) {
+                    continue;
+                }
                 records.push([bytes[0], bytes[1], 0]);
                 self.last_labels.push(text);
             }
@@ -154,20 +190,62 @@ pub enum Auxiliary {
         request: [u8; 32],
         controls: [u8; 3],
         enabled: bool,
-        engine: ControlEngine,
-        clock: CaptureClock,
+        engine: Box<ControlEngine>,
+        clock: Box<CaptureClock>,
         sample_uploads: u64,
         completed_strokes: u64,
         last_samples: Vec<[u16; 2]>,
         results: Box<CandidateResults>,
         recognition: Box<Recognition>,
-        // FE DCAE1..DCAFA queries ten user-registration slots. Entry words
-        // remain opaque until their write/learning contract is recovered.
+        // FE DCAE1..DCAFA queries ten user-registration slots. DD5D7 binds
+        // the entered two-byte character to captured ink through10FB.
         registrations: BTreeMap<u8, u16>,
-        registration_response: Option<[u8; 2]>,
+        registration_response: Option<Vec<u8>>,
+        registration_exchange: bool,
+        registration_channel: Option<u8>,
+        registered_glyphs: BTreeMap<u8, RegisteredGlyph>,
+        raw_confirmation: bool,
+        stroke_read: Option<(u8, Vec<u8>, usize)>,
     },
 }
 impl Auxiliary {
+    pub(super) fn registered_state(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::Control {
+                registered_glyphs, ..
+            } if !registered_glyphs.is_empty() => Some(
+                serde_json::to_vec(registered_glyphs).expect("finite uploaded stroke geometry"),
+            ),
+            _ => None,
+        }
+    }
+    pub(super) fn decode_registered_state(
+        bytes: &[u8],
+    ) -> Result<BTreeMap<u8, RegisteredGlyph>, String> {
+        let glyphs: BTreeMap<u8, RegisteredGlyph> =
+            serde_json::from_slice(bytes).map_err(|e| format!("PV-F1 controller backing: {e}"))?;
+        for (channel, glyph) in &glyphs {
+            if *channel >= 10 {
+                return Err("PV-F1 controller backing channel outside directory".into());
+            }
+            crate::handwriting::features(&glyph.strokes, glyph.width as f32, glyph.height as f32)?;
+        }
+        Ok(glyphs)
+    }
+    pub(super) fn restore_registered_state(&mut self, glyphs: BTreeMap<u8, RegisteredGlyph>) {
+        if let Self::Control {
+            registrations,
+            registered_glyphs,
+            ..
+        } = self
+        {
+            *registrations = glyphs
+                .iter()
+                .map(|(channel, glyph)| (*channel, glyph.code))
+                .collect();
+            *registered_glyphs = glyphs;
+        }
+    }
     pub fn absent() -> Self {
         Self::Absent {
             request: [0; 32],
@@ -181,8 +259,8 @@ impl Auxiliary {
             request: [0; 32],
             controls: [0; 3],
             enabled: true,
-            engine: ControlEngine::default(),
-            clock: CaptureClock::default(),
+            engine: Box::default(),
+            clock: Box::default(),
             sample_uploads: 0,
             completed_strokes: 0,
             last_samples: vec![],
@@ -190,6 +268,11 @@ impl Auxiliary {
             recognition: Box::default(),
             registrations: BTreeMap::new(),
             registration_response: None,
+            registration_exchange: false,
+            registration_channel: None,
+            registered_glyphs: BTreeMap::new(),
+            raw_confirmation: false,
+            stroke_read: None,
         }
     }
     pub fn configure_recognizer(&mut self, model: Option<Arc<Model>>) -> Result<(), String> {
@@ -208,6 +291,9 @@ impl Auxiliary {
             model,
             width: recognition.width,
             height: recognition.height,
+            configuration: recognition.configuration,
+            input_flags: recognition.input_flags,
+            registration_mode: recognition.registration_mode,
             ..Recognition::default()
         };
         Ok(())
@@ -300,9 +386,17 @@ impl Auxiliary {
                 last_samples,
                 results,
                 recognition,
+                registered_glyphs,
                 ..
             } => {
-                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples,"result_fixture_ready":results.ready,"result_fixture_indices":results.pages.keys().collect::<Vec<_>>(),"recognizer_loaded":recognition.model.is_some(),"recognition_canvas":[recognition.width,recognition.height],"classifications":recognition.classifications,"recognized_labels":recognition.last_labels })
+                let captured = registered_glyphs
+                    .iter()
+                    .map(|(channel, glyph)| {
+                        json!({"channel":channel,"code_bytes":glyph.code.to_le_bytes(),
+                        "canvas":[glyph.width,glyph.height],"strokes":glyph.strokes})
+                    })
+                    .collect::<Vec<_>>();
+                json!({"control_candidate":true,"controls":controls.to_vec(),"enabled":enabled,"capture_active":engine.capture_active,"accepted_controls":engine.accepted,"accepted_count":engine.accepted_count,"sample_period_candidate":clock.period,"sample_ready":clock.ready,"sample_events":clock.events,"sample_uploads":sample_uploads,"completed_strokes":completed_strokes,"last_uploaded_samples":last_samples,"result_fixture_ready":results.ready,"result_fixture_indices":results.pages.keys().collect::<Vec<_>>(),"recognizer_loaded":recognition.model.is_some(),"recognition_canvas":[recognition.width,recognition.height],"recognition_configuration":recognition.configuration,"input_flags":recognition.input_flags,"classifications":recognition.classifications,"recognized_labels":recognition.last_labels,"bound_raw_samples":captured })
             }
         }
     }
@@ -382,12 +476,19 @@ impl Auxiliary {
                     Self::Control { clock, .. } => clock.period,
                     Self::Absent { .. } => None,
                 };
+                let glyphs = match self {
+                    Self::Control {
+                        registered_glyphs, ..
+                    } => std::mem::take(registered_glyphs),
+                    _ => BTreeMap::new(),
+                };
                 if matches!(self, Self::Absent { .. }) {
                     *self = Self::absent();
                 } else {
                     *self = Self::control();
                     self.configure_sample_period(period)?;
                     self.configure_recognizer(model)?;
+                    self.restore_registered_state(glyphs);
                 }
                 let enabled = match self {
                     Self::Absent { enabled, .. } | Self::Control { enabled, .. } => enabled,
@@ -443,9 +544,125 @@ impl Auxiliary {
                     recognition,
                     registrations,
                     registration_response,
+                    registration_exchange,
+                    registration_channel,
+                    registered_glyphs,
+                    raw_confirmation,
+                    stroke_read,
                     ..
                 } => {
                     let command = u16::from_le_bytes([request[0], request[1]]);
+                    if command == 0x22fb {
+                        if !*registration_exchange
+                            || stroke_read
+                                .as_ref()
+                                .is_none_or(|(_, data, cursor)| *cursor != data.len())
+                        {
+                            return Err("PV-F1 stored stroke finish before complete read".into());
+                        }
+                        engine.start_packet(request, cycle, 2, Some(1), true)?;
+                        *stroke_read = None;
+                        return Ok(());
+                    }
+                    if command == 0x20fb {
+                        let channel = request[2];
+                        if !*registration_exchange {
+                            return Err("PV-F1 stored stroke read outside exchange".into());
+                        }
+                        let glyph = registered_glyphs
+                            .get(&channel)
+                            .ok_or("PV-F1 stored stroke channel is empty")?;
+                        let mut packed = Vec::new();
+                        for stroke in &glyph.strokes {
+                            for [x, y] in stroke {
+                                // DCA59..DCA79 multiplies each byte by four
+                                // before adding the drawing origin.
+                                packed.extend([(*x / 4.).round() as u8, (*y / 4.).round() as u8]);
+                            }
+                            packed.extend([0xff, 0xff]);
+                        }
+                        engine.start_packet(request, cycle, 3, Some(1), true)?;
+                        *stroke_read = Some((channel, packed, 0));
+                        return Ok(());
+                    }
+                    if command == 0x21fb {
+                        let (channel, data, cursor) = stroke_read
+                            .as_mut()
+                            .ok_or("PV-F1 stored stroke data without selection")?;
+                        if !*registration_exchange || request[2] != *channel {
+                            return Err("PV-F1 stored stroke data outside selected exchange".into());
+                        }
+                        let end = (*cursor + 30).min(data.len());
+                        let status = u8::from(end == data.len());
+                        engine.start_packet(request, cycle, 3, Some(status), true)?;
+                        let mut reply = vec![(end - *cursor) as u8];
+                        reply.extend_from_slice(&data[*cursor..end]);
+                        *cursor = end;
+                        *registration_response = Some(reply);
+                        return Ok(());
+                    }
+                    if command == 0x10fb {
+                        // FE DC85C/DD5D7 supplies channel plus the entered
+                        // two-byte character. The learned ink comes from the
+                        // preceding real sample uploads, not a result fixture.
+                        let channel = request[2];
+                        if channel >= 10 || !recognition.registration_mode {
+                            return Err(
+                                "PV-F1 glyph binding outside controller44/channel range".into()
+                            );
+                        }
+                        let index = recognition
+                            .active
+                            .ok_or("PV-F1 glyph binding without captured channel")?;
+                        let strokes = recognition
+                            .strokes
+                            .get(&index)
+                            .filter(|s| !s.is_empty())
+                            .ok_or("PV-F1 glyph binding without captured ink")?
+                            .clone();
+                        let code = u16::from_le_bytes([request[3], request[4]]);
+                        engine.start_packet(request, cycle, 5, Some(1), true)?;
+                        registered_glyphs.insert(
+                            channel,
+                            RegisteredGlyph {
+                                code,
+                                width: recognition.width,
+                                height: recognition.height,
+                                strokes,
+                            },
+                        );
+                        registrations.insert(channel, code);
+                        *raw_confirmation = true;
+                        recognition.active = None;
+                        recognition.strokes.remove(&index);
+                        recognition.in_stroke = false;
+                        return Ok(());
+                    }
+                    if matches!(command, 0x01fb | 0x02fb) {
+                        // FE DCA26/DCB35 bracket registration-data operations
+                        // with D76C/D771. D79C requires status01 and BF ack.
+                        // This exchange does not start normal pen capture.
+                        engine.start_packet(request, cycle, 2, Some(1), true)?;
+                        *registration_exchange = command == 0x01fb;
+                        return Ok(());
+                    }
+                    if command == 0x12fb {
+                        // Native registration Cancel runs DCB35/DD607 with
+                        // its channel within the exchange bracket. Remove that
+                        // binding; other directory records remain intact.
+                        if !*registration_exchange || request[2] >= 10 {
+                            return Err(
+                                "PV-F1 controller channel selection outside active exchange/range"
+                                    .into(),
+                            );
+                        }
+                        engine.start_packet(request, cycle, 3, Some(1), true)?;
+                        *registration_channel = Some(request[2]);
+                        registrations.remove(&request[2]);
+                        registered_glyphs.remove(&request[2]);
+                        *raw_confirmation = false;
+                        return Ok(());
+                    }
                     if command == 0x13fb {
                         let index = request[2];
                         if index >= 10 {
@@ -461,7 +678,7 @@ impl Auxiliary {
                             Some(u8::from(entry.is_some())),
                             true,
                         )?;
-                        *registration_response = Some(entry.unwrap_or(0).to_le_bytes());
+                        *registration_response = Some(entry.unwrap_or(0).to_le_bytes().to_vec());
                         return Ok(());
                     }
                     if command == 0x02fc {
@@ -481,7 +698,16 @@ impl Auxiliary {
                         // start. Candidate-result IRQ/data remain unresolved.
                         engine.start_packet(request, cycle, 2, None, false)?;
                         *completed_strokes += 1;
-                        if let Some((index, records)) = recognition.finish()? {
+                        // DC836 waits for capture-state4 before learning.
+                        // A normal type1 result would advance it to5 and trap
+                        // that wait.02F9 selects raw learning;00F9/01F9 select
+                        // ordinary recognition, despite their sharedC2 bits.
+                        if recognition.registration_mode && !*raw_confirmation {
+                            recognition.in_stroke = false;
+                            return Ok(());
+                        }
+                        if let Some((index, records)) = recognition.finish(registered_glyphs)? {
+                            *raw_confirmation = false;
                             if results.ready || results.pages.contains_key(&index) {
                                 return Err("recognizer result would replace pending page".into());
                             }
@@ -510,7 +736,12 @@ impl Auxiliary {
                                 ]
                             })
                             .collect();
-                        recognition.upload(last_samples)?;
+                        if recognition.model.is_some()
+                            || !registered_glyphs.is_empty()
+                            || recognition.registration_mode
+                        {
+                            recognition.upload(last_samples)?;
+                        }
                         return Ok(());
                     }
                     // FE DD77B..DD7B3 sends two-byte controls; DD55E sends
@@ -535,9 +766,22 @@ impl Auxiliary {
                         return Err(format!("unrecovered PV-F1 auxiliary command {command:04X}"));
                     }
                     engine.start(request, cycle)?;
+                    // DC6EF selects controller44 with02F9. Controller43 uses
+                    // 00F9/01F9 atDCC2D/DCC32. Both then driveC2/42, so the
+                    // shared control bits cannot distinguish raw learning.
+                    if command == 0x02f9 {
+                        recognition.registration_mode = true;
+                    }
+                    if matches!(command, 0x00f9 | 0x01f9) {
+                        recognition.registration_mode = false;
+                    }
+                    if command == 0x04fe {
+                        recognition.input_flags = request[2];
+                    }
                     if command == 0x03fe {
                         recognition.width = u16::from_le_bytes([request[2], request[3]]);
                         recognition.height = u16::from_le_bytes([request[4], request[5]]);
+                        recognition.configuration = u16::from_le_bytes([request[6], request[7]]);
                         recognition.active = None;
                         recognition.strokes.clear();
                         recognition.in_stroke = false;
@@ -571,6 +815,159 @@ mod tests {
     use super::*;
 
     #[test]
+    fn controller44_collects_raw_ink_without_a_recognizer_or_result_notification() {
+        let mut a = Auxiliary::control();
+        a.write(0x8a06, 0x42, 0).unwrap();
+        start(&mut a, 0x02f9, 0);
+        a.advance(32);
+        a.write(0x8a03, 0xbf, 32).unwrap();
+        let strokes = vec![vec![[12., 18.], [90., 18.]], vec![[48., 18.], [48., 96.]]];
+        if let Auxiliary::Control { recognition, .. } = &mut a {
+            recognition.width = 138;
+            recognition.height = 222;
+            recognition
+                .upload(&[
+                    [0x8000, 0],
+                    [12, 18],
+                    [90, 18],
+                    [0xffff, 0xffff],
+                    [48, 18],
+                    [48, 96],
+                ])
+                .unwrap();
+        }
+        start(&mut a, 0x00fc, 100);
+        a.advance(132);
+        assert!(!a.take_result_irq_edge());
+        assert_eq!(a.snapshot()["classifications"], 0);
+        for (i, b) in [0xfb, 0x10, 0, 0x82, 0x73].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 200).unwrap();
+        }
+        a.write(0x8a02, 0x80, 200).unwrap();
+        assert_eq!(a.peek(0x8a40), None);
+        a.advance(232);
+        assert_eq!(a.peek(0x8a40), Some(1));
+        if let Auxiliary::Control {
+            registered_glyphs,
+            recognition,
+            ..
+        } = &a
+        {
+            let sample = &registered_glyphs[&0];
+            assert_eq!(sample.code.to_le_bytes(), [0x82, 0x73]);
+            assert_eq!(sample.strokes, strokes);
+            assert_eq!((sample.width, sample.height), (138, 222));
+            assert!(recognition.active.is_none());
+            assert!(recognition.strokes.is_empty());
+        }
+        a.write(0x8a03, 0xbf, 232).unwrap();
+        a.write(0x8a22, 0, 300).unwrap();
+        start(&mut a, 0x13fb, 300);
+        a.advance(332);
+        assert_eq!(a.peek(0x8a40), Some(1));
+        assert_eq!(a.peek(0x8a41), Some(0x82));
+        assert_eq!(a.peek(0x8a42), Some(0x73));
+    }
+
+    #[test]
+    fn stored_stroke_read_chunks_have_native_lengths_and_final_status() {
+        let mut a = Auxiliary::control();
+        if let Auxiliary::Control {
+            registered_glyphs, ..
+        } = &mut a
+        {
+            registered_glyphs.insert(
+                0,
+                RegisteredGlyph {
+                    code: 0x7382,
+                    width: 138,
+                    height: 222,
+                    strokes: vec![(0..16).map(|i| [i as f32 * 4., 40.]).collect()],
+                },
+            );
+        }
+        start(&mut a, 0x01fb, 0);
+        a.advance(32);
+        a.write(0x8a03, 0xbf, 32).unwrap();
+        for (i, b) in [0xfb, 0x20, 0].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 100).unwrap();
+        }
+        a.write(0x8a02, 0x80, 100).unwrap();
+        a.advance(132);
+        a.write(0x8a03, 0xbf, 132).unwrap();
+        for (cycle, status, payload) in [
+            (200, 0, (0..15).flat_map(|x| [x, 10]).collect::<Vec<u8>>()),
+            (300, 1, vec![15, 10, 0xff, 0xff]),
+        ] {
+            for (i, b) in [0xfb, 0x21, 0].into_iter().enumerate() {
+                a.write(0x8a20 + i as u32, b, cycle).unwrap();
+            }
+            a.write(0x8a02, 0x80, cycle).unwrap();
+            assert_eq!(a.peek(0x8a41), None);
+            a.advance(cycle + 32);
+            assert_eq!(a.peek(0x8a40), Some(status));
+            assert_eq!(a.peek(0x8a41), Some(payload.len() as u8));
+            for (i, b) in payload.iter().enumerate() {
+                assert_eq!(a.peek(0x8a42 + i as u32), Some(*b));
+            }
+            a.write(0x8a03, 0xbf, cycle + 32).unwrap();
+            assert_eq!(a.peek(0x8a41), None);
+        }
+        start(&mut a, 0x22fb, 400);
+        a.advance(432);
+        assert_eq!(a.peek(0x8a40), Some(1));
+    }
+
+    #[test]
+    fn retained_template_survives_transport_reset_and_recognizes_repeated_ink() {
+        let strokes = vec![vec![[39., 40.], [97., 40.]], vec![[67., 40.], [67., 159.]]];
+        let mut source = Auxiliary::control();
+        if let Auxiliary::Control {
+            registered_glyphs, ..
+        } = &mut source
+        {
+            registered_glyphs.insert(
+                0,
+                RegisteredGlyph {
+                    code: 0x7382,
+                    width: 138,
+                    height: 222,
+                    strokes: strokes.clone(),
+                },
+            );
+        }
+        let state = source.registered_state().unwrap();
+        let mut fresh = Auxiliary::control();
+        fresh.restore_registered_state(Auxiliary::decode_registered_state(&state).unwrap());
+        for (value, cycle) in [(0xfd, 0), (2, 100)] {
+            fresh.write(0x8a01, value, cycle).unwrap();
+        }
+        assert_eq!(fresh.registered_state(), Some(state));
+        fresh.write(0x8a06, 0x80, 200).unwrap();
+        if let Auxiliary::Control { recognition, .. } = &mut fresh {
+            recognition.width = 138;
+            recognition.height = 222;
+            recognition
+                .upload(&[
+                    [0x8000, 0],
+                    [39, 40],
+                    [97, 40],
+                    [0xffff, 0xffff],
+                    [67, 40],
+                    [67, 159],
+                ])
+                .unwrap();
+        }
+        start(&mut fresh, 0x00fc, 300);
+        fresh.advance(332);
+        assert_eq!(fresh.snapshot()["recognized_labels"], json!(["Ｔ"]));
+        fresh.write(0x8a06, 0xc0, 332).unwrap();
+        assert!(fresh.take_result_irq_edge());
+        let invalid = br#"{"10":{"code":29570,"width":138,"height":222,"strokes":[[[1.0,2.0]]]}}"#;
+        assert!(Auxiliary::decode_registered_state(invalid).is_err());
+    }
+
+    #[test]
     fn registration_query_has_timed_status_word_and_ack_scoped_reply() {
         let mut a = Auxiliary::control();
         for index in [0, 9] {
@@ -600,6 +997,70 @@ mod tests {
         assert_eq!(a.peek(0x8a40), Some(1));
         assert_eq!(a.peek(0x8a41), Some(0x73));
         assert_eq!(a.peek(0x8a42), Some(0x82));
+    }
+
+    #[test]
+    fn registration_exchange_controls_are_timed_and_do_not_enable_pen_capture() {
+        let mut a = Auxiliary::control();
+        for (header, open) in [(0x01fbu16, true), (0x02fb, false)] {
+            for (i, b) in header.to_le_bytes().into_iter().enumerate() {
+                a.write(0x8a20 + i as u32, b, 100).unwrap();
+            }
+            a.write(0x8a02, 0x80, 100).unwrap();
+            assert_eq!(a.peek(0x8a40), None);
+            a.advance(132);
+            assert_eq!(a.peek(0x8a40), Some(1));
+            assert_eq!(a.peek(0x8a41), None);
+            if let Auxiliary::Control {
+                engine,
+                registration_exchange,
+                ..
+            } = &a
+            {
+                assert_eq!(*registration_exchange, open);
+                assert!(!engine.capture_active);
+            }
+            a.write(0x8a03, 0xbf, 132).unwrap();
+        }
+    }
+
+    #[test]
+    fn controller_channel_removal_requires_exchange_and_preserves_other_records() {
+        let mut a = Auxiliary::control();
+        if let Auxiliary::Control { registrations, .. } = &mut a {
+            registrations.insert(9, 0x1234);
+            registrations.insert(0, 0x5678);
+        }
+        for (i, b) in [0xfb, 0x12, 9].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 0).unwrap();
+        }
+        assert!(a.write(0x8a02, 0x80, 0).is_err());
+        // Begin has its own two-byte packet; failed selection did not consume
+        // or clear a directory entry. Use a fresh transport for the valid path.
+        a = Auxiliary::control();
+        start(&mut a, 0x01fb, 100);
+        a.advance(132);
+        a.write(0x8a03, 0xbf, 132).unwrap();
+        if let Auxiliary::Control { registrations, .. } = &mut a {
+            registrations.insert(9, 0x1234);
+            registrations.insert(0, 0x5678);
+        }
+        for (i, b) in [0xfb, 0x12, 9].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 200).unwrap();
+        }
+        a.write(0x8a02, 0x80, 200).unwrap();
+        a.advance(232);
+        assert_eq!(a.peek(0x8a40), Some(1));
+        if let Auxiliary::Control {
+            registrations,
+            registration_channel,
+            ..
+        } = &a
+        {
+            assert_eq!(*registration_channel, Some(9));
+            assert!(!registrations.contains_key(&9));
+            assert_eq!(registrations.get(&0), Some(&0x5678));
+        }
     }
 
     fn start(a: &mut Auxiliary, header: u16, cycle: u64) {
