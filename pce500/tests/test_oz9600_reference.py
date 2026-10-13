@@ -26,6 +26,44 @@ from pce500.oz9600.retained import (
 from pce500.oz9600.boundary import ExecutionState
 
 
+@pytest.mark.parametrize(
+    "increment,source,destination,delta", [(5, 208, 212, 1), (6, 209, 213, -1)]
+)
+def test_physical_completed_block_consumes_count_and_requires_reload(
+    increment, source, destination, delta
+):
+    lcd = LcdController()
+    lcd.windows[0][:] = bytes([0, 0, 0, 0, 79, 1, 239, 0])
+    lcd.write(31, 2)
+    lcd.write(3, 255)
+    lcd.write(4, increment)
+    lcd.write(5, increment)
+    for y, value in [(source, 0xA5), (source + delta, 0x5A)]:
+        lcd.set_word(16, 300)
+        lcd.set_word(18, y)
+        lcd.write(2, value)
+    lcd.set_word(18, destination)
+    lcd.set_word(6, 2)
+    lcd.write(0, 0x3C)
+    assert lcd.word(6) == 0
+    lcd.set_word(20, 300)
+    lcd.set_word(22, source)
+    lcd.set_word(18, destination)
+    lcd.read(0, 0)
+    assert (lcd.word(22), lcd.word(18)) == (source, destination)
+    assert lcd.read_pixels(300, destination) == 0x3C
+    lcd.set_word(6, 2)
+    lcd.read(0, 0)
+    assert lcd.word(6) == 0
+    assert [lcd.read_pixels(300, destination + n * delta) for n in range(2)] == [
+        0xA5,
+        0x5A,
+    ]
+    coordinates = bytes(lcd.registers[16:24])
+    lcd.read(0, 0)
+    assert bytes(lcd.registers[16:24]) == coordinates
+
+
 @pytest.mark.parametrize("vertical", [0, 128])
 @pytest.mark.parametrize("missing", [1, 2])
 def test_signed_pixel_stream_crosses_zero_on_both_axes(vertical, missing):

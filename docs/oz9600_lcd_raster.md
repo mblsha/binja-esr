@@ -48,3 +48,19 @@ parity fixtures now program a full `(0,0)..(335,239)` descriptor explicitly.
 The original-window control returned normally and restored its descriptor,
 pixels, registers and card allocation. Timing, negative/overflow coordinates,
 other controller variants and glass boundaries remain open.
+
+## Completed block count
+
+Physical OZ-9600 controls on 13 October 2026 establish that the native two-row
+F74D8 mover returns count zero. Explicit reloads permit copying in both 0505
+and 0606 directions, with byte or word increment writes. A packet which fills
+two rows and then triggers copy without reloading performs no further pixel
+or coordinate changes. Fresh F745C decoding shows a count write before each
+native column transfer and no explicit clearing after it.
+
+The Rust and Python controller therefore consume the count after a successful
+completed block fill or copy. Single-byte streams remain separate. The
+synchronous model does not qualify intermediate count decrement, electrical
+busy timing, maximum counts or another model's LCD silicon. Exact native code,
+counted acquisition and restoration receipts are preserved in the companion
+private research at `docs/oz-9600/reference/lcd_block_count_20261013/`.

@@ -160,6 +160,8 @@ class LcdController:
                 self.write_pixels(self.word(16), self.word(18), value)
                 self.advance(True)
                 self.advance(False)
+            # Physical completed blocks consume the count; busy timing is separate.
+            self.set_word(6, 0)
             self.block_operations += 1
             return 0
         if offset == 2:
@@ -178,6 +180,7 @@ class LcdController:
                 self.write_pixels(self.word(16), self.word(18), value)
                 self.advance(False)
             if offset == 0:
+                self.set_word(6, 0)
                 self.block_operations += 1
             else:
                 self.read_latch = value

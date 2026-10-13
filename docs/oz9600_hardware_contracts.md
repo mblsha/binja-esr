@@ -14,7 +14,8 @@ CPU-family resemblance alone does not qualify another model.
 | Software interrupt recognition | Following instruction executes before entry, including tested masking/clearing and nested STI/MTI | `experimental-irq-recognition` stays opt-in; asynchronous/electrical arrival and broader RETI cases remain open |
 | LCD Boolean raster operations and clipping | [Measured raster table and window controls](oz9600_lcd_raster.md); shared Rust/Python controller | Controller branch is OZ-9600 LH1553F; other displays require verification |
 | Native RTC and manual OFF/ON | Actual RTC callbacks, BP-minus-one preservation and one manual OFF/ON return | Does not prove automatic alarm wake or earliest wake cause |
-| SRAM windows and LCD block copying | Partial physical aliases and bounded fill measured | Complete mapper modes and three ineffective copy-read cases remain unresolved |
+| LCD completed block count | Native two-row copy returns count zero; fill then copy without reload does no further transfer; explicit reloads work in both directions | Completed-operation model; intermediate decrement and electrical busy timing remain open |
+| SRAM windows | Partial physical aliases and current-view card residency measured | Complete mapper modes, pages and writable capacity remain open |
 
 The implementation preserves related models' geometry, PI input hold interval
 and PA runners. It does not add PV-F1 hardware defaults from unqualified
@@ -33,8 +34,9 @@ controls. Its current entry point is
   all 21 addressing cases and full scratch restoration.
 - `reference/rtc_bp_minus_one_20261013/physical/physical-proof.json`: two quiet
   RTC entries at BP B2, native callback/cache preservation and restoration.
-- `reference/lcd_block_contract_20261013/physical/physical-proof.json`: fill
-  success and three copy disagreements; active configuration remains unknown.
+- `reference/lcd_block_count_20261013/README.md`: consumed-count explanation,
+  native/count/increment hardware controls and unchanged-code integration replays.
+  The original ineffective copies followed a fill without reloading the count.
 - `reference/power_owner_20261013/physical-manual/physical-proof.json`: native
   OFF followed by one manual ON, responsive BASIC and verified restoration.
 

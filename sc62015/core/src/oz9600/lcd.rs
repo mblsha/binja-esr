@@ -290,6 +290,9 @@ impl LcdController {
                     self.advance(true)?;
                     self.advance(false)?;
                 }
+                // Completed OZ-9600 blocks consume the count. A following
+                // trigger without reloading it performs no pixel transfers.
+                self.set_word(6, 0);
                 self.block_operations += 1;
                 Ok(0)
             }
@@ -313,6 +316,7 @@ impl LcdController {
                     self.write_pixels(self.word(0x10), self.word(0x12), value);
                     self.advance(false)?;
                 }
+                self.set_word(6, 0);
                 self.block_operations += 1;
             }
             2 => {
@@ -375,6 +379,51 @@ mod tests {
     fn measured_group_read(lcd: &mut LcdController) -> u8 {
         lcd.read(2, 0).unwrap();
         lcd.read(2, 0).unwrap()
+    }
+
+    #[test]
+    fn physical_block_count_is_consumed_and_requires_reload() {
+        // OZ-9600, 13 Oct 2026: original fill/copy sequence versus explicit
+        // reloads, and native F74D8 completion reads count zero. Intermediate
+        // busy timing remains unqualified; this models completed operations.
+        for increment in [5, 6] {
+            let mut lcd = LcdController::default();
+            measured_window(&mut lcd, [0, 0, 335, 239]);
+            lcd.write(3, 255).unwrap();
+            lcd.write(4, increment).unwrap();
+            lcd.write(5, increment).unwrap();
+            let (source, destination, next) = if increment == 5 {
+                (208, 212, 1)
+            } else {
+                (209, 213, -1)
+            };
+            for (y, value) in [(source, 0xa5), (source + next, 0x5a)] {
+                lcd.set_word(16, 300);
+                lcd.set_word(18, y as u16);
+                lcd.write(2, value).unwrap();
+            }
+            lcd.set_word(16, 300);
+            lcd.set_word(18, destination as u16);
+            lcd.set_word(6, 2);
+            lcd.write(0, 0x3c).unwrap();
+            assert_eq!(lcd.word(6), 0);
+            assert_eq!(lcd.read_pixels(300, destination as u16), 0x3c);
+            lcd.set_word(20, 300);
+            lcd.set_word(22, source as u16);
+            lcd.set_word(18, destination as u16);
+            lcd.read(0, 0).unwrap(); // No reload after fill: no transfer.
+            assert_eq!(lcd.word(22), source as u16);
+            assert_eq!(lcd.word(18), destination as u16);
+            assert_eq!(lcd.read_pixels(300, destination as u16), 0x3c);
+            lcd.set_word(6, 2);
+            lcd.read(0, 0).unwrap();
+            assert_eq!(lcd.word(6), 0);
+            assert_eq!(lcd.read_pixels(300, destination as u16), 0xa5);
+            assert_eq!(lcd.read_pixels(300, (destination + next) as u16), 0x5a);
+            let coordinates = lcd.registers[16..24].to_vec();
+            lcd.read(0, 0).unwrap(); // Completed copy also requires reload.
+            assert_eq!(&lcd.registers[16..24], coordinates);
+        }
     }
 
     #[test]
