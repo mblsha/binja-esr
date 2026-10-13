@@ -33,6 +33,10 @@ controls. Its current entry point is
 - `reference/cpu_irq_arrival_20261011/`: interrupt arrival and nesting controls.
 - `reference/cpu_internal_addressing_20261013/physical/physical-proof.json`:
   all 21 addressing cases and full scratch restoration.
+- `reference/schedule_phase_sampler_20261014/physical/physical-proof.json`: four
+  actual RTC entries include native getter/filename-normalization paths;834
+  valid lookups, exact cache/callback/card recovery. No vulnerable comparison
+  or minute eviction observed; does not qualify IRQ latency or atomicity.
 - `reference/rtc_bp_minus_one_20261013/physical/physical-proof.json`: two quiet
   RTC entries at BP B2, native callback/cache preservation and restoration.
 - `reference/lcd_block_count_20261013/README.md`: consumed-count explanation,
