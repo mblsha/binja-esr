@@ -170,6 +170,23 @@ def test_font_pixel_expansion_is_little_endian_and_peeks_do_not_advance(
     assert board.selector == 7 and board.fault is None
 
 
+def test_gate_read_aliases_use_live_selector_expansion_and_latches():
+    board = Hardware({}, "control-candidate")
+    board.write(0x402F, 0xA5)
+    board.write(0x401E, 0x81)
+    board.write(0x4021, 0xFE)
+    for base in (0x4000, 0x4040, 0x4080, 0x4FC0):
+        for offset, expected in ((0x2F, 0xA5), (0x21, 0xFE), (0x1E, 3), (0x1F, 0xC0)):
+            assert board.peek(base + offset) == expected
+            assert board.read_mutated(base + offset) == expected
+    board.write(0x402F, 0x5A)
+    assert board.peek(0x40AF) == 0x5A
+    assert board.peek(0x4FFF) == 0 and board.peek(0x5000) is None
+    with pytest.raises(ValueError, match="write 04061"):
+        board.write(0x4061, 7)
+    assert board.selector == 0xFE and "write 04061" in board.fault
+
+
 def test_adc_peeks_hold_conversion_and_gpio_feedback_is_model_specific():
     board = Hardware({}, "control-candidate")
     board.set_raw_contact(403, 601, True)
