@@ -4,6 +4,10 @@
 //! commit581faa8f6f15e4a7b21964be3a5ec36265c80e5b. See third_party/zinnia/COPYING.
 #[cfg(test)]
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+
+const HYBRID_MAGIC: &[u8; 8] = b"PVHW02\0\0";
+const SHAPE_POINTS: usize = 32;
 
 pub type Point = [f32; 2];
 pub type Strokes = Vec<Vec<Point>>;
@@ -16,9 +20,25 @@ struct Class {
 #[derive(Clone)]
 pub struct Model {
     classes: Vec<Class>,
+    hybrid: Option<Hybrid>,
+}
+#[derive(Clone)]
+struct Template {
+    label: String,
+    strokes: usize,
+    points: Vec<Point>,
+}
+#[derive(Clone)]
+struct Hybrid {
+    templates: Vec<Template>,
+    latin_ratio: f32,
+    extra_classes: usize,
 }
 impl Model {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.starts_with(HYBRID_MAGIC) {
+            return Self::hybrid_from_bytes(bytes);
+        }
         let mut at = 0;
         fn word(b: &[u8], at: &mut usize) -> Result<u32, String> {
             let p = b.get(*at..*at + 4).ok_or("truncated handwriting model")?;
@@ -73,10 +93,93 @@ impl Model {
         if at != bytes.len() {
             return Err("trailing handwriting model bytes".into());
         }
-        Ok(Self { classes })
+        Ok(Self {
+            classes,
+            hybrid: None,
+        })
+    }
+    fn hybrid_from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        fn word(bytes: &[u8], at: &mut usize) -> Result<u32, String> {
+            let value = bytes.get(*at..*at + 4).ok_or("truncated hybrid model")?;
+            *at += 4;
+            Ok(u32::from_le_bytes(value.try_into().unwrap()))
+        }
+        let mut at = HYBRID_MAGIC.len();
+        let base_len = word(bytes, &mut at)? as usize;
+        let count = word(bytes, &mut at)? as usize;
+        let points = word(bytes, &mut at)? as usize;
+        let latin_ratio = f32::from_bits(word(bytes, &mut at)?);
+        if count == 0
+            || count > 65536
+            || points != SHAPE_POINTS
+            || !latin_ratio.is_finite()
+            || latin_ratio <= 0.
+            || latin_ratio >= 1.
+        {
+            return Err("invalid hybrid model configuration".into());
+        }
+        let base = bytes
+            .get(at..at + base_len)
+            .ok_or("truncated hybrid base model")?;
+        if base.starts_with(HYBRID_MAGIC) {
+            return Err("nested hybrid model".into());
+        }
+        let mut model = Self::from_bytes(base)?;
+        at += base_len;
+        let mut templates = Vec::with_capacity(count);
+        let mut labels: BTreeSet<_> = model.classes.iter().map(|c| c.label.clone()).collect();
+        let base_labels = labels.len();
+        for _ in 0..count {
+            let raw = bytes.get(at..at + 16).ok_or("truncated hybrid label")?;
+            at += 16;
+            let end = raw
+                .iter()
+                .position(|b| *b == 0)
+                .ok_or("unterminated hybrid label")?;
+            let label = std::str::from_utf8(&raw[..end])
+                .map_err(|e| e.to_string())?
+                .to_owned();
+            if label.chars().count() != 1 {
+                return Err("invalid hybrid label".into());
+            }
+            let strokes = word(bytes, &mut at)? as usize;
+            if !(1..=64).contains(&strokes) {
+                return Err("invalid hybrid stroke count".into());
+            }
+            let mut points = Vec::with_capacity(strokes * SHAPE_POINTS);
+            for _ in 0..strokes * SHAPE_POINTS {
+                let p = [
+                    f32::from_bits(word(bytes, &mut at)?),
+                    f32::from_bits(word(bytes, &mut at)?),
+                ];
+                if p.iter().any(|v| !v.is_finite() || v.abs() > 1.) {
+                    return Err("invalid hybrid shape point".into());
+                }
+                points.push(p);
+            }
+            // Non-Latin templates select the original engine; they do not
+            // introduce additional output classes into that engine.
+            if label.len() == 1 && label.as_bytes()[0].is_ascii_alphanumeric() {
+                labels.insert(label.clone());
+            }
+            templates.push(Template {
+                label,
+                strokes,
+                points,
+            });
+        }
+        if at != bytes.len() {
+            return Err("trailing hybrid model bytes".into());
+        }
+        model.hybrid = Some(Hybrid {
+            templates,
+            latin_ratio,
+            extra_classes: labels.len() - base_labels,
+        });
+        Ok(model)
     }
     pub fn class_count(&self) -> usize {
-        self.classes.len()
+        self.classes.len() + self.hybrid.as_ref().map_or(0, |h| h.extra_classes)
     }
     pub fn classify(
         &self,
@@ -86,6 +189,11 @@ impl Model {
         limit: usize,
     ) -> Result<Vec<(String, f32)>, String> {
         let features = features(strokes, width, height)?;
+        if let Some(hybrid) = &self.hybrid {
+            if let Some(scored) = hybrid.classify(strokes, width, height, limit)? {
+                return Ok(scored);
+            }
+        }
         let mut scored = Vec::with_capacity(self.classes.len());
         for c in &self.classes {
             let mut a = 0;
@@ -108,6 +216,114 @@ impl Model {
         scored.truncate(limit);
         Ok(scored)
     }
+}
+impl Hybrid {
+    fn classify(
+        &self,
+        strokes: &[Vec<Point>],
+        width: f32,
+        height: f32,
+        limit: usize,
+    ) -> Result<Option<Vec<(String, f32)>>, String> {
+        let query = shape(strokes, width, height)?;
+        let mut latin = Vec::new();
+        let mut japanese = f64::INFINITY;
+        for template in self.templates.iter().filter(|t| t.strokes == strokes.len()) {
+            let distance = query
+                .iter()
+                .zip(&template.points)
+                .map(|(a, b)| {
+                    (a[0] as f64 - b[0] as f64).powi(2) + (a[1] as f64 - b[1] as f64).powi(2)
+                })
+                .sum::<f64>()
+                / (2 * query.len()) as f64;
+            if template.label.len() == 1 && template.label.as_bytes()[0].is_ascii_alphanumeric() {
+                latin.push((template.label.clone(), distance));
+            } else {
+                japanese = japanese.min(distance);
+            }
+        }
+        latin.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        if !latin
+            .first()
+            .is_some_and(|(_, d)| *d < self.latin_ratio as f64 * japanese)
+        {
+            return Ok(None);
+        }
+        let mut seen = BTreeSet::new();
+        Ok(Some(
+            latin
+                .into_iter()
+                .filter(|(label, _)| seen.insert(label.clone()))
+                .take(limit)
+                .map(|(label, d)| (label, -(d as f32)))
+                .collect(),
+        ))
+    }
+}
+/// Centered, aspect-preserving geometry, resampled by arc length within each
+/// ordered stroke. Geometry validation is shared with the linear extractor.
+fn shape(strokes: &[Vec<Point>], width: f32, height: f32) -> Result<Vec<Point>, String> {
+    let normalized: Vec<Vec<[f64; 2]>> = strokes
+        .iter()
+        .map(|stroke| {
+            stroke
+                .iter()
+                .map(|p| [p[0] as f64 / width as f64, p[1] as f64 / height as f64])
+                .collect()
+        })
+        .collect();
+    let mut low = [f64::INFINITY; 2];
+    let mut high = [f64::NEG_INFINITY; 2];
+    for p in normalized.iter().flatten() {
+        for j in 0..2 {
+            low[j] = low[j].min(p[j]);
+            high[j] = high[j].max(p[j]);
+        }
+    }
+    let span = (high[0] - low[0]).max(high[1] - low[1]).max(1e-6);
+    let center = [(low[0] + high[0]) / 2., (low[1] + high[1]) / 2.];
+    let mut output = Vec::with_capacity(strokes.len() * SHAPE_POINTS);
+    for stroke in normalized {
+        let mut p = Vec::new();
+        let mut distances = Vec::new();
+        let mut length = 0.;
+        for point in stroke {
+            let point = [(point[0] - center[0]) / span, (point[1] - center[1]) / span];
+            if let Some(last) = p.last() {
+                let last: &[f64; 2] = last;
+                let step = (point[0] - last[0]).hypot(point[1] - last[1]);
+                if step == 0. {
+                    continue;
+                }
+                length += step;
+            }
+            p.push(point);
+            distances.push(length);
+        }
+        let mut segment = 0;
+        for i in 0..SHAPE_POINTS {
+            let target = length * i as f64 / (SHAPE_POINTS - 1) as f64;
+            while segment + 1 < distances.len() && distances[segment + 1] < target {
+                segment += 1;
+            }
+            let point = if segment + 1 == p.len() {
+                p[segment]
+            } else {
+                let fraction =
+                    (target - distances[segment]) / (distances[segment + 1] - distances[segment]);
+                [
+                    p[segment][0] + (p[segment + 1][0] - p[segment][0]) * fraction,
+                    p[segment][1] + (p[segment + 1][1] - p[segment][1]) * fraction,
+                ]
+            };
+            output.push([point[0] as f32, point[1] as f32]);
+        }
+    }
+    if output.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("overflowed handwriting shape".into());
+    }
+    Ok(output)
 }
 fn basic(out: &mut Vec<(u32, f32)>, offset: u32, a: Point, b: Point) {
     let dx = b[0] - a[0];
@@ -206,6 +422,133 @@ pub fn features(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn constant_model() -> Vec<u8> {
+        let mut bytes = vec![0; 12];
+        let mut label = [0; 16];
+        label[.."い".len()].copy_from_slice("い".as_bytes());
+        bytes.extend(label);
+        bytes.extend(2.5f32.to_le_bytes());
+        bytes.extend(u32::MAX.to_le_bytes());
+        bytes.extend(0f32.to_le_bytes());
+        let size = bytes.len() as u32;
+        bytes[..4].copy_from_slice(&(size ^ 0x0ef71821).to_le_bytes());
+        bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+        bytes
+    }
+    fn hybrid_fixture(templates: &[(&str, Vec<Point>)]) -> Vec<u8> {
+        let base = constant_model();
+        let mut bytes = HYBRID_MAGIC.to_vec();
+        for word in [
+            base.len() as u32,
+            templates.len() as u32,
+            32,
+            0.75f32.to_bits(),
+        ] {
+            bytes.extend(word.to_le_bytes());
+        }
+        bytes.extend(base);
+        for (name, points) in templates {
+            let mut label = [0; 16];
+            label[..name.len()].copy_from_slice(name.as_bytes());
+            bytes.extend(label);
+            bytes.extend(1u32.to_le_bytes());
+            for p in points {
+                for value in p {
+                    bytes.extend(value.to_le_bytes());
+                }
+            }
+        }
+        bytes
+    }
+    fn line(horizontal: bool) -> Vec<Point> {
+        (0..32)
+            .map(|i| {
+                let value = i as f32 / 31. - 0.5;
+                if horizontal {
+                    [value, 0.]
+                } else {
+                    [0., value]
+                }
+            })
+            .collect()
+    }
+    #[test]
+    fn hybrid_latin_clear_match_deduplicates_and_japanese_fallback_is_unchanged() {
+        let model = Model::from_bytes(&hybrid_fixture(&[
+            ("A", line(true)),
+            ("A", line(true)),
+            ("い", line(false)),
+        ]))
+        .unwrap();
+        assert_eq!(model.class_count(), 2);
+        let routing_only =
+            Model::from_bytes(&hybrid_fixture(&[("A", line(true)), ("字", line(false))])).unwrap();
+        assert_eq!(routing_only.class_count(), 2);
+        let result = model
+            .classify(&[vec![[10., 20.], [30., 20.]]], 100., 100., 10)
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "A");
+        assert!(result[0].1.abs() < 1e-12);
+        let base = Model::from_bytes(&constant_model()).unwrap();
+        for input in [
+            vec![vec![[20., 10.], [20., 30.]]],
+            vec![vec![[0., 0.]], vec![[1., 1.]]],
+        ] {
+            assert_eq!(
+                model.classify(&input, 100., 100., 10),
+                base.classify(&input, 100., 100., 10)
+            );
+        }
+        let tie =
+            Model::from_bytes(&hybrid_fixture(&[("A", line(true)), ("い", line(true))])).unwrap();
+        assert_eq!(
+            tie.classify(&[vec![[0., 0.], [100., 0.]]], 100., 100., 10)
+                .unwrap(),
+            vec![("い".into(), 2.5)]
+        );
+        assert!(model
+            .classify(&[vec![[f32::NAN, 0.]]], 100., 100., 10)
+            .is_err());
+    }
+    #[test]
+    fn hybrid_shape_preserves_aspect_and_arc_length_with_duplicate_points() {
+        let result = shape(&[vec![[10., 20.], [10., 20.], [30., 20.]]], 100., 100.).unwrap();
+        for (a, b) in result.iter().zip(line(true)) {
+            assert!((a[0] - b[0]).abs() < 1e-7);
+            assert_eq!(a[1], b[1]);
+        }
+        assert_eq!(
+            shape(&[vec![[10., 20.]]], 100., 100.).unwrap(),
+            vec![[0., 0.]; 32]
+        );
+    }
+    #[test]
+    fn hybrid_rejects_bad_configuration_truncated_points_and_trailing_data() {
+        let bytes = hybrid_fixture(&[("A", line(true)), ("い", line(false))]);
+        for length in [8, 23, 24, 30, bytes.len() - 1] {
+            assert!(Model::from_bytes(&bytes[..length]).is_err());
+        }
+        for (offset, word) in [
+            (12, 0u32),
+            (16, 31u32),
+            (20, f32::NAN.to_bits()),
+            (20, 1f32.to_bits()),
+            (24 + constant_model().len() + 16, 65),
+        ] {
+            let mut bad = bytes.clone();
+            bad[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+            assert!(Model::from_bytes(&bad).is_err());
+        }
+        let mut bad = bytes.clone();
+        let offset = 24 + constant_model().len() + 20;
+        bad[offset..offset + 4].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert!(Model::from_bytes(&bad).is_err());
+        let mut bad = bytes;
+        bad.push(0);
+        assert!(Model::from_bytes(&bad).is_err());
+    }
     #[test]
     fn model_layout_and_sparse_scores_follow_independent_linear_expectations() {
         let mut b = vec![0; 12];
