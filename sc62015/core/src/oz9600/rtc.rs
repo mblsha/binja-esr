@@ -121,7 +121,7 @@ impl Clock {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct Rtc {
     registers: [u8; 32],
 }

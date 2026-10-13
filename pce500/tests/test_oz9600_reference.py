@@ -30,6 +30,8 @@ from pce500.oz9600.boundary import ExecutionState
 @pytest.mark.parametrize("missing", [1, 2])
 def test_signed_pixel_stream_crosses_zero_on_both_axes(vertical, missing):
     lcd = LcdController()
+    # Signed-coordinate coverage requires an enabled, full drawing/read window.
+    lcd.windows[0][:] = bytes([0, 0, 0, 0, 79, 1, 239, 0])
     lcd.write(31, 2)
     lcd.write(3, 255)
     lcd.write(8, vertical)
@@ -119,28 +121,22 @@ def test_profiles_do_not_claim_automatic_experimental_settings():
     assert mti_writable.isr_software_write == "clear_only_except_mti"
     assert mti_writable.timers_enabled
     clock = ExecutionProfile.configure("experimental-rtc")
-    assert clock.initial_bp == 0 and clock.isr_software_write == "clear_only_except_mti"
+    assert clock.initial_bp == 0 and clock.isr_software_write == "replace"
     assert clock.rtc_a2_period == 512_000 and clock.rtc_second_period == 1_024_000
     edge = ExecutionProfile.configure("experimental-on-edge")
-    assert edge.initial_bp == 0 and edge.isr_software_write == "clear_only_except_mti"
+    assert edge.initial_bp == 0 and edge.isr_software_write == "replace"
     assert edge.on_irq_edge_only and edge.rtc_a2_period == 1_000_000
     assert edge.rtc_second_period is None
     assert not mti_writable.on_irq_edge_only and not clock.on_irq_edge_only
     irq_imr = ExecutionProfile.configure("experimental-irq-imr")
     assert irq_imr.on_irq_edge_only and irq_imr.irq_imr_only
     assert irq_imr.rtc_second_period is None and irq_imr.rtc_a2_period == 1_000_000
-    assert (
-        irq_imr.initial_bp == 0
-        and irq_imr.isr_software_write == "clear_only_except_mti"
-    )
+    assert irq_imr.initial_bp == 0 and irq_imr.isr_software_write == "replace"
     assert not edge.irq_imr_only and not clock.irq_imr_only
     combined = ExecutionProfile.configure("experimental-rtc-irq-imr")
     assert combined.on_irq_edge_only and combined.irq_imr_only
     assert combined.rtc_second_period == 1_024_000 and combined.rtc_a2_period == 512_000
-    assert (
-        combined.initial_bp == 0
-        and combined.isr_software_write == "clear_only_except_mti"
-    )
+    assert combined.initial_bp == 0 and combined.isr_software_write == "replace"
     assert ExecutionProfile.configure("strict").rtc_second_period is None
     assert ExecutionProfile.configure("strict").isr_software_write == "replace"
     assert (
@@ -162,7 +158,7 @@ def test_v1_profile_exposes_provisional_power_on_and_saved_memory_reset_contract
     assert cold.initial_bp == 0xD0 and warm.initial_bp == 0
     assert cold.block_transfer == warm.block_transfer == "coupled_predecrement"
     assert cold.byte_arithmetic == warm.byte_arithmetic == "low_byte"
-    assert cold.isr_software_write == warm.isr_software_write == "clear_only_except_mti"
+    assert cold.isr_software_write == warm.isr_software_write == "replace"
     assert cold.on_irq_edge_only and cold.irq_imr_only
     assert cold.rtc_second_period == 1_024_000 and cold.rtc_a2_period == 512_000
     with pytest.raises(ValueError):
@@ -280,9 +276,16 @@ def test_invalid_physical_replay_is_rejected_before_application(data):
         parse_replay(data)
 
 
+def full_lcd_window(lcd):
+    # A component needs a real full descriptor, not the disproved bypass bit.
+    for n, word in enumerate((0, 0, 335, 239)):
+        lcd.write(24 + 2 * n, word & 255)
+        lcd.write(25 + 2 * n, word >> 8)
+
+
 def test_full_frame_owns_pixels_and_invalid_increment_is_atomic():
     lcd = LcdController()
-    lcd.write(31, 2)
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 335)
     lcd.set_word(18, 239)
@@ -350,7 +353,7 @@ def test_rom_highlight_operations_preserve_and_restore_mixed_pixels(mode, data):
     # Calendar's solid pattern uses mode 1/FF; Notebook uses mode 5/00.
     # Both complement existing glyph pixels, then restore on a second pass.
     lcd = LcdController()
-    lcd.write(31, 2)  # explicit full-window bypass for this component fixture
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 24)
     lcd.set_word(18, 40)
@@ -368,7 +371,7 @@ def test_scrapbook_mode_three_adds_stroke_without_erasing_existing_ink(vertical)
     # The ROM's live line uses mode 3, while its saved bitmap ORs the same
     # stroke. Previously AND left an editor blank until Store/reset redraw.
     lcd = LcdController()
-    lcd.write(31, 2)
+    full_lcd_window(lcd)
     lcd.write(3, 255)
     lcd.set_word(16, 48)
     lcd.set_word(18, 88)
@@ -381,3 +384,172 @@ def test_scrapbook_mode_three_adds_stroke_without_erasing_existing_ink(vertical)
         lcd.pixel(48 + (0 if vertical else bit), 88 + (bit if vertical else 0))
         for bit in range(8)
     ] == [bool(0xE7 & (128 >> bit)) for bit in range(8)]
+
+
+def test_external_off_wake_is_explicit_and_cpu_external_masked():
+    from pce500.oz9600.profile import off_wake_mask
+
+    ordinary = ExecutionProfile.configure("provisional-v1")
+    candidate = ExecutionProfile.configure("experimental-external-wake")
+    assert not ordinary.external_off_wake and candidate.external_off_wake
+    assert candidate.initial_bp == 0xD0 and candidate.irq_imr_only
+    assert off_wake_mask(external_enabled=True, external_experiment=True) == 0x48
+    assert off_wake_mask(external_enabled=False, external_experiment=True) == 0x08
+    assert off_wake_mask(external_enabled=True, external_experiment=False) == 0x08
+
+
+def test_tablet_release_readiness_requires_completed_pair_and_idle_drive():
+    from pce500.oz9600.tablet import Tablet
+
+    t = Tablet()
+    t.set_contact(403, 601, True)
+    for drive, control, result in [(0xA8, 6, [100, 3]), (0x8A, 7, [150, 1])]:
+        t.drive_control = drive
+        t.write_conversion_control(control)
+        assert not t.contact_release_ready()
+        assert [t.read_data(), t.read_data()] == result
+        assert not t.contact_release_ready()
+    t.drive_control = 0x10
+    assert t.contact_release_ready()
+    t.drive_control = 0x8A
+    assert (
+        not t.contact_release_ready()
+    )  # An earlier pair cannot authorize this release.
+    t.drive_control = 0x10
+    t.set_contact(403, 601, False)
+    t.set_contact(403, 601, True)
+    assert not t.contact_release_ready()
+
+
+def test_native_pen_release_grace_starts_after_the_actual_host_release():
+    from pce500.oz9600.ui import Contacts
+
+    c = Contacts(minimum_hold=40000)
+    assert c.sync(set(), (61, 141), 0, ready=False) == [("tablet", 61, 141, True)]
+    assert c.sync(set(), (61, 141), 1000000, ready=False) == []
+    assert c.sync(set(), None, 1000000, ready=False) == []
+    assert c.sync(set(), None, 1399999, ready=False) == []
+    assert c.sync(set(), None, 1400000, ready=False) == [("tablet", 61, 141, False)]
+    c.sync(set(), (61, 141), 1500000, ready=False)
+    assert c.cancel() == [("tablet", 61, 141, False)]
+    raw = Contacts(minimum_hold=0)
+    raw.sync(set(), (61, 141), 0, ready=False)
+    assert raw.sync(set(), None, 1, ready=False) == [("tablet", 61, 141, False)]
+
+
+def test_native_short_pen_click_waits_for_rom_mailbox_and_raw_mode_bypasses_it():
+    from pce500.oz9600.ui import Contacts
+
+    c = Contacts(minimum_hold=40000)
+    assert c.sync(set(), (627, 130), 0, busy=True) == []
+    assert c.sync(set(), None, 1, busy=True) == []
+    assert c.sync(set(), None, 40960, busy=False) == [("tablet", 627, 130, True)]
+    assert c.sync(set(), None, 80959, busy=False) == []
+    assert c.sync(set(), None, 80960, busy=False) == [("tablet", 627, 130, False)]
+    raw = Contacts()
+    assert raw.sync(set(), (627, 130), 0, ready=False, busy=True) == [
+        ("tablet", 627, 130, True)
+    ]
+    assert raw.sync(set(), None, 1, ready=False, busy=True) == [
+        ("tablet", 627, 130, False)
+    ]
+
+
+def test_rom_tablet_mailbox_observer_is_read_only_and_pointer_bounded():
+    from types import SimpleNamespace
+    from pce500.oz9600.host_input import tablet_mailbox_busy
+
+    h = SimpleNamespace(ram=bytearray(0x40000))
+    h.ram[0x3FF47:0x3FF4A] = bytes.fromhex("49 E5 01")
+    for offset, code in [(0, 0xC8), (0x0B, 0xC9), (0x1A, 0xCA)]:
+        h.ram[0x3E549 + offset] = code
+        before = bytes(h.ram)
+        assert tablet_mailbox_busy(h)
+        assert bytes(h.ram) == before
+        h.ram[0x3E549 + offset] = 0
+        assert not tablet_mailbox_busy(h)
+    h.ram[0x3FF47:0x3FF4A] = bytes.fromhex("FF FF 01")
+    assert not tablet_mailbox_busy(h)
+
+
+def test_physical_irq_recognition_latch_survives_mask_clear_and_repeated_request():
+    from pce500.oz9600.profile import IrqRecognition
+
+    ordinary = ExecutionProfile.configure("provisional-v1")
+    experimental = ExecutionProfile.configure("experimental-irq-recognition")
+    assert not ordinary.irq_recognition_delay and experimental.irq_recognition_delay
+    assert experimental.irq_imr_only and experimental.rtc_second_period == 1_024_000
+    for next_imr, next_isr in [(0, 1), (0x81, 0), (0x81, 1)]:
+        latch = IrqRecognition(enabled=True)
+        assert not latch.transfer_selected()
+        latch.recognize_before_instruction(0x81, 1)
+        # The next boundary sees the preceding instruction's completed writes.
+        latch.recognize_before_instruction(next_imr, next_isr)
+        assert latch.recognized_mask == 1 and latch.transfer_selected()
+        latch.entered_or_reset()
+        assert not latch.transfer_selected()
+    masked = IrqRecognition(enabled=True)
+    masked.recognize_before_instruction(1, 1)
+    assert not masked.transfer_selected()
+    masked.recognize_before_instruction(0x82, 2)
+    assert masked.recognized_mask == 2
+
+    priority = IrqRecognition(enabled=True)
+    priority.recognize_before_instruction(0xE0, 0x60)
+    assert priority.recognized_mask == 0x20  # Existing RX-before-EX dispatcher priority
+
+
+def test_recognized_irq_session_uses_schema_two_to_fail_closed_in_older_readers():
+    from pce500.oz9600.session import decode, encode
+
+    identity = bytes(range(64))
+    data = {"schema": 2, "timer": {"recognition_delay": True, "recognized_mask": 1}}
+    assert decode(encode(data, identity), identity) == data
+    for bad in [
+        {"schema": 1, "timer": {"recognition_delay": True}},
+        {"schema": 2, "timer": {}},
+    ]:
+        with pytest.raises(ValueError, match="policy/schema"):
+            encode(bad, identity)
+
+
+@pytest.mark.parametrize(
+    "bounds,source,backing",
+    [
+        ((305, 208, 306, 215), 0x00, 0xFF),
+        ((304, 210, 304, 213), 0x00, 0xC3),
+        ((302, 208, 303, 0x200), 0x00, 0xFF),
+        ((304, 216, 304, 223), 0x3C, 0xFF),
+        ((304, 216, 304, 735), 0x3C, 0xFF),
+        ((304, 0, 304, 207), 0x3C, 0xFF),
+        ((304, 0, 304, 719), 0x3C, 0xFF),
+    ],
+)
+def test_physical_window_readback_preserves_excluded_backing_pixels(
+    bounds, source, backing
+):
+    lcd = LcdController()
+    lcd.write(9, 2)
+
+    def window(values):
+        for n, word in enumerate(values):
+            lcd.write(24 + 2 * n, word & 255)
+            lcd.write(25 + 2 * n, word >> 8)
+
+    def read_group():
+        lcd.read(2, 0)
+        return lcd.read(2, 0)
+
+    window((0, 0, 319, 239))
+    lcd.write(3, 255)
+    lcd.write(8, 128)
+    for offset, word in ((16, 304), (18, 208), (20, 304), (22, 208)):
+        lcd.write(offset, word & 255)
+        lcd.write(offset + 1, word >> 8)
+    lcd.write(2, 255)
+    assert read_group() == 255
+    window(bounds)
+    lcd.write(2, source)
+    assert read_group() == 0
+    window((0, 0, 319, 239))
+    assert read_group() == backing

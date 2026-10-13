@@ -78,6 +78,19 @@ fn explicit_irq_imr_policy_accepts_after_guest_reenables_master_with_stale_metad
 fn controller_view_observes_the_board_without_bus_routing_or_copying() {
     let (_, hw) = fixture();
     hw.borrow().lcd = Some(LcdController::with_geometry(195, 145));
+    // Configure the full read/write window explicitly; reset descriptors clip.
+    for (offset, value) in [
+        (24, 0),
+        (25, 0),
+        (26, 0),
+        (27, 0),
+        (28, 194),
+        (29, 0),
+        (30, 144),
+        (31, 0),
+    ] {
+        hw.borrow().write(0x8420 + offset, value, None);
+    }
     let view = lcd_view::LcdView(hw.clone());
     let frame = crate::LcdHal::matrix_frame(&view);
     assert_eq!(frame.geometry(), (195, 145));
@@ -424,6 +437,18 @@ fn scratch_candidate_is_bounded_distinct_and_hidden_until_the_explicit_command()
 fn controller_hypothesis_uses_pa_bounds_and_independently_expected_pixels() {
     let mut hw = Hardware::new(BTreeMap::new(), BootstrapProfile::ControllerHypothesis);
     // Full window, mask FF, SET mode, X=190 Y=144; 10101010 clips at X=194.
+    for (offset, value) in [
+        (24, 0),
+        (25, 0),
+        (26, 0),
+        (27, 0),
+        (28, 194),
+        (29, 0),
+        (30, 144),
+        (31, 0),
+    ] {
+        hw.write(0x8420 + offset, value, None);
+    }
     for (offset, value) in [
         (31, 2),
         (3, 255),

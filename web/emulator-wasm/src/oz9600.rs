@@ -1,6 +1,7 @@
 // PY_SOURCE: pce500/oz9600/profile.py
 // PY_SOURCE: pce500/oz9600/input.py
 // PY_SOURCE: pce500/oz9600/retained.py
+// PY_SOURCE: pce500/oz9600/session.py
 // PY_SOURCE: pce500/oz9600/audio.py
 // PY_SOURCE: pce500/pi3000/retained.py
 //! Browser model replacement is atomic; retained backing is not a CPU snapshot.
@@ -15,6 +16,16 @@ impl Sc62015Emulator {
         model: DeviceModel,
         profile: ExecutionProfile,
         retained: &[u8],
+    ) -> Result<(), JsValue> {
+        self.install_rom_checked(rom, model, profile, retained, None)
+    }
+    fn install_rom_checked(
+        &mut self,
+        rom: &[u8],
+        model: DeviceModel,
+        profile: ExecutionProfile,
+        retained: &[u8],
+        expected_battery: Option<&[u8]>,
     ) -> Result<(), JsValue> {
         self.require_no_active_call()?;
         if rom.is_empty() {
@@ -32,12 +43,27 @@ impl Sc62015Emulator {
                     .map_err(|e| JsValue::from_str(&e))?;
             }
         } else if model == DeviceModel::Oz9600 {
-            if !retained.is_empty() {
-                candidate
-                    .restore_oz9600_retained_state(retained)
-                    .map_err(error)?;
+            if retained.starts_with(sc62015_core::oz9600::session::MAGIC) {
+                candidate.configure_oz9600_profile(profile).map_err(error)?;
+                candidate.restore_oz9600_session(retained).map_err(error)?;
+            } else {
+                if !retained.is_empty() {
+                    candidate
+                        .restore_oz9600_retained_state(retained)
+                        .map_err(error)?;
+                }
+                candidate.configure_oz9600_profile(profile).map_err(error)?;
             }
-            candidate.configure_oz9600_profile(profile).map_err(error)?;
+            if let Some(expected) = expected_battery {
+                if candidate.oz9600_retained_state().map_err(error)?.as_slice() != expected {
+                    return Err(JsValue::from_str(
+                        "Saved session and RAM/RTC image disagree",
+                    ));
+                }
+            }
+            if retained.starts_with(sc62015_core::oz9600::session::MAGIC) {
+                candidate.release_oz9600_session_contacts().map_err(error)?;
+            }
             // Capture is a host preference. A successful replacement keeps it
             // enabled but starts a fresh sample timeline with no old backlog.
             candidate
@@ -122,18 +148,7 @@ impl Sc62015Emulator {
         retained: &[u8],
         profile: &str,
     ) -> Result<(), JsValue> {
-        let profile = match profile {
-            "strict" => ExecutionProfile::Strict,
-            "experimental" => ExecutionProfile::Experimental,
-            "experimental-isr-clear-only" => ExecutionProfile::ExperimentalIsrClearOnly,
-            "experimental-isr-mti-writable" => ExecutionProfile::ExperimentalIsrMtiWritable,
-            "experimental-on-edge" => ExecutionProfile::ExperimentalOnEdge,
-            "experimental-irq-imr" => ExecutionProfile::ExperimentalIrqImr,
-            "experimental-rtc" => ExecutionProfile::ExperimentalRtc,
-            "experimental-rtc-irq-imr" => ExecutionProfile::ExperimentalRtcIrqImr,
-            "provisional-v1" => ExecutionProfile::ProvisionalV1,
-            _ => return Err(JsValue::from_str("Unknown OZ execution profile")),
-        };
+        let profile = parse_profile(profile)?;
         self.install_rom(bundle, DeviceModel::Oz9600, profile, retained)
     }
 
@@ -149,10 +164,39 @@ impl Sc62015Emulator {
             ExecutionProfile::ExperimentalRtc => "experimental-rtc",
             ExecutionProfile::ExperimentalRtcIrqImr => "experimental-rtc-irq-imr",
             ExecutionProfile::ProvisionalV1 => "provisional-v1",
+            ExecutionProfile::ExperimentalExternalWake => "experimental-external-wake",
+            ExecutionProfile::ExperimentalIrqRecognition => "experimental-irq-recognition",
         }
         .into())
     }
 
+    pub fn export_oz9600_session(&self) -> Result<Uint8Array, JsValue> {
+        self.require_oz9600()?;
+        self.require_no_active_call()?;
+        let bytes = self
+            .runtime
+            .oz9600_session_state()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Uint8Array::from(bytes.as_slice()))
+    }
+    pub fn load_oz9600_checkpoint(
+        &mut self,
+        bundle: &[u8],
+        battery: &[u8],
+        session: &[u8],
+        profile: &str,
+    ) -> Result<(), JsValue> {
+        if session.is_empty() {
+            return Err(JsValue::from_str("Saved session is empty"));
+        }
+        self.install_rom_checked(
+            bundle,
+            DeviceModel::Oz9600,
+            parse_profile(profile)?,
+            session,
+            Some(battery),
+        )
+    }
     pub fn export_oz9600_retained(&self) -> Result<Uint8Array, JsValue> {
         self.require_oz9600()?;
         let bytes = self
@@ -186,6 +230,27 @@ impl Sc62015Emulator {
         self.runtime
             .set_oz9600_tablet_contact(x, y, pressed)
             .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Read-only sampling acknowledgment used only by host click assistance.
+    pub fn oz9600_tablet_contact_release_ready(&self) -> Result<bool, JsValue> {
+        self.require_oz9600()?;
+        Ok(self
+            .runtime
+            .oz9600_hardware()
+            .expect("OZ factory")
+            .borrow()
+            .tablet
+            .contact_release_ready())
+    }
+
+    /// Firmware mailbox observation used solely to serialize host clicks.
+    pub fn oz9600_tablet_mailbox_busy(&self) -> Result<bool, JsValue> {
+        self.require_oz9600()?;
+        Ok(self
+            .runtime
+            .oz9600_tablet_mailbox_busy()
+            .expect("OZ factory"))
     }
 
     /// Whole-document validation precedes cooperative host replay. The host must
@@ -228,4 +293,21 @@ impl Sc62015Emulator {
         }
         self.require_no_active_call()
     }
+}
+fn parse_profile(profile: &str) -> Result<ExecutionProfile, JsValue> {
+    let profile = match profile {
+        "strict" => ExecutionProfile::Strict,
+        "experimental" => ExecutionProfile::Experimental,
+        "experimental-isr-clear-only" => ExecutionProfile::ExperimentalIsrClearOnly,
+        "experimental-isr-mti-writable" => ExecutionProfile::ExperimentalIsrMtiWritable,
+        "experimental-on-edge" => ExecutionProfile::ExperimentalOnEdge,
+        "experimental-irq-imr" => ExecutionProfile::ExperimentalIrqImr,
+        "experimental-rtc" => ExecutionProfile::ExperimentalRtc,
+        "experimental-rtc-irq-imr" => ExecutionProfile::ExperimentalRtcIrqImr,
+        "provisional-v1" => ExecutionProfile::ProvisionalV1,
+        "experimental-external-wake" => ExecutionProfile::ExperimentalExternalWake,
+        "experimental-irq-recognition" => ExecutionProfile::ExperimentalIrqRecognition,
+        _ => return Err(JsValue::from_str("Unknown OZ execution profile")),
+    };
+    Ok(profile)
 }

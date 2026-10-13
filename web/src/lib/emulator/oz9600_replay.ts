@@ -9,7 +9,8 @@ export type OzProfile =
 	| 'experimental-irq-imr'
 	| 'experimental-rtc'
 	| 'experimental-rtc-irq-imr'
-	| 'provisional-v1';
+	| 'provisional-v1'
+	| 'experimental-external-wake';
 export type TabletContact = { raw_x: number; raw_y: number; pressed: boolean };
 type PhysicalStep = {
 	boundaries: number;

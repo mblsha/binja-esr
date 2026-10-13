@@ -21,9 +21,10 @@ def actions():
         ["read", 0xC0000],
         ["clear_fault"],
     ]
-    # Full-area bypass, mask and valid stream increments.
+    # Explicit full descriptor; the physical Y-end extra bit is no bypass.
+    full_window = [0, 0, 0, 0, 79, 1, 239, 0]
+    ops += [["write", 0x8438 + n, value] for n, value in enumerate(full_window)]
     ops += [
-        ["write", 0x843F, 2],
         ["write", 0x8423, 255],
         ["write", 0x8424, 0x90],
         ["write", 0x8425, 0x90],
@@ -57,7 +58,7 @@ def actions():
         ops += [["peek", 0x8418 + n] for n in range(8)]
     ops += [
         ["write", 0x8429, 0],
-        ["write", 0x843F, 2],
+        *[["write", 0x8438 + n, value] for n, value in enumerate(full_window)],
         ["write", 0x8428, 0],
         ["write", 0x8425, 0],
         ["write", 0x8430, 79],

@@ -335,6 +335,10 @@ impl Default for TimerInfo {
 #[serde(deny_unknown_fields)]
 pub struct InterruptInfo {
     pub pending: bool,
+    #[serde(default, skip_serializing_if = "timer::is_false")]
+    pub recognition_delay: bool,
+    #[serde(default, skip_serializing_if = "timer::is_zero")]
+    pub recognized_mask: u8,
     pub in_interrupt: bool,
     pub key_irq_latched: bool,
     pub source: Option<String>,
@@ -1051,6 +1055,25 @@ impl CoreRuntime {
         {
             false
         }
+    }
+
+    // PY_SOURCE: pce500/oz9600/profile.py:off_wake_mask
+    fn off_wake_mask(&self) -> u8 {
+        #[cfg(feature = "oz9600")]
+        if self
+            .oz9600_hardware
+            .as_ref()
+            .is_some_and(|h| h.borrow().execution.diagnostic_external_off_wake)
+            && self
+                .memory
+                .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                .unwrap_or(0)
+                & IMR_EX
+                != 0
+        {
+            return ISR_ONKI | ISR_EXI;
+        }
+        ISR_ONKI
     }
 
     // PY_SOURCE: pce500/oz9600/profile.py:handler_blocks_irq
@@ -1783,7 +1806,7 @@ impl CoreRuntime {
     /// boundary using only side-effect-free state. Sources asserted later by a
     /// timer or device remain pending for the next boundary.
     #[inline(always)]
-    fn irq_transfer_selected_at_step_entry(&self) -> bool {
+    fn irq_request_eligible_at_step_entry(&self) -> bool {
         if self.state.is_off() || self.state.is_halted() || self.irq_handler_suppresses_delivery() {
             return false;
         }
@@ -1833,6 +1856,49 @@ impl CoreRuntime {
             || (asserted_isr & ISR_KNOWN_MASK) != 0;
 
         pending_or_will_reassert && (predicted_isr & imr & ISR_KNOWN_MASK) != 0
+    }
+
+    fn irq_transfer_selected_at_step_entry(&self) -> bool {
+        if self.timer.recognition_delay {
+            // Eligibility was sampled before the mandatory following instruction.
+            // Its IMR/ISR writes cannot cancel an already recognized CPU entry.
+            !self.state.is_off() && !self.state.is_halted() && self.timer.recognized_mask != 0
+        } else {
+            self.irq_request_eligible_at_step_entry()
+        }
+    }
+
+    fn recognize_irq_before_instruction(&mut self) {
+        if self.timer.recognition_delay
+            && self.timer.recognized_mask == 0
+            && self.irq_request_eligible_at_step_entry()
+        {
+            let imr = self
+                .memory
+                .read_internal_byte_silent(IMEM_IMR_OFFSET)
+                .unwrap_or(0);
+            let isr = self
+                .memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap_or(0);
+            self.timer.recognized_mask =
+                Self::selected_irq_source(imr, isr).map_or(0, |(mask, _)| mask);
+        }
+    }
+
+    fn selected_irq_source(imr: u8, isr: u8) -> Option<(u8, &'static str)> {
+        [
+            (ISR_RXI, IMR_RX, "RX"),
+            (ISR_EXI, IMR_EX, "EX"),
+            (ISR_TXI, IMR_TX, "TX"),
+            (ISR_ONKI, IMR_ONK, "ONK"),
+            (ISR_KEYI, IMR_KEY, "KEY"),
+            (ISR_STI, IMR_STI, "STI"),
+            (ISR_MTI, IMR_MTI, "MTI"),
+        ]
+        .into_iter()
+        .find(|(status, enable, _)| isr & status != 0 && imr & enable != 0)
+        .map(|(status, _, name)| (status, name))
     }
 
     pub fn load_rom(&mut self, blob: &[u8], start: usize) {
@@ -2581,7 +2647,8 @@ impl CoreRuntime {
                         .unwrap_or(0)
                         & USR_RX_READY
                         == 0)
-                && !self.irq_transfer_selected_at_step_entry()
+                && !self.irq_request_eligible_at_step_entry()
+                && self.timer.recognized_mask == 0
             {
                 self.preflight_cache
                     .lookup(self.state.pc() & ADDRESS_MASK, &self.memory)
@@ -2635,10 +2702,9 @@ impl CoreRuntime {
                     .read_internal_byte_silent(IMEM_ISR_OFFSET)
                     .unwrap_or(0);
                 let should_preflight = if self.state.is_off() {
-                    // OFF ignores every status source except ONKI.  In
-                    // particular, do not perform an architectural opcode fetch
-                    // merely because an unrelated ISR bit is set.
-                    (asserted_isr & ISR_ONKI) != 0
+                    // OFF uses ONKI by default; the explicit OZ experiment
+                    // also permits enabled EXI. Other sources never cause a fetch.
+                    (asserted_isr & self.off_wake_mask()) != 0
                 } else {
                     !self.state.is_halted()
                         || asserted_isr != 0
@@ -2854,6 +2920,7 @@ impl CoreRuntime {
                 }
                 if self.state.is_off() {
                     let mut isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
+                    let wake_mask = self.off_wake_mask();
                     let mut woke_after_rtc_idle = false;
                     if (isr & ISR_ONKI) == 0 && self.effective_onk_level() {
                         // A held physical/RTC level may outlive a firmware clear
@@ -2863,7 +2930,7 @@ impl CoreRuntime {
                         isr = self.memory.read_internal_byte(IMEM_ISR_OFFSET).unwrap_or(0);
                         woke_after_rtc_idle = (isr & ISR_ONKI) != 0;
                     }
-                    if (isr & ISR_ONKI) == 0 {
+                    if (isr & wake_mask) == 0 {
                         if self.iq7000_rtc.is_none() {
                             self.off_idle_timing_units = self.off_idle_timing_units.wrapping_add(
                                 u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX),
@@ -2890,7 +2957,7 @@ impl CoreRuntime {
                     }
                     // Hardware wake filtering is not evidence that ignored
                     // status bits are destroyed. Preserve the complete ISR image
-                    // and only gate the OFF wake decision on ONKI.
+                    // and gate wake on the selected model/profile input mask.
                     self.timer.irq_isr = isr;
                     self.state.set_power_state(PowerState::Running);
                     self.timer.irq_pending = true;
@@ -2898,7 +2965,8 @@ impl CoreRuntime {
                         .memory
                         .read_internal_byte(IMEM_IMR_OFFSET)
                         .unwrap_or(self.timer.irq_imr);
-                    self.timer.irq_source = Some("ONK".to_string());
+                    self.timer.irq_source =
+                        Some(if isr & ISR_ONKI != 0 { "ONK" } else { "EX" }.to_string());
                     self.timer.last_fired.clone_from(&self.timer.irq_source);
                     if woke_after_rtc_idle {
                         // Alarm assertion and power wake consume an idle
@@ -3108,6 +3176,7 @@ impl CoreRuntime {
                 prepared_instruction
             };
 
+            self.recognize_irq_before_instruction();
             let in_interrupt_before = self.timer.in_interrupt;
             // Only the loop detector consumes this classification.
             let irq_source_before = if self.loop_detector.is_some() {
@@ -3250,6 +3319,15 @@ impl CoreRuntime {
                 self.timer.irq_source = None;
                 // Drop any stale interrupt-stack frames (used only for bookkeeping).
                 let _ = self.timer.interrupt_stack.pop();
+                if self.timer.recognition_delay {
+                    self.timer.in_interrupt = !self.timer.interrupt_stack.is_empty();
+                    self.timer.irq_source = self
+                        .timer
+                        .delivered_masks
+                        .last()
+                        .and_then(|mask| Self::selected_irq_source(0xff, *mask))
+                        .map(|(_, name)| name.to_string());
+                }
                 if perfetto_active {
                     let mut guard = PERFETTO_TRACER.enter();
                     guard.with_some(|tracer| {
@@ -3612,7 +3690,7 @@ impl CoreRuntime {
     }
 
     fn deliver_pending_irq(&mut self) -> Result<()> {
-        if !self.timer.irq_pending {
+        if !self.timer.irq_pending && self.timer.recognized_mask == 0 {
             return Ok(());
         }
         // Nested hardware IRQ delivery is not established by ROM or hardware
@@ -3682,26 +3760,13 @@ impl CoreRuntime {
                 );
             }
         });
-        if !irm_enabled {
+        if !irm_enabled && self.timer.recognized_mask == 0 {
             return Ok(());
         }
-        // Match the IQ-7000 ROM interrupt dispatcher priority.
-        let src = if (isr & ISR_RXI != 0) && (imr & IMR_RX != 0) {
-            Some((ISR_RXI, "RX"))
-        } else if (isr & ISR_EXI != 0) && (imr & IMR_EX != 0) {
-            Some((ISR_EXI, "EX"))
-        } else if (isr & ISR_TXI != 0) && (imr & IMR_TX != 0) {
-            Some((ISR_TXI, "TX"))
-        } else if (isr & ISR_ONKI != 0) && (imr & IMR_ONK != 0) {
-            Some((ISR_ONKI, "ONK"))
-        } else if (isr & ISR_KEYI != 0) && (imr & IMR_KEY != 0) {
-            Some((ISR_KEYI, "KEY"))
-        } else if (isr & ISR_STI != 0) && (imr & IMR_STI != 0) {
-            Some((ISR_STI, "STI"))
-        } else if (isr & ISR_MTI != 0) && (imr & IMR_MTI != 0) {
-            Some((ISR_MTI, "MTI"))
+        let src = if self.timer.recognized_mask != 0 {
+            Self::selected_irq_source(0xff, self.timer.recognized_mask)
         } else {
-            None
+            Self::selected_irq_source(imr, isr)
         };
         let Some((mask, src_name)) = src else {
             return Ok(());
@@ -3940,6 +4005,7 @@ impl CoreRuntime {
 
         // Track interrupt metadata similar to Python snapshot fields.
         self.timer.in_interrupt = true;
+        self.timer.recognized_mask = 0;
         self.timer.irq_pending = false;
         self.timer.irq_source = Some(src_name.to_string());
         // Track interrupt metadata similar to Python snapshot fields.

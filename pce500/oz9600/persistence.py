@@ -60,6 +60,7 @@ class RetainedStore:
                 self.loaded: bytes | None = path.read_bytes()
             except FileNotFoundError:
                 self.loaded = None
+            self.last_committed = self.loaded
             self._last_hash = (
                 hashlib.sha256(self.loaded).digest()
                 if self.loaded is not None
@@ -78,6 +79,7 @@ class RetainedStore:
             return False
         atomic_write(self.path, image)
         self._last_hash = digest
+        self.last_committed = bytes(image)
         return True
 
     def close(self) -> None:

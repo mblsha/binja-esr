@@ -39,7 +39,7 @@ describe('PI panel and raw input', () => {
 	});
 	it('retains a short PI tap through ten-sample acquisition while preserving pen ownership', () => {
 		const apply = vi.fn();
-		const pen = new TabletInputs(apply, () => 200_000);
+		const pen = new TabletInputs(apply, undefined, undefined, () => 200_000);
 		const contact = { raw_x: 340, raw_y: 240, pressed: true };
 		pen.set('one', contact);
 		pen.set('one', { ...contact, pressed: false });

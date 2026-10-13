@@ -5,6 +5,7 @@ use super::*;
 use crate::llama::state::{
     BlockTransferPolicy, ByteArithmeticSourcePolicy, IsrSoftwareWritePolicy,
 };
+use crate::RegName;
 
 fn synthetic_runtime() -> CoreRuntime {
     let mut fixed = vec![0; 0x20000];
@@ -194,11 +195,11 @@ fn strict_device_defaults_do_not_enable_diagnostic_cpu_clock_or_pc_devices() {
     assert!(!rt.timer.enabled);
     assert_eq!(
         rt.state.block_transfer_policy(),
-        BlockTransferPolicy::Independent
+        BlockTransferPolicy::CoupledPredecrement
     );
     assert_eq!(
         rt.state.byte_arithmetic_source_policy(),
-        ByteArithmeticSourcePolicy::Strict
+        ByteArithmeticSourcePolicy::LowByte
     );
     assert_eq!(rt.memory.read_internal_byte_silent(0xec), Some(0));
     assert_eq!(
@@ -311,7 +312,7 @@ fn v1_profile_initializes_cpu_without_patching_empty_or_saved_battery_memory() {
     assert_eq!(rt.oz9600_retained_state().unwrap(), empty);
     assert_eq!(
         rt.state.isr_software_write_policy(),
-        IsrSoftwareWritePolicy::ClearOnlyExceptMti
+        IsrSoftwareWritePolicy::Replace
     );
     {
         let hw = rt.oz9600_hardware().unwrap().borrow();
@@ -357,7 +358,7 @@ fn experimental_calendar_runs_in_halt_freezes_in_hold_and_requires_profile_opt_i
     assert_eq!(rt.memory.read_internal_byte_silent(0xec), Some(0));
     assert_eq!(
         rt.state.isr_software_write_policy(),
-        IsrSoftwareWritePolicy::ClearOnlyExceptMti
+        IsrSoftwareWritePolicy::Replace
     );
     rt.configure_oz9600_profile(ExecutionProfile::Strict)
         .unwrap();
@@ -754,4 +755,322 @@ fn irq_imr_experiment_is_never_inferred_and_profile_reconfiguration_removes_it()
                 .diagnostic_irq_imr_only
         );
     }
+}
+
+#[test]
+fn experimental_external_off_wake_requires_rtc_gate_and_cpu_masks_without_on_contact() {
+    use crate::llama::state::PowerState;
+    for sliced in [false, true] {
+        for (profile, rtc_mask, gate_mask, imr, expected_wake) in [
+            (ExecutionProfile::ExperimentalExternalWake, 1, 1, 0xc8, true),
+            (ExecutionProfile::ProvisionalV1, 1, 1, 0xc8, false),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                0,
+                1,
+                0xc8,
+                false,
+            ),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                1,
+                0,
+                0xc8,
+                false,
+            ),
+            (
+                ExecutionProfile::ExperimentalExternalWake,
+                1,
+                1,
+                0x88,
+                false,
+            ),
+        ] {
+            let mut rt = synthetic_runtime();
+            rt.configure_oz9600_profile(profile).unwrap();
+            rt.load_rom(&[0, 1, 14], crate::INTERRUPT_VECTOR_ADDR as usize);
+            rt.set_reg("S", 0x3000);
+            rt.set_reg("U", 0x3800);
+            rt.memory.write_internal_byte(0xfb, imr); // IRM | EXM | ONKM, or IRM | ONKM
+            {
+                let mut hw = rt.oz9600_hardware().unwrap().borrow_mut();
+                hw.execution.experimental_rtc_second_period = Some(10);
+                hw.execution.diagnostic_rtc_a2_period = None;
+                let start = rtc::Clock {
+                    year: 1993,
+                    month: 1,
+                    day: 1,
+                    hour: 23,
+                    minute: 59,
+                    second: 58,
+                    weekday: 0,
+                };
+                let due = rtc::Clock {
+                    year: 1993,
+                    month: 1,
+                    day: 2,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                    weekday: 1,
+                };
+                for (n, b) in start.encode([0; 5]).unwrap().into_iter().enumerate() {
+                    hw.rtc.write(n, b);
+                }
+                for (n, b) in due.encode([0; 5]).unwrap().into_iter().enumerate() {
+                    hw.rtc.write(16 + n, b);
+                }
+                hw.rtc.write(21, 7);
+                hw.rtc.write(rtc::MASK_A, rtc_mask);
+                hw.gate[0x10] = gate_mask;
+            }
+            rt.state.set_power_state(PowerState::Off);
+            let run = |rt: &mut CoreRuntime, n| {
+                if sliced {
+                    rt.run_slice(n, |_| false).map(|_| ())
+                } else {
+                    rt.step_scheduler_boundaries(n).map(|_| ())
+                }
+            };
+            run(&mut rt, 20).unwrap();
+            assert!(rt.state.is_off());
+            assert_eq!(rt.instruction_count(), 0);
+            run(&mut rt, 1).unwrap();
+            assert_eq!(!rt.state.is_off(), expected_wake);
+            assert!(!rt.physical_on_key_pressed());
+            assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 8, 0);
+            // Wake is its own idle boundary; the next boundary delivers EXI.
+            assert_eq!(rt.timer.irq_total, 0);
+            assert_eq!(rt.instruction_count(), 0);
+            run(&mut rt, 1).unwrap();
+            assert_eq!(rt.timer.irq_total, u32::from(expected_wake));
+            if expected_wake {
+                assert_eq!(rt.get_reg("PC"), 0xe0101);
+                assert_eq!(rt.timer.irq_source.as_deref(), Some("EX"));
+            }
+        }
+    }
+}
+
+// Raw arithmetic result SHA256 from the 11 October 2026 physical acquisition:
+// 986495f8bbabb058a0666a08b57544b7d7a6a5ebc1f2a2211870c462715e2970.
+// Component fixtures exercise guest instructions; no ROM consumer is patched.
+#[test]
+fn physical_arithmetic_vectors_execute_in_default_and_v1_device_modes() {
+    let cases = [
+        (0x4e, 8, 2, 0x5a06, 0),
+        (0x4e, 8, 0x102, 0x5a06, 0),
+        (0x4e, 8, 9, 0x5aff, 1),
+        (0x4e, 0x80, 1, 0x5a7f, 0),
+        (0x4e, 0, 0, 0x5a00, 2),
+        (0x4e, 0, 0x101, 0x5aff, 1),
+        (0x46, 8, 2, 0x5a0a, 0),
+        (0x46, 8, 0x102, 0x5a0a, 0),
+        (0x46, 0xff, 1, 0x5a00, 3),
+        (0x46, 0x7f, 1, 0x5a80, 0),
+        (0x46, 0x80, 0x80, 0x5a00, 3),
+        (0x46, 0, 0, 0x5a00, 2),
+    ];
+    for profile in [ExecutionProfile::Strict, ExecutionProfile::ProvisionalV1] {
+        for (opcode, a, i, expected_ba, expected_flags) in cases {
+            let mut rt = synthetic_runtime();
+            rt.configure_oz9600_profile(profile).unwrap();
+            let program = [
+                0x30,
+                0xcc,
+                0xfb,
+                0, // IMR=0; source clocks cannot accept IRQ
+                0x0a,
+                a,
+                0x5a,
+                0x0b,
+                i as u8,
+                (i >> 8) as u8,
+                opcode,
+                0x03,
+            ];
+            rt.load_rom(&program, 0xe0000);
+            rt.step_scheduler_boundaries(4).unwrap();
+            assert_eq!(rt.get_reg("BA"), expected_ba);
+            assert_eq!(rt.get_reg("I"), i);
+            assert_eq!(rt.get_reg("F") & 3, expected_flags);
+        }
+    }
+}
+
+#[test]
+fn physical_isr_vectors_set_every_source_in_default_and_v1_modes() {
+    for profile in [ExecutionProfile::Strict, ExecutionProfile::ProvisionalV1] {
+        for method in 0..3 {
+            for requested in [0, 1, 2, 4, 8, 0x10, 0x20, 0x40, 0x7f] {
+                let mut rt = synthetic_runtime();
+                rt.configure_oz9600_profile(profile).unwrap();
+                let mut program = vec![
+                    0x30, 0xcc, 0xfb, 0, // IMR=0
+                    0x30, 0xcc, 0xec, 0xfc, // BP=FC
+                    0x30, 0xcc, 0xfc, 0,
+                ]; // clear ISR
+                match method {
+                    0 => program.extend([0x30, 0xcc, 0xfc, requested]),
+                    1 => program.extend([0xcc, 0, requested]), // MV (BP+0),imm
+                    _ => program.extend([0x30, 0x79, 0xfc, requested]),
+                }
+                program.extend([0x30, 0x80, 0xfc]); // MV A,(ISR)
+                rt.load_rom(&program, 0xe0000);
+                rt.step_scheduler_boundaries(5).unwrap();
+                assert_eq!(rt.get_reg("A"), u32::from(requested), "method{method}");
+            }
+        }
+    }
+}
+
+#[test]
+fn physical_predecrement_and_overlap_vectors_are_device_defaults() {
+    let mut rt = synthetic_runtime();
+    for (address, value) in (0x70..0x80).zip((1..=16).map(|n| (n * 0x11) as u8)) {
+        rt.memory.write_internal_byte(address, value);
+    }
+    rt.load_rom(
+        &[0x0b, 8, 0, 0x0c, 8, 0, 1, 0x30, 0xeb, 0x34, 0x77],
+        0xe0000,
+    );
+    rt.step_scheduler_boundaries(3).unwrap();
+    assert_eq!(rt.get_reg("X"), 0x10000);
+    assert_eq!(rt.get_reg("I"), 0);
+    for (n, expected) in [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            rt.memory.read_byte_for_preflight(0x10000 + n as u32, None),
+            Some(expected)
+        );
+    }
+    rt.load_rom(&[0x0b, 8, 0, 0x32, 0xcb, 0x72, 0x70], 0xe0000);
+    rt.set_reg("PC", 0xe0000);
+    rt.step_scheduler_boundaries(2).unwrap();
+    let expected = [
+        0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        0x10,
+    ];
+    for (address, expected) in (0x70..0x80).zip(expected) {
+        assert_eq!(rt.memory.read_internal_byte_silent(address), Some(expected));
+    }
+    rt.power_on_reset().unwrap();
+    assert_eq!(
+        rt.state.byte_arithmetic_source_policy(),
+        ByteArithmeticSourcePolicy::LowByte
+    );
+    assert_eq!(
+        rt.state.block_transfer_policy(),
+        BlockTransferPolicy::CoupledPredecrement
+    );
+    // The related earlier models retain their separately qualified defaults.
+    let other = CoreRuntime::new();
+    assert_eq!(
+        other.state.byte_arithmetic_source_policy(),
+        ByteArithmeticSourcePolicy::Strict
+    );
+    assert_eq!(
+        other.state.block_transfer_policy(),
+        BlockTransferPolicy::Independent
+    );
+}
+
+// OZ-9600 acquisitions,12 October2026: a complete following instruction retires
+// before the CPU frame, even when that instruction clears IMR or ISR.
+#[test]
+fn irq_recognition_retires_one_instruction_and_latches_cancellation() {
+    let cases: &[(&[u8], u32, u8)] = &[
+        (&[0x6c, 0x00], 0x5a12, 0x81),             // INC A
+        (&[0x8a, 0x00, 0x60, 0x00], 0xa67e, 0x81), // MV BA,[6000]
+        (&[0x30, 0xcc, 0xfb, 0x00], 0x5a11, 0x00), // MV IMR,0
+        (&[0x30, 0x71, 0xfc, 0xfe], 0x5a11, 0x81), // AND ISR,FE
+        (&[0x30, 0xcc, 0xfb, 0x81], 0x5a11, 0x81), // repeat IMR
+        (&[0x30, 0x79, 0xfc, 0x01], 0x5a11, 0x81), // repeat ISR
+    ];
+    for &(following, ba, saved_imr) in cases {
+        let mut rt = synthetic_runtime();
+        rt.configure_oz9600_profile(ExecutionProfile::ExperimentalIrqRecognition)
+            .unwrap();
+        rt.state.set_reg(RegName::S, 0x1f900);
+        rt.state.set_reg(RegName::BA, 0x5a11);
+        rt.memory.write_internal_byte(0xfb, 0x01); // MTM, IRM off
+        rt.memory.write_internal_byte(0xfc, 0x01); // MTI pending
+        rt.load_rom(&[0x7e, 0xa6], 0x6000);
+        rt.load_rom(&[0x00, 0x10, 0x0e], 0xffffa);
+        rt.load_rom(&[0x00, 0x01], 0xe1000); // NOP; RETI
+        let mut program = vec![0x30, 0xcc, 0xfb, 0x81];
+        program.extend(following);
+        program.extend([0x00; 8]);
+        rt.load_rom(&program, 0xe0000);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 0);
+        assert_eq!(rt.timer.recognized_mask, 0);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 0);
+        assert_eq!(rt.timer.recognized_mask, 1);
+        assert_eq!(rt.state.get_reg(RegName::BA), ba);
+        let resume = 0xe0004 + following.len() as u32;
+        assert_eq!(rt.state.pc(), resume);
+        let expected_f = rt.state.get_reg(RegName::F);
+        rt.step(1).unwrap();
+        assert_eq!(rt.timer.irq_total, 1);
+        assert_eq!(rt.timer.recognized_mask, 0);
+        assert_eq!(rt.state.pc(), 0xe1001);
+        assert_eq!(rt.memory.load(0x1f8fb, 8), Some(u32::from(saved_imr)));
+        assert_eq!(rt.memory.load(0x1f8fc, 8), Some(expected_f));
+        assert_eq!(rt.memory.load(0x1f8fd, 24), Some(resume));
+        rt.step(1).unwrap();
+        assert_eq!(rt.state.pc(), resume);
+        assert_eq!(rt.state.get_reg(RegName::S), 0x1f900);
+        assert_eq!(rt.state.get_reg(RegName::BA), ba);
+    }
+}
+
+#[test]
+fn recognized_irq_session_roundtrip_continues_and_reset_clears_latch() {
+    let make = || {
+        let mut rt = synthetic_runtime();
+        rt.configure_oz9600_profile(ExecutionProfile::ExperimentalIrqRecognition)
+            .unwrap();
+        rt.state.set_reg(RegName::S, 0x1f900);
+        rt.memory.write_internal_byte(0xfb, 0x81);
+        rt.memory.write_internal_byte(0xfc, 1);
+        rt.load_rom(&[0x30, 0xcc, 0xfb, 0x00, 0x00], 0xe0000);
+        rt.load_rom(&[0x00, 0x10, 0x0e], 0xffffa);
+        rt.load_rom(&[0x00, 0x01], 0xe1000);
+        rt
+    };
+    let mut live = make();
+    live.step(1).unwrap();
+    assert_eq!(live.timer.recognized_mask, 1);
+    assert_eq!(live.memory.read_internal_byte(0xfb), Some(0));
+    let image = live.oz9600_session_state().unwrap();
+    // Legacy readers require schema1, so they reject this before losing the latch.
+    let mut decoder = flate2::bufread::GzDecoder::new(&image[104..]);
+    let mut decoded = String::new();
+    std::io::Read::read_to_string(&mut decoder, &mut decoded).unwrap();
+    let encoded: serde_json::Value = serde_json::from_str(&decoded).unwrap();
+    assert_eq!(encoded["schema"], 2);
+    let mut ordinary = make();
+    ordinary
+        .configure_oz9600_profile(ExecutionProfile::ProvisionalV1)
+        .unwrap();
+    let before = ordinary.oz9600_session_state().unwrap();
+    assert!(ordinary.restore_oz9600_session(&image).is_err());
+    assert_eq!(ordinary.oz9600_session_state().unwrap(), before);
+    let mut restored = make();
+    restored.restore_oz9600_session(&image).unwrap();
+    assert_eq!(restored.timer.recognized_mask, 1);
+    live.step(2).unwrap();
+    restored.step(2).unwrap();
+    assert_eq!(
+        live.oz9600_session_state().unwrap(),
+        restored.oz9600_session_state().unwrap()
+    );
+    restored.timer.recognized_mask = 1;
+    restored.timer.clear_pending_for_reset();
+    assert_eq!(restored.timer.recognized_mask, 0);
+    assert!(restored.timer.recognition_delay);
 }

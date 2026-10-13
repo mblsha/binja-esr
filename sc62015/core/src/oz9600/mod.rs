@@ -10,6 +10,7 @@ pub mod audio;
 mod boundary;
 pub mod bundle;
 pub mod card;
+mod host_input;
 pub mod input;
 pub mod lcd;
 #[cfg(test)]
@@ -17,6 +18,7 @@ mod parity;
 mod profile;
 pub mod retained;
 pub mod rtc;
+pub mod session;
 pub mod tablet;
 #[cfg(test)]
 mod tests;
@@ -439,5 +441,6 @@ pub fn configure_hardware(fixed: &[u8], hw: Hardware) -> Result<CoreRuntime, Str
         )))
         .map_err(|error| error.to_string())?;
     runtime.oz9600_hardware = Some(hardware);
+    runtime.configure_oz9600_cpu_instruction_contracts();
     Ok(runtime)
 }

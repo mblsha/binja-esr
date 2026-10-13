@@ -147,6 +147,12 @@ class Contacts:
     keys: dict[int, int] = field(default_factory=dict)
     tablet: tuple[int, int, int] | None = None
     on_deadline: int | None = None
+    tablet_grace_until: int | None = None
+    tablet_host: tuple[int, int] | None = None
+    tablet_queue: list = field(default_factory=list)
+    tablet_release: bool = False
+    tablet_gap_until: int = 0
+    tablet_queue_overflow: bool = False
 
     def sync(
         self,
@@ -154,6 +160,8 @@ class Contacts:
         tablet: tuple[int, int] | None,
         at: int,
         on: bool = False,
+        ready: bool = True,
+        busy: bool = False,
     ) -> list:
         events = []
         for code in sorted(desired):
@@ -170,21 +178,64 @@ class Contacts:
         elif not on and self.on_deadline is not None and at >= self.on_deadline:
             self.on_deadline = None
             events.append(("on", False))
-        if tablet is not None:
-            x, y = tablet
-            if self.tablet is None:
-                self.tablet = (x, y, at + self.minimum_hold)
-                events.append(("tablet", x, y, True))
-            elif self.tablet[:2] != tablet:
-                self.tablet = (x, y, self.tablet[2])
-                events.append(("tablet", x, y, True))
-        elif self.tablet is not None and at >= self.tablet[2]:
-            x, y, _ = self.tablet
+        if self.tablet_host is None and tablet is not None:
+            if len(self.tablet_queue) >= 16:
+                self.tablet_queue_overflow = True
+            else:
+                self.tablet_queue.append([*tablet, True])
+        elif self.tablet_host is not None and tablet is None:
+            if self.tablet_queue and self.tablet_queue[-1][2]:
+                self.tablet_queue[-1][2] = False
+            elif self.tablet:
+                self.tablet_release = True
+                self.tablet_grace_until = max(at, self.tablet[2]) + 400_000
+        elif tablet is not None and tablet != self.tablet_host:
+            if self.tablet_queue and self.tablet_queue[-1][2]:
+                self.tablet_queue[-1][:2] = tablet
+            elif self.tablet and not self.tablet_release:
+                self.tablet = (*tablet, self.tablet[2])
+                events.append(("tablet", *tablet, True))
+        self.tablet_host = tablet
+        if (
+            self.tablet
+            and self.tablet_release
+            and at >= self.tablet[2]
+            and (not self.minimum_hold or ready or at >= self.tablet_grace_until)
+        ):
+            events.append(("tablet", *self.tablet[:2], False))
             self.tablet = None
-            events.append(("tablet", x, y, False))
+            self.tablet_release = False
+            self.tablet_grace_until = None
+            self.tablet_gap_until = at + (40_000 if self.minimum_hold else 0)
+        if (
+            self.tablet is None
+            and at >= self.tablet_gap_until
+            and (not busy or not self.minimum_hold)
+            and self.tablet_queue
+        ):
+            x, y, down = self.tablet_queue.pop(0)
+            end = at + self.minimum_hold
+            self.tablet = (x, y, end)
+            self.tablet_release = not down
+            self.tablet_grace_until = None if down else end + 400_000
+            events.append(("tablet", x, y, True))
         return events
 
+    def limit_budget(self, requested: int, at: int) -> int:
+        if self.tablet_gap_until > at:
+            return min(requested, self.tablet_gap_until - at)
+        if self.minimum_hold and self.tablet_release:
+            remaining = max(0, self.tablet[2] - at) if self.tablet else 0
+            return min(requested, remaining or 256)
+        return min(requested, 4096) if self.tablet_queue else requested
+
     def cancel(self) -> list:
+        self.tablet_grace_until = None
+        self.tablet_host = None
+        self.tablet_queue_overflow = False
+        self.tablet_queue.clear()
+        self.tablet_release = False
+        self.tablet_gap_until = 0
         events = [("matrix", code, False) for code in sorted(self.keys)]
         self.keys.clear()
         if self.on_deadline is not None:

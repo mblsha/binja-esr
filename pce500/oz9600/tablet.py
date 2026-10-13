@@ -8,13 +8,20 @@ class Tablet:
         ) = 0
         self.pressed = self.low_part_next = False
         self.latched_sample = 0
+        self.sample_x_seen = self.contact_sampled = False
 
     def set_contact(self, x, y, pressed):
         if not 0 <= x <= 1023 or not 0 <= y <= 1023:
             raise ValueError("tablet ADC samples must be ten-bit values (0..1023)")
         edge = pressed and not self.pressed
+        if edge or not pressed:
+            self.sample_x_seen = self.contact_sampled = False
         self.x, self.y, self.pressed = x, y, pressed
         return edge
+
+    def contact_release_ready(self):
+        """Read-only host assistance; a later acquisition invalidates readiness."""
+        return self.pressed and self.contact_sampled and self.drive_control == 0x10
 
     def write_conversion_control(self, value):
         if value not in (6, 7):
@@ -44,6 +51,14 @@ class Tablet:
         value = self.peek_data()
         if not self.low_part_next:
             self.latched_sample = self.analog_sample()
+        if self.low_part_next and self.pressed:
+            if (self.drive_control, self.conversion_control & 1) == (0xA8, 0):
+                self.sample_x_seen = True
+            elif (self.drive_control, self.conversion_control & 1) == (
+                0x8A,
+                1,
+            ) and self.sample_x_seen:
+                self.contact_sampled = True
         self.low_part_next = not self.low_part_next
         self.data_reads += 1
         return value

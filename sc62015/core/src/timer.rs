@@ -21,6 +21,8 @@ const SCR_STS: u8 = 0x04;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InterruptSnapshot {
     pub pending: bool,
+    pub recognition_delay: bool,
+    pub recognized_mask: u8,
     pub in_interrupt: bool,
     pub key_irq_latched: bool,
     pub source: Option<String>,
@@ -39,6 +41,7 @@ pub struct InterruptSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "oz9600", derive(serde::Serialize, serde::Deserialize))]
 pub struct TimerContext {
     pub enabled: bool,
     pub mti_period: u64,
@@ -47,6 +50,11 @@ pub struct TimerContext {
     pub next_sti: u64,
     pub kb_irq_enabled: bool,
     pub irq_pending: bool,
+    /// Opt-in OZ timing experiment: recognize, retire one instruction, enter.
+    #[cfg_attr(feature = "oz9600", serde(default, skip_serializing_if = "is_false"))]
+    pub recognition_delay: bool,
+    #[cfg_attr(feature = "oz9600", serde(default, skip_serializing_if = "is_zero"))]
+    pub recognized_mask: u8,
     pub irq_source: Option<String>,
     pub irq_imr: u8,
     pub irq_isr: u8,
@@ -114,7 +122,7 @@ fn normalize_bit_watch(table: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PcHistory {
     pub(crate) pcs: [u32; 10],
     pub(crate) len: usize,
@@ -141,11 +149,34 @@ pub struct BitWatch {
     pub(crate) histories: [[[PcHistory; 2]; 8]; 2],
 }
 
+pub(crate) fn is_false(value: &bool) -> bool {
+    !*value
+}
+pub(crate) fn is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
 impl TimerContext {
+    #[cfg(feature = "oz9600")]
+    pub(crate) fn validate_session(&self, cycles: u64) -> Result<(), String> {
+        if !self.timer_scale.is_finite()
+            || self.timer_scale <= 0.0
+            || self.interrupt_stack.len() > 4096
+        {
+            return Err("Invalid saved timer state".into());
+        }
+        let (timing, interrupts) = self.snapshot_info();
+        let mut check = self.clone();
+        check.apply_snapshot_info(&timing, &interrupts, cycles)?;
+        Ok(())
+    }
+
     /// Capture interrupt execution state without serialization or dynamic maps.
     pub fn interrupt_snapshot(&self) -> InterruptSnapshot {
         InterruptSnapshot {
             pending: self.irq_pending,
+            recognition_delay: self.recognition_delay,
+            recognized_mask: self.recognized_mask,
             in_interrupt: self.in_interrupt,
             key_irq_latched: self.key_irq_latched,
             source: self.irq_source.clone(),
@@ -165,6 +196,8 @@ impl TimerContext {
 
     pub fn restore_interrupt_snapshot(&mut self, snapshot: &InterruptSnapshot) {
         self.irq_pending = snapshot.pending;
+        self.recognition_delay = snapshot.recognition_delay;
+        self.recognized_mask = snapshot.recognized_mask;
         self.in_interrupt = snapshot.in_interrupt;
         self.key_irq_latched = snapshot.key_irq_latched;
         self.irq_source = snapshot.source.clone();
@@ -190,6 +223,8 @@ impl TimerContext {
             next_sti: 0,
             kb_irq_enabled: true,
             irq_pending: false,
+            recognition_delay: false,
+            recognized_mask: 0,
             irq_source: None,
             irq_imr: 0,
             irq_isr: 0,
@@ -440,6 +475,7 @@ impl TimerContext {
 
     pub fn reset(&mut self, current_cycle: u64) {
         self.irq_pending = false;
+        self.recognized_mask = 0;
         self.irq_source = None;
         self.irq_imr = 0;
         self.irq_isr = 0;
@@ -491,6 +527,7 @@ impl TimerContext {
     /// the cleared IMEM state (ISR/SCR/UCR/USR/SSR) instead of stale latched values.
     pub fn clear_pending_for_reset(&mut self) {
         self.irq_pending = false;
+        self.recognized_mask = 0;
         self.in_interrupt = false;
         self.irq_source = None;
         self.last_fired = None;
@@ -568,6 +605,7 @@ impl TimerContext {
     ) -> Result<(), String> {
         let history = irq_bit_watch.map(BitWatch::from_json).transpose()?;
         self.irq_pending = pending;
+        self.recognized_mask = 0;
         self.irq_source = source;
         self.irq_imr = imr;
         self.irq_isr = isr;
@@ -924,6 +962,7 @@ impl TimerContext {
             return None;
         }
         self.irq_pending = false;
+        // Draining pending status cannot cancel an already recognized CPU frame.
         self.irq_source.take()
     }
 

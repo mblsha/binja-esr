@@ -141,6 +141,8 @@ impl From<InterruptSnapshot> for InterruptInfo {
         let [total, key, mti, sti] = s.counts;
         Self {
             pending: s.pending,
+            recognition_delay: s.recognition_delay,
+            recognized_mask: s.recognized_mask,
             in_interrupt: s.in_interrupt,
             key_irq_latched: s.key_irq_latched,
             source: s.source,
@@ -170,6 +172,13 @@ impl TryFrom<&InterruptInfo> for InterruptSnapshot {
     type Error = String;
 
     fn try_from(s: &InterruptInfo) -> Result<Self, Self::Error> {
+        if s.recognized_mask != 0
+            && (!s.recognition_delay
+                || !s.recognized_mask.is_power_of_two()
+                || s.recognized_mask > 0x40)
+        {
+            return Err("Invalid recognized IRQ mask/policy".into());
+        }
         let counts = s.irq_counts.clone().unwrap_or_default();
         let last = s.last_irq.clone().unwrap_or_default();
         if last.pc.is_some_and(|v| v > 0xfffff) || last.vector.is_some_and(|v| v > 0xfffff) {
@@ -181,6 +190,8 @@ impl TryFrom<&InterruptInfo> for InterruptSnapshot {
         }
         Ok(Self {
             pending: s.pending,
+            recognition_delay: s.recognition_delay,
+            recognized_mask: s.recognized_mask,
             in_interrupt: s.in_interrupt,
             key_irq_latched: s.key_irq_latched,
             source: s.source.clone(),

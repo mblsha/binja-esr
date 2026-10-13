@@ -1,5 +1,5 @@
 // PY_SOURCE: pce500/oz9600/profile.py
-//! Explicit execution experiments, never inferred from model selection.
+//! Measured device instruction contracts and explicit timing/reset experiments.
 use crate::{
     llama::state::{BlockTransferPolicy, ByteArithmeticSourcePolicy, IsrSoftwareWritePolicy},
     CoreError, CoreRuntime, Result,
@@ -13,7 +13,7 @@ pub enum ExecutionProfile {
     Experimental,
     ExperimentalIsrClearOnly,
     ExperimentalIsrMtiWritable,
-    /// MTI-writable profile plus one ONKI latch assertion per physical press.
+    /// Measured ISR replacement plus one ONKI latch assertion per physical press.
     /// A firmware-tested hypothesis, not an ESR-P silicon timing contract.
     ExperimentalOnEdge,
     /// ON-edge basis; IMR.IRM/source masks govern hardware IRQ acceptance even
@@ -25,12 +25,29 @@ pub enum ExecutionProfile {
     /// Neither composition nor its nominal clock rate qualifies physical wake.
     ExperimentalRtcIrqImr,
     /// Usable v1 composition: provisional initial BP=D0 for empty backing,
-    /// advancing RTC and the existing ON/IMR/ISR policies. Configuration is
+    /// advancing RTC, measured ISR replacement and provisional ON/IMR policies. Configuration is
     /// established before execution; no guest state is repaired during boot.
     ProvisionalV1,
+    /// V1 basis plus opt-in EXI wake from OFF, inferred from ROM masks/wake code.
+    /// Physical ESR-P OFF and gate-array signal behavior remain unqualified.
+    ExperimentalExternalWake,
+    /// V1 plus the 12 October software MTI/STI recognition contract.
+    /// Electrical arrival and HALT/OFF recognition windows remain hypotheses.
+    ExperimentalIrqRecognition,
 }
 
 impl CoreRuntime {
+    /// Device-specific instruction contracts measured through ordinary OZ-707
+    /// CALLs on 11 October 2026. These do not qualify reset or IRQ timing.
+    pub(crate) fn configure_oz9600_cpu_instruction_contracts(&mut self) {
+        self.state
+            .set_block_transfer_policy(BlockTransferPolicy::CoupledPredecrement);
+        self.state
+            .set_byte_arithmetic_source_policy(ByteArithmeticSourcePolicy::LowByte);
+        self.state
+            .set_isr_software_write_policy(IsrSoftwareWritePolicy::Replace);
+    }
+
     /// Configure before execution. A validated retained image must be restored
     /// first. ProvisionalV1 selects BP=D0 for all-zero SRAM, including a saved
     /// image exported before initialization. Experimental uses the load flag.
@@ -46,45 +63,18 @@ impl CoreRuntime {
             .clone()
             .ok_or_else(|| CoreError::Other("OZ hardware unavailable".into()))?;
         let experimental = profile != ExecutionProfile::Strict;
-        let clear_only = matches!(
-            profile,
-            ExecutionProfile::ExperimentalIsrClearOnly
-                | ExecutionProfile::ExperimentalIsrMtiWritable
-                | ExecutionProfile::ExperimentalOnEdge
-                | ExecutionProfile::ExperimentalIrqImr
-                | ExecutionProfile::ExperimentalRtc
-                | ExecutionProfile::ExperimentalRtcIrqImr
-                | ExecutionProfile::ProvisionalV1
-        );
         let mut hw = hardware.borrow_mut();
-        self.state.set_block_transfer_policy(if experimental {
-            BlockTransferPolicy::CoupledPredecrement
-        } else {
-            BlockTransferPolicy::Independent
-        });
-        self.state
-            .set_byte_arithmetic_source_policy(if experimental {
-                ByteArithmeticSourcePolicy::LowByte
-            } else {
-                ByteArithmeticSourcePolicy::Strict
-            });
-        self.state.set_isr_software_write_policy(
-            if matches!(
-                profile,
-                ExecutionProfile::ExperimentalIsrMtiWritable
-                    | ExecutionProfile::ExperimentalOnEdge
-                    | ExecutionProfile::ExperimentalIrqImr
-                    | ExecutionProfile::ExperimentalRtc
-                    | ExecutionProfile::ExperimentalRtcIrqImr
-                    | ExecutionProfile::ProvisionalV1
-            ) {
+        self.configure_oz9600_cpu_instruction_contracts();
+        // Retain the two named, historical ISR counterfactuals. Other profiles
+        // use the measured replacement contract rather than the old MTI-only
+        // assumption (OZ-9600 physical probes, 11 October 2026).
+        self.state.set_isr_software_write_policy(match profile {
+            ExecutionProfile::ExperimentalIsrClearOnly => IsrSoftwareWritePolicy::ClearOnly,
+            ExecutionProfile::ExperimentalIsrMtiWritable => {
                 IsrSoftwareWritePolicy::ClearOnlyExceptMti
-            } else if clear_only {
-                IsrSoftwareWritePolicy::ClearOnly
-            } else {
-                IsrSoftwareWritePolicy::Replace
-            },
-        );
+            }
+            _ => IsrSoftwareWritePolicy::Replace,
+        });
         *self.timer = self
             .device_model()
             .timer_profile()
@@ -96,18 +86,27 @@ impl CoreRuntime {
                 | ExecutionProfile::ExperimentalIrqImr
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
         hw.execution.diagnostic_irq_imr_only = matches!(
             profile,
             ExecutionProfile::ExperimentalIrqImr
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
+        self.timer.recognition_delay = profile == ExecutionProfile::ExperimentalIrqRecognition;
+        hw.execution.diagnostic_external_off_wake =
+            profile == ExecutionProfile::ExperimentalExternalWake;
         let calendar = matches!(
             profile,
             ExecutionProfile::ExperimentalRtc
                 | ExecutionProfile::ExperimentalRtcIrqImr
                 | ExecutionProfile::ProvisionalV1
+                | ExecutionProfile::ExperimentalExternalWake
+                | ExecutionProfile::ExperimentalIrqRecognition
         );
         let second_period = self.device_model().timer_profile().timebase_hz;
         hw.execution.diagnostic_rtc_a2_period = if calendar {
@@ -125,7 +124,12 @@ impl CoreRuntime {
         hw.execution.rtc_off_elapsed_units = 0;
         self.memory.write_internal_byte(
             0xec,
-            if (profile == ExecutionProfile::ProvisionalV1 && hw.ram.iter().all(|b| *b == 0))
+            if (matches!(
+                profile,
+                ExecutionProfile::ProvisionalV1
+                    | ExecutionProfile::ExperimentalExternalWake
+                    | ExecutionProfile::ExperimentalIrqRecognition
+            ) && hw.ram.iter().all(|b| *b == 0))
                 || (profile == ExecutionProfile::Experimental && !hw.retained_loaded)
             {
                 0xd0

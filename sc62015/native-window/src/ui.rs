@@ -2,7 +2,7 @@
 //! Host artwork and input ownership. No ROM text, guest writes or interrupts.
 use font8x8::{UnicodeFonts, BASIC_FONTS};
 use sc62015_core::{lcd_frame::LcdFrame, physical_keys::matrix_key, DeviceModel};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 pub const WIDTH: usize = 526;
 pub const HEIGHT: usize = 530;
@@ -234,7 +234,7 @@ fn fill(buffer: &mut [u32], rect: Rect, color: u32) {
         }
     }
 }
-fn text(buffer: &mut [u32], x: usize, y: usize, label: &str, color: u32) {
+pub(crate) fn text(buffer: &mut [u32], x: usize, y: usize, label: &str, color: u32) {
     for (index, ch) in label.chars().enumerate() {
         if let Some(glyph) = BASIC_FONTS.get(ch) {
             for (dy, bits) in glyph.into_iter().enumerate() {
@@ -345,6 +345,12 @@ pub struct Contacts {
     tablet: Option<(u16, u16, u64)>,
     on_deadline: Option<u64>,
     pub minimum_hold: u64,
+    tablet_grace_until: Option<u64>,
+    tablet_host: Option<(u16, u16)>,
+    tablet_queue: VecDeque<(u16, u16, bool)>,
+    tablet_release: bool,
+    tablet_gap_until: u64,
+    pub tablet_queue_overflow: bool,
 }
 impl Contacts {
     pub fn new(minimum_hold: u64) -> Self {
@@ -355,6 +361,24 @@ impl Contacts {
     }
     pub fn pressed_keys(&self) -> BTreeSet<u8> {
         self.keys.keys().copied().collect()
+    }
+    /// Poll an assisted release without crossing its minimum contact deadline.
+    pub fn limit_budget(&self, requested: usize, at: u64) -> usize {
+        if self.tablet_gap_until > at {
+            return requested.min((self.tablet_gap_until - at).min(usize::MAX as u64) as usize);
+        }
+        if self.minimum_hold != 0 && self.tablet_release {
+            let remaining = self.tablet.map_or(0, |(_, _, end)| end.saturating_sub(at));
+            if remaining != 0 {
+                requested.min(remaining.min(usize::MAX as u64) as usize)
+            } else {
+                requested.min(256)
+            }
+        } else if !self.tablet_queue.is_empty() {
+            requested.min(4096)
+        } else {
+            requested
+        }
     }
     pub fn pressed_on(&self) -> bool {
         self.on_deadline.is_some()
@@ -367,6 +391,31 @@ impl Contacts {
         tablet: Option<(u16, u16)>,
         at: u64,
         on: bool,
+    ) -> Vec<Event> {
+        self.sync_tablet_ready(desired, tablet, at, on, true)
+    }
+    /// Assisted pen release also waits for a complete coordinate sample and idle panel drive, with
+    /// a bounded 400k grace. Raw contacts and cancellation keep their contract.
+    pub fn sync_tablet_ready(
+        &mut self,
+        desired: &BTreeSet<u8>,
+        tablet: Option<(u16, u16)>,
+        at: u64,
+        on: bool,
+        ready: bool,
+    ) -> Vec<Event> {
+        self.sync_tablet_state(desired, tablet, at, on, ready, false)
+    }
+    /// Read-only ROM mailbox state serializes complete host clicks. Raw mode
+    /// bypasses mailbox, acquisition assistance and release-gap policies.
+    pub fn sync_tablet_state(
+        &mut self,
+        desired: &BTreeSet<u8>,
+        tablet: Option<(u16, u16)>,
+        at: u64,
+        on: bool,
+        ready: bool,
+        busy: bool,
     ) -> Vec<Event> {
         let mut events = Vec::new();
         for &code in desired {
@@ -394,20 +443,64 @@ impl Contacts {
             }
             _ => {}
         }
-        match (self.tablet, tablet) {
+        match (self.tablet_host, tablet) {
             (None, Some((x, y))) => {
-                self.tablet = Some((x, y, at.saturating_add(self.minimum_hold)));
-                events.push(Event::Tablet(x, y, true));
+                // One native pointer; preserve a full tap even if its down/up
+                // arrive before the preceding ROM event has been consumed.
+                if self.tablet_queue.len() < 16 {
+                    self.tablet_queue.push_back((x, y, true));
+                } else {
+                    self.tablet_queue_overflow = true;
+                }
             }
-            (Some((old_x, old_y, end)), Some((x, y))) if (x, y) != (old_x, old_y) => {
-                self.tablet = Some((x, y, end));
-                events.push(Event::Tablet(x, y, true));
+            (Some((old_x, old_y)), Some((x, y))) if (x, y) != (old_x, old_y) => {
+                if let Some(last) = self.tablet_queue.back_mut().filter(|q| q.2) {
+                    last.0 = x;
+                    last.1 = y;
+                } else if let Some((_, _, end)) = self.tablet.filter(|_| !self.tablet_release) {
+                    self.tablet = Some((x, y, end));
+                    events.push(Event::Tablet(x, y, true));
+                }
             }
-            (Some((x, y, end)), None) if at >= end => {
-                self.tablet = None;
-                events.push(Event::Tablet(x, y, false));
+            (Some(_), None) => {
+                if let Some(last) = self.tablet_queue.back_mut().filter(|q| q.2) {
+                    last.2 = false;
+                } else if let Some((_, _, end)) = self.tablet {
+                    self.tablet_release = true;
+                    self.tablet_grace_until = Some(at.max(end).saturating_add(400_000));
+                }
             }
             _ => {}
+        }
+        self.tablet_host = tablet;
+        if let Some((x, y, end)) = self.tablet {
+            if self.tablet_release
+                && at >= end
+                && (self.minimum_hold == 0
+                    || ready
+                    || at >= self.tablet_grace_until.unwrap_or(u64::MAX))
+            {
+                self.tablet = None;
+                self.tablet_release = false;
+                self.tablet_grace_until = None;
+                self.tablet_gap_until =
+                    at.saturating_add(if self.minimum_hold == 0 { 0 } else { 40_000 });
+                events.push(Event::Tablet(x, y, false));
+            }
+        }
+        if self.tablet.is_none() && at >= self.tablet_gap_until && (!busy || self.minimum_hold == 0)
+        {
+            if let Some((x, y, down)) = self.tablet_queue.pop_front() {
+                let end = at.saturating_add(self.minimum_hold);
+                self.tablet = Some((x, y, end));
+                self.tablet_release = !down;
+                self.tablet_grace_until = if down {
+                    None
+                } else {
+                    Some(end.saturating_add(400_000))
+                };
+                events.push(Event::Tablet(x, y, true));
+            }
         }
         events
     }
@@ -422,6 +515,12 @@ impl Contacts {
         if self.on_deadline.take().is_some() {
             events.push(Event::On(false));
         }
+        self.tablet_grace_until = None;
+        self.tablet_host = None;
+        self.tablet_queue_overflow = false;
+        self.tablet_queue.clear();
+        self.tablet_release = false;
+        self.tablet_gap_until = 0;
         if let Some((x, y, _)) = self.tablet.take() {
             events.push(Event::Tablet(x, y, false));
         }
@@ -514,16 +613,76 @@ mod tests {
         );
         assert_eq!(
             contacts.sync(&union, Some((227, 68)), 50_000, false).len(),
-            2
+            1
         );
         assert!(contacts
             .sync(&BTreeSet::new(), None, 50_001, false)
             .is_empty());
         assert_eq!(
+            contacts.sync(&BTreeSet::new(), None, 80_000, false),
+            vec![Event::Tablet(227, 68, true)]
+        );
+        assert_eq!(
             contacts.cancel(),
             vec![Event::Matrix(3, false), Event::Tablet(227, 68, false)]
         );
         assert!(contacts.cancel().is_empty());
+    }
+    #[test]
+    fn assisted_pen_waits_for_sample_with_bounded_timeout_and_immediate_cancel() {
+        let mut c = Contacts::new(40_000);
+        let empty = BTreeSet::new();
+        assert_eq!(
+            c.sync_tablet_ready(&empty, Some((61, 141)), 0, false, false),
+            vec![Event::Tablet(61, 141, true)]
+        );
+        assert!(c
+            .sync_tablet_ready(&empty, None, 40_000, false, false)
+            .is_empty());
+        assert_eq!(
+            c.sync_tablet_ready(&empty, None, 60_000, false, true),
+            vec![Event::Tablet(61, 141, false)]
+        );
+        c.sync_tablet_ready(&empty, Some((61, 141)), 100_000, false, false);
+        assert!(c
+            .sync_tablet_ready(&empty, None, 140_000, false, false)
+            .is_empty());
+        assert!(c
+            .sync_tablet_ready(&empty, None, 539_999, false, false)
+            .is_empty());
+        assert_eq!(
+            c.sync_tablet_ready(&empty, None, 540_000, false, false),
+            vec![Event::Tablet(61, 141, false)]
+        );
+        c.sync_tablet_ready(&empty, Some((61, 141)), 600_000, false, false);
+        assert_eq!(c.cancel(), vec![Event::Tablet(61, 141, false)]);
+        let mut raw = Contacts::new(0);
+        raw.sync_tablet_ready(&empty, Some((61, 141)), 0, false, false);
+        assert_eq!(
+            raw.sync_tablet_ready(&empty, None, 1, false, false),
+            vec![Event::Tablet(61, 141, false)]
+        );
+    }
+
+    #[test]
+    fn pen_grace_begins_at_host_release_and_polls_without_splitting_acquisition() {
+        let mut c = Contacts::new(40_000);
+        let empty = BTreeSet::new();
+        c.sync_tablet_ready(&empty, Some((61, 141)), 0, false, false);
+        assert_eq!(c.limit_budget(4096, 0), 4096);
+        c.sync_tablet_ready(&empty, Some((61, 141)), 1_000_000, false, false);
+        assert!(c
+            .sync_tablet_ready(&empty, None, 1_000_000, false, false)
+            .is_empty());
+        assert_eq!(c.limit_budget(4096, 1_000_000), 256);
+        assert!(c
+            .sync_tablet_ready(&empty, None, 1_399_999, false, false)
+            .is_empty());
+        assert_eq!(
+            c.sync_tablet_ready(&empty, None, 1_400_000, false, false),
+            vec![Event::Tablet(61, 141, false)]
+        );
+        assert_eq!(c.limit_budget(4096, 1_400_000), 4096);
     }
     #[test]
     fn raw_contact_edges_and_pen_movement_preserve_first_release_deadline() {
@@ -540,6 +699,59 @@ mod tests {
             contacts.sync(&BTreeSet::new(), None, 2, false),
             vec![Event::Tablet(956, 944, false)]
         );
+    }
+    #[test]
+    fn queued_pen_preserves_a_short_click_until_rom_mailbox_clears() {
+        let mut c = Contacts::new(40_000);
+        let keys = BTreeSet::new();
+        assert!(c
+            .sync_tablet_state(&keys, Some((627, 130)), 0, false, true, true)
+            .is_empty());
+        assert!(c
+            .sync_tablet_state(&keys, None, 1, false, true, true)
+            .is_empty());
+        assert!(c
+            .sync_tablet_state(&keys, None, 4096, false, true, true)
+            .is_empty());
+        assert_eq!(
+            c.sync_tablet_state(&keys, None, 40960, false, true, false),
+            vec![Event::Tablet(627, 130, true)]
+        );
+        assert!(c
+            .sync_tablet_state(&keys, None, 80959, false, true, false)
+            .is_empty());
+        assert_eq!(
+            c.sync_tablet_state(&keys, None, 80960, false, true, false),
+            vec![Event::Tablet(627, 130, false)]
+        );
+        let mut raw = Contacts::new(0);
+        assert_eq!(
+            raw.sync_tablet_state(&keys, Some((627, 130)), 0, false, false, true),
+            vec![Event::Tablet(627, 130, true)]
+        );
+        assert_eq!(
+            raw.sync_tablet_state(&keys, None, 1, false, false, true),
+            vec![Event::Tablet(627, 130, false)]
+        );
+    }
+    #[test]
+    fn pending_pen_cancellation_and_overflow_are_explicit() {
+        let mut c = Contacts::new(40_000);
+        let keys = BTreeSet::new();
+        for n in 0..16 {
+            c.sync_tablet_state(&keys, Some((627, 130)), n * 2, false, true, true);
+            c.sync_tablet_state(&keys, None, n * 2 + 1, false, true, true);
+        }
+        assert_eq!(c.tablet_queue.len(), 16);
+        assert!(!c.tablet_queue_overflow);
+        c.sync_tablet_state(&keys, Some((627, 130)), 32, false, true, true);
+        assert!(c.tablet_queue_overflow);
+        assert_eq!(c.tablet_queue.len(), 16);
+        assert!(c.cancel().is_empty());
+        assert!(!c.tablet_queue_overflow);
+        assert!(c
+            .sync_tablet_state(&keys, None, 1000000, false, true, false)
+            .is_empty());
     }
     #[test]
     fn on_contact_is_separate_assisted_owned_and_cancelled() {

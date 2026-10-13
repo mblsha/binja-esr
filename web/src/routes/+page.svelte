@@ -102,6 +102,8 @@
 	let ozBatteryGeneration = -1;
 	let ozBatteryStatus = 'Automatic saving is ready';
 	let ozBatteryError = '';
+	let ozRejectedBattery: Uint8Array | null = null;
+	let ozRejectedSession: Uint8Array | null = null;
 	let ozBatteryBusy = false;
 	let ozBatterySave: Promise<boolean> | null = null;
 	let ozBatteryTimer: ReturnType<typeof setInterval> | null = null;
@@ -261,6 +263,8 @@
 			romModel === 'pi-3000'
 				? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
 				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+		() => romModel !== 'oz-9600' || emulator.oz9600_tablet_contact_release_ready(),
+		() => romModel === 'oz-9600' && emulator.oz9600_tablet_mailbox_busy(),
 		() => (romModel === 'pi-3000' ? 200_000 : 40_000),
 	);
 	const fallbackHostInputs = {
@@ -957,11 +961,11 @@
 			return true;
 		const save = (async () => {
 			try {
-				const bytes: Uint8Array = worker
-					? await workerCall('oz_retained_export', { generation })
-					: emulator.export_oz9600_retained();
+				const checkpoint: { image: Uint8Array; session: Uint8Array } = worker
+					? await workerCall('oz_checkpoint_export', { generation })
+					: { image: emulator.export_oz9600_retained(), session: emulator.export_oz9600_session() };
 				if (session !== ozBatterySession) return false;
-				const result = await session.save(bytes);
+				const result = await session.save(checkpoint.image, checkpoint.session);
 				if (session !== ozBatterySession) return false;
 				ozBatteryError = '';
 				ozBatteryStatus = `Saved at ${new Date(result.savedAt).toLocaleTimeString()}`;
@@ -1062,6 +1066,7 @@
 		source: string | null,
 		generation: number,
 		paRetained = new Uint8Array(),
+		backupOverride?: Uint8Array,
 	) {
 		const originalBytes = bytes.slice();
 		if (generation !== romLoadGeneration) return;
@@ -1097,9 +1102,13 @@
 			await candidateBattery?.close();
 			return;
 		}
-		const retained = candidateBattery?.loaded?.image.slice() ?? new Uint8Array();
+		const retained = backupOverride?.slice() ?? candidateBattery?.loaded?.image.slice() ?? new Uint8Array();
+		const savedSession = backupOverride === undefined ? candidateBattery?.loaded?.session?.slice() : undefined;
 		resetSymbols();
 		try {
+			// Empty constructor input is a fresh organizer, never a valid backup.
+			if ((backupOverride !== undefined || candidateBattery?.loaded) && retained.length === 0)
+				throw new Error('Retained image is empty');
 			if (worker) {
 				await workerCall(
 					'load_rom',
@@ -1108,7 +1117,7 @@
 						romSource: source,
 						model,
 						generation,
-						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
+						...(model === 'oz-9600' ? { ozProfile, retained, ...(savedSession ? { session: savedSession } : {}) } : {}),
 						...(model === 'pa-9500'
 							? { paProfile, paUart, paCardRom: paCardRom.slice(), paCardSram: paCardSram.slice(), paRetained }
 							: {}),
@@ -1121,8 +1130,10 @@
 					await candidateBattery?.close();
 					return;
 				}
-				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
-				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
+				if (model === 'oz-9600') {
+					if (savedSession) emu.load_oz9600_checkpoint(bytes, retained, savedSession, ozProfile);
+					else emu.load_oz9600(bytes, retained, ozProfile);
+				} else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1131,7 +1142,15 @@
 			}
 		} catch (error) {
 			await candidateBattery?.close();
-			if (model === 'oz-9600') ozBatteryError = `Saved records were preserved: ${String(error)}`;
+			if (generation === romLoadGeneration && model === 'oz-9600') {
+				// Keep a host copy of the rejected durable file, never guest data.
+				// A failed replacement must keep that original accessible.
+				if (!backupOverride && candidateBattery?.loaded) {
+					ozRejectedBattery = candidateBattery.loaded.image.slice();
+					ozRejectedSession = candidateBattery.loaded.session?.slice() ?? null;
+				}
+				ozBatteryError = `Saved records were preserved: ${String(error)}`;
+			}
 			throw error;
 		}
 		if (generation !== romLoadGeneration) {
@@ -1143,7 +1162,9 @@
 		if (model === 'oz-9600') {
 			ozBatteryError = '';
 			ozBatteryStatus = candidateBattery?.loaded
-				? 'Recovered saved records; paused'
+				? savedSession
+					? 'Recovered saved records and unfinished work; paused'
+					: 'Recovered saved records; paused'
 				: candidateBattery
 					? 'Automatic saving is on'
 					: 'Automatic saving is off; export backups to keep records';
@@ -1161,6 +1182,12 @@
 		romLoaded = true;
 		await pushSoundPreference();
 		lastError = null;
+		// Only a successfully constructed machine may replace saved records.
+		// Failed writes leave the rejected original available to export.
+		if (!backupOverride || (await saveOzBattery(true))) {
+			ozRejectedBattery = null;
+			ozRejectedSession = null;
+		}
 		if (callStackOpen) void ensureSymbols();
 	}
 
@@ -1843,13 +1870,75 @@
 			loadingRom = false;
 		}
 	}
+	async function exportOzSession() {
+		if (!romLoaded || !(await stop())) return;
+		try {
+			const bytes: Uint8Array = worker
+				? await workerCall('oz_session_export', { generation: romLoadGeneration })
+				: emulator.export_oz9600_session();
+			downloadBlob(
+				new Blob([bytes.slice() as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }),
+				'oz-9600.ozsession',
+			);
+		} catch (error) {
+			lastError = String(error);
+		}
+	}
+	function exportRejectedSession() {
+		if (ozRejectedSession)
+			downloadBlob(
+				new Blob([ozRejectedSession.slice() as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }),
+				'oz-9600-rejected.ozsession',
+			);
+	}
+	function exportRejectedBattery() {
+		if (!ozRejectedBattery) return;
+		downloadBlob(
+			new Blob([ozRejectedBattery.slice() as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }),
+			'oz-9600-rejected.ozbat',
+		);
+	}
+	async function recoverOzBackup(file: File) {
+		if (!ozRejectedBattery || !requestedRom || requestedRom.model !== 'oz-9600' || loadingRom) return;
+		const requested = requestedRom;
+		const generation = ++romLoadGeneration;
+		loadingRom = true;
+		try {
+			const backup = new Uint8Array(await file.arrayBuffer());
+			await ensureWorker();
+			await installRom(
+				requested.bytes.slice(),
+				requested.model,
+				requested.source,
+				generation,
+				new Uint8Array(),
+				backup,
+			);
+			if (generation === romLoadGeneration && romLoaded) {
+				const fullSession = [79, 90, 82, 85, 78, 48, 49, 0].every((b, i) => backup[i] === b);
+				ozReplayStatus = `Restored ${file.name}; ${fullSession ? 'saved session resumed' : 'fresh CPU'}`;
+			}
+		} catch (error) {
+			if (generation === romLoadGeneration) lastError = `Backup restore failed: ${String(error)}`;
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
+		}
+	}
 	async function importOzRetained(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		input.value = '';
-		if (!file || !romLoaded || !(await stop())) return;
+		if (!file || functionRunnerBusy || loadingRom) return;
+		if (!romLoaded) {
+			await recoverOzBackup(file);
+			return;
+		}
+		functionRunnerBusy = true;
+		ozReplayStatus = 'Restoring backup…';
 		try {
+			if (!(await stop())) return;
 			const bytes = new Uint8Array(await file.arrayBuffer());
+			const fullSession = [79, 90, 82, 85, 78, 48, 49, 0].every((b, i) => bytes[i] === b);
 			if (worker) await workerCall('oz_retained_restore', { bytes }, [bytes.buffer]);
 			else {
 				emulator.restore_oz9600_retained(bytes);
@@ -1859,10 +1948,12 @@
 				refreshAllNow();
 			}
 			lastError = null;
-			ozReplayStatus = `Restored ${file.name}; fresh CPU`;
+			ozReplayStatus = `Restored ${file.name}; ${fullSession ? 'saved session resumed' : 'fresh CPU'}`;
 			await saveOzBattery(true);
 		} catch (error) {
 			lastError = String(error);
+		} finally {
+			functionRunnerBusy = false;
 		}
 	}
 	async function replayOz(event: Event) {
@@ -2424,7 +2515,7 @@
 					bind:checked={$ozAutosaveStore}
 					on:change={changeOzAutosave}
 					data-testid="oz-autosave"
-					disabled={loadingRom || ozBatteryBusy || !!controlPending}
+					disabled={loadingRom || ozBatteryBusy || functionRunnerBusy || !!controlPending}
 				/> Automatically save to this browser</label
 			>
 			<p role="status" data-testid="oz-save-status">{ozBatteryStatus}</p>
@@ -2446,18 +2537,32 @@
 			<label
 				>Import backup <input
 					type="file"
-					accept=".ozbat,.bin"
+					accept=".ozbat,.ozsession,.bin"
 					data-testid="oz-retained-file"
 					on:change={importOzRetained}
-					disabled={!romLoaded || functionRunnerBusy}
+					disabled={(!romLoaded && !ozRejectedBattery) || loadingRom || functionRunnerBusy}
 				/></label
 			>
 			<button data-testid="oz-retained-export" on:click={exportOzRetained} disabled={!romLoaded || functionRunnerBusy}
 				>Export backup</button
 			>
+			<button data-testid="oz-session-export" on:click={exportOzSession} disabled={!romLoaded || functionRunnerBusy}
+				>Export full session</button
+			>
+			{#if ozRejectedBattery}
+				<button data-testid="oz-rejected-export" on:click={exportRejectedBattery}>Export rejected backup</button>
+				{#if ozRejectedSession}<button data-testid="oz-rejected-session-export" on:click={exportRejectedSession}
+						>Export rejected session</button
+					>{/if}
+				<p class="hint">
+					Export the rejected file before restoring a known-good backup. Importing a valid backup replaces these saved
+					records.
+				</p>
+			{/if}
 			<p class="hint">
-				Records recover with this firmware in the same browser profile. Keep an exported backup before clearing browser
-				data or changing computers. Sudden closure can lose changes since the last save.
+				Automatic saves include unfinished edits. Export full session to resume work in either runner; RAM/RTC backups
+				reopen stored records with a fresh CPU. Keep an exported backup before clearing browser data or changing
+				computers. Sudden closure can lose changes since the last save.
 			</p>
 		</section>
 	{/if}
@@ -2576,7 +2681,7 @@
 				{:else}
 					Device RAM is held in memory only. Reload or ROM/model replacement loses device RAM changes.
 				{/if}
-				Full running-session snapshots are not supported.
+				OZ-9600 full sessions include unfinished edits. Other models use their existing backup controls.
 			</p>
 			<p class="hint">
 				LCD PNGs and diagnostics can preserve evidence, not a resumable machine. Device OFF is not emulator Pause: the
@@ -2716,6 +2821,7 @@
 						<option value="experimental-on-edge">ON experiment: one interrupt per press</option>
 						<option value="experimental-irq-imr">IRQ experiment: IMR controls acceptance</option>
 						<option value="experimental-rtc">RTC experiment: clock and ordinary alarms</option>
+						<option value="experimental-external-wake">OZ-9600 v1 + alarm wake experiment</option>
 						<option value="experimental-rtc-irq-imr">RTC and IRQ experiment: clock with resumable input</option></select
 					>
 				</label>
