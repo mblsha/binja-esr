@@ -33,6 +33,10 @@ controls. Its current entry point is
 - `reference/cpu_irq_arrival_20261011/`: interrupt arrival and nesting controls.
 - `reference/cpu_internal_addressing_20261013/physical/physical-proof.json`:
   all 21 addressing cases and full scratch restoration.
+- `reference/rtc_minute_observer_20261014/physical/physical-proof.json`: four
+  natural minute callbacks, including COMMICCM→JISATMTL cache eviction; native
+  return frames and complete callback/allocation recovery. Foreground PCs miss
+  the vulnerable Schedule comparison; instrumented evidence is not a repair.
 - `reference/schedule_phase_sampler_20261014/physical/physical-proof.json`: four
   actual RTC entries include native getter/filename-normalization paths;834
   valid lookups, exact cache/callback/card recovery. No vulnerable comparison
