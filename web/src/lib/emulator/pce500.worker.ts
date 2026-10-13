@@ -13,7 +13,7 @@ import { planPaste } from './paste_plan';
 import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from './oz9600_replay';
 import { piPanelCapture } from '$lib/pi3000_panel';
 import { TabletInputs } from './tablet_inputs';
-import { AudioDelivery } from './oz_audio';
+import { AudioDelivery, supportsAudio } from './oz_audio';
 import { SerialDelivery, queueSerialInput, supportsSerial } from './oz_serial';
 import {
 	loadPa9500,
@@ -250,9 +250,9 @@ function pumpSerial() {
 }
 
 function syncAudio(force = false) {
-	const enabled = soundWanted && running && romModel === 'oz-9600' && emulator?.execution_mode() === 'interactive';
+	const enabled = soundWanted && running && supportsAudio(romModel) && emulator?.execution_mode() === 'interactive';
 	if (force || enabled !== soundActive) {
-		if (romModel === 'oz-9600' && emulator?.has_rom()) emulator.set_oz9600_audio_enabled(enabled);
+		if (supportsAudio(romModel) && emulator?.has_rom()) emulator.set_audio_enabled(enabled);
 		soundActive = enabled;
 		self.postMessage({ type: 'audio_reset', ...audio.reset(machineGeneration, enabled) });
 	}
@@ -260,7 +260,7 @@ function syncAudio(force = false) {
 function pumpAudio() {
 	if (!soundActive) return;
 	try {
-		audio.pump(() => emulator.take_oz9600_audio());
+		audio.pump(() => emulator.take_audio());
 	} catch (error) {
 		soundWanted = false;
 		syncAudio();
@@ -769,7 +769,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'audio_status': {
 				replyOk(msg.id, {
 					delivery: audio.snapshot(),
-					capture: romModel === 'oz-9600' && !operations.busy ? emulator?.oz9600_audio_status() : null,
+					capture: supportsAudio(romModel) && !operations.busy ? emulator?.audio_status() : null,
 				});
 				return;
 			}

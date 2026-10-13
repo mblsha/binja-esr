@@ -1,4 +1,8 @@
 /** PCM delivery is independent of coalesced display frames. No guest writes. */
+export function supportsAudio(model: string): boolean {
+	return model === 'oz-9600' || model === 'pv-f1';
+}
+
 export type PcmChunk = {
 	sample_rate: number;
 	first_sample: number;
