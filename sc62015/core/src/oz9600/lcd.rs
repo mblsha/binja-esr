@@ -27,7 +27,9 @@ pub const FRAME_HALF_PERIOD: u64 = 32768;
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct LcdController {
     pub registers: [u8; 32],
+    #[serde(default = "legacy_storage_width")]
     width: usize,
+    #[serde(default = "legacy_storage_height")]
     height: usize,
     windows: [[u8; 8]; 16],
     pixels: Vec<u8>,
@@ -37,7 +39,17 @@ pub struct LcdController {
     pub block_operations: u64,
     /// ROM-derived experiment: earlier non-bypass windows protect their pixels.
     /// PI FA47E/FA592 reorder descriptors from window 2; silicon is unqualified.
+    #[serde(default)]
     pub ordered_window_clipping_candidate: bool,
+}
+
+// Older OZRUN01 images predate configurable controller geometry. Their backing
+// was always336x240 and their controller had no ordered-window experiment.
+const fn legacy_storage_width() -> usize {
+    STORAGE_WIDTH
+}
+const fn legacy_storage_height() -> usize {
+    HEIGHT
 }
 
 impl Default for LcdController {
@@ -73,7 +85,11 @@ impl LcdController {
 
 impl LcdController {
     pub(super) fn validate_session(&self) -> Result<(), String> {
-        if self.pixels.len() != STORAGE_WIDTH * HEIGHT || self.pixels.iter().any(|v| *v > 1) {
+        if self.width != STORAGE_WIDTH
+            || self.height != HEIGHT
+            || self.pixels.len() != STORAGE_WIDTH * HEIGHT
+            || self.pixels.iter().any(|v| *v > 1)
+        {
             return Err("Invalid saved LCD state".into());
         }
         Ok(())

@@ -363,6 +363,28 @@ mod tests {
         assert_eq!(hw.tablet.read_data().unwrap(), 3); // retained low half of 411
     }
     #[test]
+    fn legacy_fixed_geometry_checkpoint_restores_and_continues_exactly() {
+        let mut original = runtime();
+        original.step_scheduler_boundaries(10).unwrap();
+        original.oz9600_hardware().unwrap().borrow_mut().ram[123] = 97;
+        let image = original.oz9600_session_state().unwrap();
+        let legacy = changed(&image, |data| {
+            let lcd = data["hardware"]["lcd"].as_object_mut().unwrap();
+            lcd.remove("width");
+            lcd.remove("height");
+            lcd.remove("ordered_window_clipping_candidate");
+        });
+        let mut restored = runtime();
+        restored.restore_oz9600_session(&legacy).unwrap();
+        assert_eq!(image, restored.oz9600_session_state().unwrap());
+        original.step_scheduler_boundaries(20).unwrap();
+        restored.step_scheduler_boundaries(20).unwrap();
+        assert_eq!(
+            original.oz9600_session_state().unwrap(),
+            restored.oz9600_session_state().unwrap()
+        );
+    }
+    #[test]
     fn invalid_checkpoint_never_mutates_fresh_candidate() {
         let image = runtime().oz9600_session_state().unwrap();
         let mut bads = vec![vec![], image[..image.len() - 1].to_vec()];
@@ -381,6 +403,14 @@ mod tests {
             }),
             changed(&image, |d| {
                 d["hardware"]["lcd"]["pixels"] = serde_json::json!([])
+            }),
+            changed(&image, |d| {
+                d["hardware"]["lcd"]["width"] = serde_json::json!(0)
+            }),
+            changed(&image, |d| {
+                // Same pixel count, wrong shape: cannot validate by length alone.
+                d["hardware"]["lcd"]["width"] = serde_json::json!(320);
+                d["hardware"]["lcd"]["height"] = serde_json::json!(252);
             }),
             changed(&image, |d| d["unknown"] = serde_json::json!(true)),
         ]);

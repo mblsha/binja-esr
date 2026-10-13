@@ -72,3 +72,9 @@ RAM/RTC backup format and identity checks are unchanged.
 These measurements do not establish power-on BP, instruction timing, nested
 interrupt acceptance or alarm wake. The Schedule cache-eviction counterexample
 still reproduces with the corrected ISR store rule.
+
+Legacy `OZRUN01` sessions saved before configurable LCD geometry retain their
+original336×240 backing and disabled ordered-window experiment when those
+metadata fields are absent. Explicit geometry is validated; an invalid shape
+rejects the candidate without replacing a live session. This format migration
+preserves CPU/RAM/RTC and does not change guest execution or hardware defaults.
