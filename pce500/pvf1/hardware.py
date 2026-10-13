@@ -5,6 +5,7 @@ are reused independently of the related models' mapper and command contracts.
 """
 
 from pce500.oz9600.lcd import LcdController
+from pce500.digital_audio import AudioCapture
 from pce500.oz9600.rtc import Rtc
 from pce500.oz9600.tablet import Tablet
 from pce500.pvf1.auxiliary import Auxiliary, CAPTURE_SAMPLE_PERIOD_CANDIDATE
@@ -64,6 +65,7 @@ class Hardware:
         }
         self.selector, self.cycle, self.fault = 7, 0, None
         self.gate, self.gpio = bytearray(64), bytearray(18)
+        self.audio = AudioCapture(software_only=True, allow_clocked=True)
         self.pixel_expansion = 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
@@ -253,6 +255,10 @@ class Hardware:
         if self.rtc_clock.advance(elapsed):
             self.rtc.raise_causes(4, 0)
         self.calendar_clock.advance(self.rtc, elapsed)
+
+    def advance_audio_timing(self, elapsed, scr_before, off_before):
+        """Observe the pre-boundary SCR/state without writing guest state."""
+        self.audio.advance(elapsed, scr_before, off_before, False)
 
     def configure_calendar_candidate(self, period):
         if self.tablet is None:
