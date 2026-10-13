@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { configuredPvHandwriting, type PvHandwritingAsset } from '$lib/pvf1_bootstrap';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { BatterySession, ozBatteryIdentity } from '$lib/emulator/oz_battery_store';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
@@ -951,7 +952,18 @@
 			const res = await fetch(`/api/rom?model=${encodeURIComponent(model)}`);
 			if (!res.ok) throw new Error(`ROM fetch failed (${res.status}) for ${model}`);
 			const bytes = new Uint8Array(await res.arrayBuffer());
-			await installRom(bytes, model, res.headers.get('x-rom-source'), generation);
+			const configuredModel =
+				model === 'pv-f1' && !pvHandwritingModel.length ? await configuredPvHandwriting(fetch) : null;
+			if (generation !== romLoadGeneration) return;
+			await installRom(
+				bytes,
+				model,
+				res.headers.get('x-rom-source'),
+				generation,
+				undefined,
+				undefined,
+				configuredModel,
+			);
 		} catch (err) {
 			if (generation === romLoadGeneration) lastError = `Auto-load failed: ${String(err)}`;
 		} finally {
@@ -1078,8 +1090,10 @@
 		generation: number,
 		paRetained = new Uint8Array(),
 		pvRetained = new Uint8Array(),
+		configuredModel: PvHandwritingAsset | null = null,
 	) {
 		const originalBytes = bytes.slice();
+		const handwritingModel = configuredModel?.bytes ?? pvHandwritingModel;
 		if (generation !== romLoadGeneration) return;
 		requestedRom = { bytes: originalBytes, model, source };
 		if (!(await stop())) throw new Error('Pause was not acknowledged; ROM was not replaced');
@@ -1127,7 +1141,7 @@
 						...(model === 'oz-9600' ? { ozProfile, retained } : {}),
 						...(model === 'pv-f1'
 							? {
-									pvHandwritingModel: pvHandwritingModel.slice(),
+									pvHandwritingModel: handwritingModel.slice(),
 									pvRetained,
 									pvCardRom: pvCardRom.slice(),
 									pvCardSram: pvCardSram.slice(),
@@ -1147,7 +1161,7 @@
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
 				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
-				else if (model === 'pv-f1') emu.load_pvf1(bytes, pvRetained, pvHandwritingModel, pvCardRom, pvCardSram);
+				else if (model === 'pv-f1') emu.load_pvf1(bytes, pvRetained, handwritingModel, pvCardRom, pvCardSram);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1162,6 +1176,10 @@
 		if (generation !== romLoadGeneration) {
 			await candidateBattery?.close();
 			return;
+		}
+		if (model === 'pv-f1' && configuredModel) {
+			pvHandwritingModel = configuredModel.bytes;
+			pvHandwritingName = configuredModel.name;
 		}
 		ozBatterySession = candidateBattery;
 		ozBatteryGeneration = generation;
@@ -2864,7 +2882,7 @@
 				<p class="hint">
 					{pvHandwritingName
 						? `Loaded ${pvHandwritingName}; retained for ROM reloads in this session.`
-						: 'Load a Zinnia version-1 model to recognize pen strokes.'} Loading pauses the emulator; Resume to continue.
+						: 'Load a handwriting model to recognize pen strokes.'} Loading pauses the emulator; Resume to continue.
 				</p>
 				{#if pvHandwritingError}<p role="alert">{pvHandwritingError}</p>{/if}
 			</section>
