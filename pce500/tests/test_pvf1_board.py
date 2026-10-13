@@ -57,6 +57,42 @@ def test_registration_directory_query_is_empty_timed_and_acknowledged():
     assert board.peek(0x8A41) is None
 
 
+def test_registered_controller_backing_extends_restart_and_validates_before_mutation():
+    import hashlib
+    import json
+    from pce500.pvf1.auxiliary import Auxiliary
+    from pce500.pvf1.retained import IMAGE_SIZE, retained_state, restore_retained_state
+
+    external = bytes(0x100000)
+    source = Hardware({}, "control-candidate")
+    old = retained_state(external, source)
+    assert old[:8] == b"PVRAM01\0" and len(old) == IMAGE_SIZE
+    glyphs = {
+        "0": {
+            "code": 0x7382,
+            "width": 138,
+            "height": 222,
+            "strokes": [[[39.0, 40.0], [97.0, 40.0]], [[67.0, 40.0], [67.0, 159.0]]],
+        }
+    }
+    source.auxiliary.restore_registered_state(Auxiliary.decode_registered_state(glyphs))
+    image = retained_state(external, source)
+    fresh = Hardware({}, "control-candidate")
+    restore_retained_state(external, fresh, image)
+    assert image[:8] == b"PVRAM02\0"
+    assert fresh.auxiliary.registered_state() == glyphs
+    fresh.auxiliary.write(0x8A01, 0xFD, 0)
+    fresh.auxiliary.write(0x8A01, 2, 100)
+    assert fresh.auxiliary.registered_state() == glyphs
+    bad = json.dumps({"10": glyphs["0"]}).encode()
+    payload = image[104:IMAGE_SIZE] + bad
+    corrupt = image[:72] + hashlib.sha256(payload).digest() + payload
+    fresh.ram[0] = 0x55
+    with pytest.raises(ValueError, match="outside directory"):
+        restore_retained_state(external, fresh, corrupt)
+    assert fresh.ram[0] == 0x55 and fresh.auxiliary.registered_state() == glyphs
+
+
 def test_capture_clock_is_opt_in_latched_and_acknowledged_without_query_data():
     board = Hardware({}, "control-candidate")
     aux = board.auxiliary

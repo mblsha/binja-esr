@@ -263,6 +263,27 @@ impl Hybrid {
 }
 /// Centered, aspect-preserving geometry, resampled by arc length within each
 /// ordered stroke. Geometry validation is shared with the linear extractor.
+pub(crate) fn template_distance(
+    strokes: &[Vec<Point>],
+    canvas: [f32; 2],
+    template: &[Vec<Point>],
+    template_canvas: [f32; 2],
+) -> Result<Option<f64>, String> {
+    features(strokes, canvas[0], canvas[1])?;
+    features(template, template_canvas[0], template_canvas[1])?;
+    if strokes.len() != template.len() {
+        return Ok(None);
+    }
+    let a = shape(strokes, canvas[0], canvas[1])?;
+    let b = shape(template, template_canvas[0], template_canvas[1])?;
+    Ok(Some(
+        a.iter()
+            .zip(&b)
+            .map(|(a, b)| (a[0] as f64 - b[0] as f64).powi(2) + (a[1] as f64 - b[1] as f64).powi(2))
+            .sum::<f64>()
+            / (2 * a.len()) as f64,
+    ))
+}
 fn shape(strokes: &[Vec<Point>], width: f32, height: f32) -> Result<Vec<Point>, String> {
     let normalized: Vec<Vec<[f64; 2]>> = strokes
         .iter()
