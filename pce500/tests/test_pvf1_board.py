@@ -44,6 +44,19 @@ def test_auxiliary_control_readback_matches_the_native_diagnostic():
         assert board.peek(0x8A04) == board.read_mutated(0x8A04) == value
 
 
+def test_registration_directory_query_is_empty_timed_and_acknowledged():
+    board = Hardware({}, "control-candidate")
+    for i, byte in enumerate((0xFB, 0x13, 9)):
+        board.auxiliary.write(0x8A20 + i, byte, 100)
+    board.auxiliary.write(0x8A02, 0x80, 100)
+    assert board.peek(0x8A41) is None
+    board.auxiliary.advance(132)
+    assert [board.peek(a) for a in (0x8A40, 0x8A41, 0x8A42)] == [0, 0, 0]
+    assert board.peek(0x8A43) is None
+    board.auxiliary.write(0x8A03, 0xBF, 132)
+    assert board.peek(0x8A41) is None
+
+
 def test_capture_clock_is_opt_in_latched_and_acknowledged_without_query_data():
     board = Hardware({}, "control-candidate")
     aux = board.auxiliary
