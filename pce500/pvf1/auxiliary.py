@@ -1,5 +1,8 @@
 """PV-F1 confirmed status controls over the shared handshake engine."""
 
+from copy import deepcopy
+
+from pce500.handwriting import features, shape
 from pce500.pi3000.auxiliary import Auxiliary as ControlEngine
 
 CAPTURE_SAMPLE_PERIOD_CANDIDATE = 4096
@@ -30,6 +33,11 @@ class Auxiliary:
         self.request, self.controls = bytearray(32), bytearray(3)
         self.registrations = {}
         self.registration_response = None
+        self.registration_exchange = False
+        self.registration_channel = None
+        self.registered_glyphs = {}
+        self.raw_confirmation = False
+        self.stroke_read = None
         self.enabled, self.starts = True, 0
         self.engine = ControlEngine() if control else None
         self.clock = CaptureClock()
@@ -40,6 +48,8 @@ class Auxiliary:
         self.result_pages, self.result_response = {}, None
         self.recognizer = None
         self.recognition_width, self.recognition_height = 0, 0
+        self.recognition_configuration, self.input_flags = 0, 0
+        self.registration_mode = False
         self.recognition_active, self.recognition_in_stroke = None, False
         self.recognition_strokes = {}
         self.classifications, self.recognized_labels = 0, []
@@ -54,9 +64,45 @@ class Auxiliary:
         self.recognition_strokes = {}
         self.classifications, self.recognized_labels = 0, []
 
+    @staticmethod
+    def decode_registered_state(glyphs):
+        if not isinstance(glyphs, dict):
+            raise ValueError("PV-F1 controller backing requires a directory")
+        result = {}
+        for key, glyph in glyphs.items():
+            channel = int(key)
+            if not 0 <= channel < 10 or not 0 <= glyph["code"] <= 0xFFFF:
+                raise ValueError(
+                    "PV-F1 controller backing channel/code outside directory"
+                )
+            features(glyph["strokes"], glyph["width"], glyph["height"])
+            result[channel] = {
+                "channel": channel,
+                "code_bytes": list(glyph["code"].to_bytes(2, "little")),
+                "canvas": [glyph["width"], glyph["height"]],
+                "strokes": deepcopy(glyph["strokes"]),
+            }
+        return result
+
+    def registered_state(self):
+        return {
+            str(channel): {
+                "code": int.from_bytes(bytes(glyph["code_bytes"]), "little"),
+                "width": glyph["canvas"][0],
+                "height": glyph["canvas"][1],
+                "strokes": glyph["strokes"],
+            }
+            for channel, glyph in self.registered_glyphs.items()
+        }
+
+    def restore_registered_state(self, glyphs):
+        self.registered_glyphs = glyphs
+        self.registrations = {
+            channel: int.from_bytes(bytes(glyph["code_bytes"]), "little")
+            for channel, glyph in glyphs.items()
+        }
+
     def recognition_upload(self, samples):
-        if self.recognizer is None:
-            return
         for x, y in samples:
             if x == 0x8000 and y < 4:
                 self.recognition_active, self.recognition_in_stroke = y, False
@@ -82,7 +128,7 @@ class Auxiliary:
                 raise ValueError(f"unrecovered recognition marker{x:04X}/{y:04X}")
 
     def recognition_finish(self):
-        if self.recognizer is None:
+        if self.recognizer is None and not self.registered_glyphs:
             return
         index = self.recognition_active
         if index is None:
@@ -91,12 +137,33 @@ class Auxiliary:
         if index not in self.recognition_strokes:
             raise ValueError("recognizer finish without ink")
         strokes = self.recognition_strokes.pop(index)
-        labels = self.recognizer.classify(
-            strokes,
-            self.recognition_width,
-            self.recognition_height,
-            len(self.recognizer.classes),
-        )
+        features(strokes, self.recognition_width, self.recognition_height)
+        query = shape(strokes, self.recognition_width, self.recognition_height)
+        labels = []
+        for glyph in self.registered_glyphs.values():
+            if len(strokes) != len(glyph["strokes"]):
+                continue
+            features(glyph["strokes"], *glyph["canvas"])
+            template = shape(glyph["strokes"], *glyph["canvas"])
+            distance = sum(
+                (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 for a, b in zip(query, template)
+            ) / (2 * len(query))
+            if distance <= 0.01:
+                try:
+                    label = bytes(glyph["code_bytes"]).decode("cp932")
+                except UnicodeDecodeError:
+                    continue
+                labels.append((label, -distance))
+        labels.sort(key=lambda item: (-item[1], item[0]))
+        if self.recognizer is not None:
+            labels.extend(
+                self.recognizer.classify(
+                    strokes,
+                    self.recognition_width,
+                    self.recognition_height,
+                    len(self.recognizer.classes),
+                )
+            )
         records, self.recognized_labels = [], []
         for label, _ in labels:
             if len(label) != 1:
@@ -108,6 +175,8 @@ class Auxiliary:
             except UnicodeEncodeError:
                 continue
             if len(encoded) == 2:
+                if label in self.recognized_labels:
+                    continue
                 records.append(encoded + b"\0")
                 self.recognized_labels.append(label)
             if len(records) == 10:
@@ -187,6 +256,7 @@ class Auxiliary:
                 recognition_canvas=[self.recognition_width, self.recognition_height],
                 classifications=self.classifications,
                 recognized_labels=self.recognized_labels,
+                bound_raw_samples=deepcopy(list(self.registered_glyphs.values())),
             )
         return result
 
@@ -231,10 +301,12 @@ class Auxiliary:
         if address == 0x8A01 and value in (2, 0xFD):
             model = self.recognizer
             period = self.clock.period
+            glyphs = self.registered_glyphs
             self.__init__(self.control)
             if self.control:
                 self.configure_sample_period(period)
                 self.configure_recognizer(model)
+                self.restore_registered_state(glyphs)
             self.enabled = value == 2
         elif 0x8A20 <= address <= 0x8A3F:
             offset = address - 0x8A20
@@ -251,6 +323,91 @@ class Auxiliary:
         elif address == 0x8A02 and value == 0x80:
             if self.engine:
                 command = int.from_bytes(self.request[:2], "little")
+                if command == 0x20FB:
+                    channel = self.request[2]
+                    if not self.registration_exchange:
+                        raise ValueError("PV-F1 stored stroke read outside exchange")
+                    if channel not in self.registered_glyphs:
+                        raise ValueError("PV-F1 stored stroke channel is empty")
+                    packed = bytearray()
+                    for stroke in self.registered_glyphs[channel]["strokes"]:
+                        for x, y in stroke:
+                            packed.extend(
+                                [min(255, int(x / 4 + 0.5)), min(255, int(y / 4 + 0.5))]
+                            )
+                        packed.extend([0xFF, 0xFF])
+                    self.engine.start_packet(self.request, cycle, 3, 1, True)
+                    self.stroke_read = (channel, packed, 0)
+                    return
+                if command == 0x21FB:
+                    if self.stroke_read is None:
+                        raise ValueError("PV-F1 stored stroke data without selection")
+                    channel, data, cursor = self.stroke_read
+                    if not self.registration_exchange or self.request[2] != channel:
+                        raise ValueError(
+                            "PV-F1 stored stroke data outside selected exchange"
+                        )
+                    end = min(cursor + 30, len(data))
+                    self.engine.start_packet(
+                        self.request, cycle, 3, int(end == len(data)), True
+                    )
+                    self.registration_response = (
+                        bytes([end - cursor]) + data[cursor:end]
+                    )
+                    self.stroke_read = (channel, data, end)
+                    return
+                if command == 0x22FB:
+                    if (
+                        not self.registration_exchange
+                        or self.stroke_read is None
+                        or self.stroke_read[2] != len(self.stroke_read[1])
+                    ):
+                        raise ValueError(
+                            "PV-F1 stored stroke finish before complete read"
+                        )
+                    self.engine.start_packet(self.request, cycle, 2, 1, True)
+                    self.stroke_read = None
+                    return
+                if command == 0x10FB:
+                    channel = self.request[2]
+                    if channel >= 10 or not self.registration_mode:
+                        raise ValueError(
+                            "PV-F1 glyph binding outside controller44/channel range"
+                        )
+                    index = self.recognition_active
+                    if index is None:
+                        raise ValueError("PV-F1 glyph binding without captured channel")
+                    strokes = self.recognition_strokes.get(index)
+                    if not strokes:
+                        raise ValueError("PV-F1 glyph binding without captured ink")
+                    code = int.from_bytes(self.request[3:5], "little")
+                    self.engine.start_packet(self.request, cycle, 5, 1, True)
+                    self.registered_glyphs[channel] = {
+                        "channel": channel,
+                        "code_bytes": list(self.request[3:5]),
+                        "canvas": [self.recognition_width, self.recognition_height],
+                        "strokes": deepcopy(strokes),
+                    }
+                    self.registrations[channel] = code
+                    self.raw_confirmation = True
+                    self.recognition_active, self.recognition_in_stroke = None, False
+                    del self.recognition_strokes[index]
+                    return
+                if command in (0x01FB, 0x02FB):
+                    self.engine.start_packet(self.request, cycle, 2, 1, True)
+                    self.registration_exchange = command == 0x01FB
+                    return
+                if command == 0x12FB:
+                    if not self.registration_exchange or self.request[2] >= 10:
+                        raise ValueError(
+                            "PV-F1 controller channel selection outside active exchange/range"
+                        )
+                    self.engine.start_packet(self.request, cycle, 3, 1, True)
+                    self.registration_channel = self.request[2]
+                    self.registrations.pop(self.request[2], None)
+                    self.registered_glyphs.pop(self.request[2], None)
+                    self.raw_confirmation = False
+                    return
                 if command == 0x13FB:
                     index = self.request[2]
                     if index >= 10:
@@ -277,7 +434,11 @@ class Auxiliary:
                 if command == 0x00FC:
                     self.engine.start_packet(self.request, cycle, 2, None, False)
                     self.completed_strokes += 1
+                    if self.registration_mode and not self.raw_confirmation:
+                        self.recognition_in_stroke = False
+                        return
                     self.recognition_finish()
+                    self.raw_confirmation = False
                     return
                 count = self.request[1]
                 if self.request[0] == 0xFF and 1 <= count <= 7:
@@ -292,7 +453,12 @@ class Auxiliary:
                         ]
                         for i in range(2, 2 + 4 * count, 4)
                     ]
-                    self.recognition_upload(self.last_samples)
+                    if (
+                        self.recognizer is not None
+                        or self.registered_glyphs
+                        or self.registration_mode
+                    ):
+                        self.recognition_upload(self.last_samples)
                     return
                 if command not in (
                     0x03FC,
@@ -311,10 +477,19 @@ class Auxiliary:
                         f"unrecovered PV-F1 auxiliary command {command:04X}"
                     )
                 self.engine.start(self.request, cycle)
+                if command == 0x02F9:
+                    self.registration_mode = True
+                if command in (0x00F9, 0x01F9):
+                    self.registration_mode = False
+                if command == 0x04FE:
+                    self.input_flags = self.request[2]
                 if command == 0x03FE:
                     self.recognition_width = int.from_bytes(self.request[2:4], "little")
                     self.recognition_height = int.from_bytes(
                         self.request[4:6], "little"
+                    )
+                    self.recognition_configuration = int.from_bytes(
+                        self.request[6:8], "little"
                     )
                     self.recognition_active, self.recognition_in_stroke = None, False
                     self.recognition_strokes.clear()
