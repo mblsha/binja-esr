@@ -614,6 +614,7 @@ impl Sc62015Emulator {
             ));
         }
         let (rom, sram) = self.pvf1_card_images()?;
+        let (ram_card, ram_card_writable) = self.pvf1_ram_card_media()?;
         self.install_rom_with_pvf1_media(
             &self.rom_image.clone(),
             self.model,
@@ -623,6 +624,8 @@ impl Sc62015Emulator {
                 model,
                 card_rom: &rom,
                 card_sram: &sram,
+                ram_card: &ram_card,
+                ram_card_writable,
             },
         )
     }
@@ -644,6 +647,7 @@ impl Sc62015Emulator {
                 model,
                 card_rom,
                 card_sram,
+                ..Default::default()
             },
         )
     }
@@ -651,6 +655,35 @@ impl Sc62015Emulator {
     pub fn pvf1_card_sram(&self) -> Result<Uint8Array, JsValue> {
         let (_, sram) = self.pvf1_card_images()?;
         Ok(Uint8Array::from(sram.as_slice()))
+    }
+
+    /// Install an exact RAM-card image with firmware and retained organizer
+    /// backing validated before replacing the runtime. CPU/peripherals start fresh.
+    pub fn load_pvf1_with_ram_card(
+        &mut self,
+        bundle: &[u8],
+        retained: &[u8],
+        model: &[u8],
+        ram_card: &[u8],
+        writable: bool,
+    ) -> Result<(), JsValue> {
+        self.install_rom_with_pvf1_media(
+            bundle,
+            DeviceModel::PvF1,
+            Default::default(),
+            retained,
+            oz9600::PvF1Assets {
+                model,
+                ram_card,
+                ram_card_writable: writable,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn pvf1_ram_card_image(&self) -> Result<Uint8Array, JsValue> {
+        let (image, _) = self.pvf1_ram_card_media()?;
+        Ok(Uint8Array::from(image.as_slice()))
     }
 
     /// Fresh native CPU/peripherals, current RAM/RTC and current card media.
