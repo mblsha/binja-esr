@@ -60,10 +60,13 @@ type WorkerRequest =
 			pvRetained?: Uint8Array;
 			pvCardRom?: Uint8Array;
 			pvCardSram?: Uint8Array;
+			pvRamCard?: Uint8Array;
+			pvRamCardWritable?: boolean;
 	  }
 	| { id: number; type: 'pv_recognizer'; bytes: Uint8Array; generation: number }
 	| { id: number; type: 'pv_retained_export'; generation: number }
 	| { id: number; type: 'pv_card_export'; generation: number }
+	| { id: number; type: 'pv_ram_card_export'; generation: number }
 	| { id: number; type: 'pv_reset'; model: Uint8Array; generation: number; nextGeneration: number }
 	| {
 			id: number;
@@ -790,7 +793,9 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				const model = msg.model ?? romModel;
 				if (
 					model !== 'pv-f1' &&
-					[msg.pvHandwritingModel, msg.pvRetained, msg.pvCardRom, msg.pvCardSram].some((bytes) => bytes?.length)
+					[msg.pvHandwritingModel, msg.pvRetained, msg.pvCardRom, msg.pvCardSram, msg.pvRamCard].some(
+						(bytes) => bytes?.length,
+					)
 				)
 					throw new Error('PV-F1 assets require PV-F1');
 				if (model === 'oz-9600')
@@ -805,7 +810,16 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 						msg.paUart === true,
 						msg.paRetained,
 					);
-				else if (model === 'pv-f1')
+				else if (model === 'pv-f1' && msg.pvRamCard?.length) {
+					if (msg.pvCardRom?.length || msg.pvCardSram?.length) throw new Error('Select one PV-F1 card');
+					emu.load_pvf1_with_ram_card(
+						msg.bytes,
+						msg.pvRetained ?? new Uint8Array(),
+						msg.pvHandwritingModel ?? new Uint8Array(),
+						msg.pvRamCard,
+						msg.pvRamCardWritable !== false,
+					);
+				} else if (model === 'pv-f1')
 					emu.load_pvf1(
 						msg.bytes,
 						msg.pvRetained ?? new Uint8Array(),
@@ -853,6 +867,12 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
 					throw new Error('Requires idle current PV-F1 generation');
 				replyOk(msg.id, emulator.pvf1_card_sram());
+				return;
+			}
+			case 'pv_ram_card_export': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
+					throw new Error('Requires idle current PV-F1 generation');
+				replyOk(msg.id, emulator.pvf1_ram_card_image());
 				return;
 			}
 			case 'pv_reset': {

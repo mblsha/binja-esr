@@ -133,6 +133,10 @@
 	let pvCardSram = new Uint8Array();
 	let pvCardNames = { rom: '', sram: '' };
 	let pvCardError = '';
+	let pvRamCard = new Uint8Array();
+	let pvRamCardName = '';
+	let pvRamCardWritable = true;
+	let pvRamCardRequested = false;
 	let running = false;
 	let soundEnabled = false;
 	let soundBusy = false;
@@ -1145,6 +1149,8 @@
 									pvRetained,
 									pvCardRom: pvCardRom.slice(),
 									pvCardSram: pvCardSram.slice(),
+									pvRamCard: pvRamCardRequested ? pvRamCard.slice() : new Uint8Array(),
+									pvRamCardWritable,
 								}
 							: {}),
 						...(model === 'pa-9500'
@@ -1161,6 +1167,8 @@
 				}
 				if (model === 'oz-9600') emu.load_oz9600(bytes, retained, ozProfile);
 				else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
+				else if (model === 'pv-f1' && pvRamCardRequested && pvRamCard.length)
+					emu.load_pvf1_with_ram_card(bytes, pvRetained, handwritingModel, pvRamCard, pvRamCardWritable);
 				else if (model === 'pv-f1') emu.load_pvf1(bytes, pvRetained, handwritingModel, pvCardRom, pvCardSram);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
@@ -1777,6 +1785,7 @@
 			if (kind === 'rom') pvCardRom = bytes;
 			else pvCardSram = bytes;
 			pvCardNames = { ...pvCardNames, [kind]: file.name };
+			pvRamCardRequested = false;
 			pvCardError = '';
 		} catch (error) {
 			pvCardError = String(error);
@@ -1800,12 +1809,14 @@
 		let next = generation;
 		const oldRom = pvCardRom,
 			oldSram = pvCardSram,
-			oldNames = pvCardNames;
+			oldNames = pvCardNames,
+			oldRamRequested = pvRamCardRequested;
 		loadingRom = true;
 		try {
 			const retained = Uint8Array.from(
 				worker ? await workerCall('pv_retained_export', { generation }) : emulator.export_pvf1_retained(),
 			);
+			pvRamCardRequested = false;
 			if (remove) {
 				pvCardRom = new Uint8Array();
 				pvCardSram = new Uint8Array();
@@ -1821,6 +1832,83 @@
 				pvCardRom = oldRom;
 				pvCardSram = oldSram;
 				pvCardNames = oldNames;
+				pvRamCardRequested = oldRamRequested;
+			}
+		} finally {
+			if (romLoadGeneration === generation || romLoadGeneration === next) loadingRom = false;
+		}
+	}
+	async function selectPvRamCard(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		try {
+			if (file.size !== 0x20000) throw new Error('Memory card image must be 128 KiB');
+			pvRamCard = new Uint8Array(await file.arrayBuffer());
+			pvRamCardName = file.name;
+			pvRamCardRequested = true;
+			pvCardRom = new Uint8Array();
+			pvCardSram = new Uint8Array();
+			pvCardNames = { rom: '', sram: '' };
+			pvCardError = '';
+		} catch (error) {
+			pvCardError = String(error);
+		}
+	}
+	async function exportPvRamCard() {
+		if (!romLoaded || romModel !== 'pv-f1' || !(await stop())) return;
+		try {
+			const bytes = Uint8Array.from(
+				worker
+					? await workerCall('pv_ram_card_export', { generation: romLoadGeneration })
+					: emulator.pvf1_ram_card_image(),
+			);
+			if (!bytes.length) throw new Error('No memory card is mounted');
+			downloadBlob(new Blob([bytes], { type: 'application/octet-stream' }), 'pv-f1-memory-card.bin');
+			pvCardError = '';
+		} catch (error) {
+			pvCardError = String(error);
+		}
+	}
+	async function reloadPvRamCard(remove = false) {
+		if (!installedRom || installedRom.model !== 'pv-f1' || loadingRom || !(await stop())) return;
+		const generation = romLoadGeneration;
+		const previous = {
+			rom: pvCardRom,
+			sram: pvCardSram,
+			names: pvCardNames,
+			ram: pvRamCard,
+			requested: pvRamCardRequested,
+		};
+		let next = generation;
+		loadingRom = true;
+		try {
+			const retained = Uint8Array.from(
+				worker ? await workerCall('pv_retained_export', { generation }) : emulator.export_pvf1_retained(),
+			);
+			if (remove) {
+				const current = Uint8Array.from(
+					worker ? await workerCall('pv_ram_card_export', { generation }) : emulator.pvf1_ram_card_image(),
+				);
+				if (current.length) pvRamCard = current;
+			}
+			pvRamCardRequested = !remove;
+			pvCardRom = new Uint8Array();
+			pvCardSram = new Uint8Array();
+			pvCardNames = { rom: '', sram: '' };
+			next = ++romLoadGeneration;
+			await installRom(installedRom.bytes.slice(), 'pv-f1', installedRom.source, next, new Uint8Array(), retained);
+			pvCardError = '';
+		} catch (error) {
+			if (romLoadGeneration === next) {
+				romLoadGeneration = generation;
+				pvCardRom = previous.rom;
+				pvCardSram = previous.sram;
+				pvCardNames = previous.names;
+				pvRamCard = previous.ram;
+				pvRamCardRequested = previous.requested;
+				pvCardError = String(error);
 			}
 		} finally {
 			if (romLoadGeneration === generation || romLoadGeneration === next) loadingRom = false;
@@ -2887,6 +2975,37 @@
 				{#if pvHandwritingError}<p role="alert">{pvHandwritingError}</p>{/if}
 			</section>
 			<section aria-label="PV-F1 card" data-testid="pv-card">
+				<label
+					>Memory card image (128 KiB) <input
+						type="file"
+						accept=".bin"
+						data-testid="pv-ram-card-image"
+						disabled={loadingRom}
+						on:change={selectPvRamCard}
+					/></label
+				>
+				<label
+					><input type="checkbox" bind:checked={pvRamCardWritable} disabled={loadingRom} /> Allow writes on load</label
+				>
+				<p class="hint">
+					{pvRamCardName || 'No memory card image selected'}. Loading a card restarts the emulator and keeps organizer
+					data. Card images are saved separately.
+				</p>
+				<button
+					data-testid="pv-ram-card-load"
+					disabled={!romLoaded || loadingRom || !pvRamCard.length}
+					on:click={() => reloadPvRamCard()}>Load memory card</button
+				>
+				<button
+					data-testid="pv-ram-card-save"
+					disabled={!romLoaded || loadingRom || functionRunnerBusy}
+					on:click={exportPvRamCard}>Save memory card</button
+				>
+				<button
+					data-testid="pv-ram-card-remove"
+					disabled={!romLoaded || loadingRom}
+					on:click={() => reloadPvRamCard(true)}>Remove memory card</button
+				>
 				<label
 					>PA-9C3 ROM <input
 						type="file"

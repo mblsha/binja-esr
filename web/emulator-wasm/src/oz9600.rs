@@ -4,6 +4,7 @@
 // PY_SOURCE: pce500/oz9600/audio.py
 // PY_SOURCE: pce500/pi3000/retained.py
 // PY_SOURCE: pce500/pvf1/retained.py
+// PY_SOURCE: pce500/pvf1/hardware.py
 //! Browser model replacement is atomic; retained backing is not a CPU snapshot.
 use super::*;
 use js_sys::{Int16Array, Reflect};
@@ -14,9 +15,22 @@ pub(crate) struct PvF1Assets<'a> {
     pub model: &'a [u8],
     pub card_rom: &'a [u8],
     pub card_sram: &'a [u8],
+    pub ram_card: &'a [u8],
+    pub ram_card_writable: bool,
 }
 
 impl Sc62015Emulator {
+    pub(crate) fn pvf1_ram_card_media(&self) -> Result<(Vec<u8>, bool), JsValue> {
+        let hardware = self
+            .runtime
+            .pvf1_hardware()
+            .ok_or_else(|| JsValue::from_str("Requires loaded PV-F1"))?;
+        let h = hardware.lock().unwrap();
+        Ok(h.ram_card.as_ref().map_or_else(
+            || (Vec::new(), true),
+            |card| (card.image().to_vec(), card.writable()),
+        ))
+    }
     pub(crate) fn pvf1_card_images(&self) -> Result<(Vec<u8>, Vec<u8>), JsValue> {
         let hardware = self
             .runtime
@@ -70,6 +84,11 @@ impl Sc62015Emulator {
             if !assets.card_rom.is_empty() || !assets.card_sram.is_empty() {
                 candidate
                     .configure_pvf1_pa9c3_candidate(assets.card_rom, assets.card_sram)
+                    .map_err(|e| JsValue::from_str(&e))?;
+            }
+            if !assets.ram_card.is_empty() {
+                candidate
+                    .configure_pvf1_ram_card_candidate(assets.ram_card, assets.ram_card_writable)
                     .map_err(|e| JsValue::from_str(&e))?;
             }
             if !assets.model.is_empty() {
