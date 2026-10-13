@@ -13,6 +13,7 @@ CPU-family resemblance alone does not qualify another model.
 | Internal direct/BP-relative selectors and wrap | 16 paired MV/PRE cases and five wrap cases on hardware; current model already matches | Does not establish true power-on BP/AMC/internal-RAM values |
 | Software interrupt recognition | Following instruction executes before entry, including tested masking/clearing and nested STI/MTI | `experimental-irq-recognition` stays opt-in; asynchronous/electrical arrival and broader RETI cases remain open |
 | LCD Boolean raster operations and clipping | [Measured raster table and window controls](oz9600_lcd_raster.md); shared Rust/Python controller | Controller branch is OZ-9600 LH1553F; other displays require verification |
+| Native Notebook BOX rows | ID16/length16/version/9 fields, exact edited-record recovery and confirmed deletion; accompanying private decoder/record snapshots | One short ASCII note; other record families, long-text hardware, index/format semantics and OFF/reset recovery remain open |
 | Native RTC and manual OFF/ON | Actual RTC callbacks, BP-minus-one preservation and one manual OFF/ON return | Does not prove automatic alarm wake or earliest wake cause |
 | LCD completed block count | Native two-row copy returns count zero; fill then copy without reload does no further transfer; explicit reloads work in both directions | Completed-operation model; intermediate decrement and electrical busy timing remain open |
 | SRAM windows | Paired BASIC/native4400 reads and prior distinct markers establish that the low/top alias is view-dependent | Unconditional alias in the provisional model does not cover BASIC3507FF0002; coupled mapper/GPIO bits, other pages and capacity remain open |
@@ -43,6 +44,9 @@ controls. Its current entry point is
   After restoration, BASIC35FCFF0002 also returns F6 at BFB10 while1FB10
   contains the live cache. This does not isolate the coupled control bits or
   justify a universal alias.
+- `reference/notebook_record_bytes_20261014/proof.json`: ordinary create/edit/
+  app-switch/reopen/delete, all nine raw fields and native BOX/IDX captures.
+  This is foreground/hardware evidence; no direct record-memory injection.
 - `reference/power_owner_20261013/physical-manual/physical-proof.json`: native
   OFF followed by one manual ON, responsive BASIC and verified restoration.
 
