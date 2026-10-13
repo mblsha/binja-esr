@@ -20,6 +20,7 @@ class LcdController:
         self.read_latch = 0
         self.data_writes = self.data_reads = self.block_operations = 0
         self.ordered_window_clipping_candidate = False
+        self.firmware_window_candidate = False
 
     def window_descriptor(self, index):
         return bytes(self.windows[index])
@@ -56,7 +57,7 @@ class LcdController:
         value = sum(
             (0x80 >> bit)
             for bit in range(8)
-            if self.permits_pixel(*self.bit_location(x, y, bit), read=True)
+            if (self.firmware_window_candidate or self.permits_pixel(*self.bit_location(x, y, bit), read=True))
             and self.pixel(*self.bit_location(x, y, bit))
         )
         return value & self.registers[3]
@@ -71,6 +72,8 @@ class LcdController:
         if not 0 <= x < self.width or not 0 <= y < self.height:
             return False
         window = self.windows[self.registers[9]]
+        if self.firmware_window_candidate and window[7] & 2:
+            return True
         # Physical controls preserve this bit in readback; it relaxes neither
         # tested Y bound and cannot bypass X clipping. Other roles are open.
         coords = [

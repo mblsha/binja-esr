@@ -21,6 +21,7 @@ class Hardware:
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.gate, self.gpio = bytearray(64), bytearray(18)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
+        self.lcd.firmware_window_candidate = True
         self.lcd.ordered_window_clipping_candidate = firmware
         self.tablet, self.tablet_route = Tablet(), "integrated" if firmware else None
         self.tablet_interrupt_source = "gate1" if firmware else "gate3"

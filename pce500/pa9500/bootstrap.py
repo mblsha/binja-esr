@@ -54,6 +54,8 @@ class Hardware:
         self.tablet = None
         self.adc_low_next, self.adc_latched, self.adc_data_reads = False, 0, 0
         self.lcd = LcdController(195, 145) if controller_hypothesis else None
+        if self.lcd:
+            self.lcd.firmware_window_candidate = True
         self.rtc = Rtc() if controller_hypothesis else None
 
     def read(self, address):

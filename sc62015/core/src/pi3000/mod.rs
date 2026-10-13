@@ -179,6 +179,7 @@ impl Hardware {
     }
     pub fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
         let mut lcd = LcdController::with_geometry(WIDTH, HEIGHT);
+        lcd.firmware_window_candidate = true;
         // FA47E inserts foreground contexts before existing ones; FA592
         // removes them, and FB2BA programs descriptors in that order from 2.
         // This candidate protects the alarm popup from Clock's minute redraw.

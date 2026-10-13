@@ -191,7 +191,11 @@ impl Hardware {
             cycle: 0,
             fault: None,
             mapped_selector: None,
-            lcd: peripherals.then(|| LcdController::with_geometry(195, 145)),
+            lcd: peripherals.then(|| {
+                let mut lcd = LcdController::with_geometry(195, 145);
+                lcd.firmware_window_candidate = true;
+                lcd
+            }),
             lcd_coordinate_restore_candidate: false,
             rtc: peripherals.then(Rtc::default),
         }
