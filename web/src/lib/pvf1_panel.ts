@@ -1,7 +1,8 @@
 export type LcdTabletContact = { pixel_x: number; pixel_y: number; pressed: boolean };
 // Acquired FE:D005F/D0000: two columns of pen regions beyond the main LCD.
 // These interior raw samples traverse the normal ROM input route. The layout
-// below is functional; physical printed legends/geometry remain unmeasured.
+// below is functional. A primary device photograph confirms the printed Card
+// label for 40FF; exact physical touch geometry remains unmeasured.
 export const PV_APPLICATIONS = [
 	{ label: 'Calendar', raw: [900, 120] },
 	{ label: 'Schedule', raw: [980, 120] },
@@ -14,6 +15,7 @@ export const PV_APPLICATIONS = [
 	{ label: 'Calculator', raw: [900, 640] },
 	{ label: 'Optical communication', raw: [980, 640] },
 	{ label: 'Add-in Software', raw: [900, 770] },
+	{ label: 'Card', raw: [980, 770] },
 	{ label: 'Action Planner', raw: [900, 900] },
 	{ label: 'Search', raw: [980, 900] },
 ] as const;
