@@ -8,6 +8,8 @@
 pub mod async_driver;
 pub mod bus_trace;
 pub mod device;
+#[cfg(feature = "json-compat")]
+pub mod digital_audio;
 pub mod generated_key_input;
 #[cfg(feature = "pi3000")]
 pub mod handwriting;

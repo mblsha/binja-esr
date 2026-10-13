@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { AudioDelivery, AudioPlayback, MAX_AUDIO_SAMPLES, type AudioPacket } from './oz_audio';
+import { AudioDelivery, AudioPlayback, MAX_AUDIO_SAMPLES, supportsAudio, type AudioPacket } from './oz_audio';
+
+it('routes playback only to models with an explicit digital capture policy', () => {
+	expect(supportsAudio('pv-f1')).toBe(true);
+	expect(supportsAudio('oz-9600')).toBe(true);
+	for (const model of ['pc-e500', 'pi-3000', 'pa-9500', 'iq-7000']) expect(supportsAudio(model)).toBe(false);
+});
 
 function packet(sequence = 1, first = 0, length = 24): AudioPacket {
 	return {

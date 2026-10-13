@@ -30,7 +30,7 @@
 	import { piPanelCapture } from '$lib/pi3000_panel';
 	import { TabletInputs } from '$lib/emulator/tablet_inputs';
 	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
-	import { AudioPlayback, AudioDelivery } from '$lib/emulator/oz_audio';
+	import { AudioPlayback, AudioDelivery, supportsAudio } from '$lib/emulator/oz_audio';
 	import {
 		SerialCapture,
 		SerialDelivery,
@@ -210,11 +210,11 @@
 		const enabled =
 			soundEnabled &&
 			running &&
-			romModel === 'oz-9600' &&
+			supportsAudio(romModel) &&
 			emulator?.execution_mode() === 'interactive' &&
 			!document.hidden;
 		if (force || enabled !== fallbackSoundActive) {
-			if (romModel === 'oz-9600' && emulator?.has_rom()) emulator.set_oz9600_audio_enabled(enabled);
+			if (supportsAudio(romModel) && emulator?.has_rom()) emulator.set_audio_enabled(enabled);
 			fallbackSoundActive = enabled;
 			const reset = fallbackAudio.reset(romLoadGeneration, enabled);
 			audioPlayback.begin(reset.generation, reset.epoch, reset.enabled);
@@ -1501,7 +1501,7 @@
 			return;
 		}
 		try {
-			if (fallbackSoundActive) fallbackAudio.pump(() => emulator.take_oz9600_audio());
+			if (fallbackSoundActive) fallbackAudio.pump(() => emulator.take_audio());
 		} catch (error) {
 			soundError = String(error);
 			soundEnabled = false;
@@ -2407,7 +2407,7 @@
 				>{running || stepBusy || functionRunnerBusy ? 'Pause' : 'Resume'}</button
 			>
 			<button aria-label="More options" aria-expanded={menuOpen} on:click={() => (menuOpen = !menuOpen)}>⋯</button>
-			{#if romModel === 'oz-9600'}
+			{#if supportsAudio(romModel)}
 				<button
 					data-testid="sound-toggle"
 					aria-pressed={soundEnabled}

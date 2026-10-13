@@ -42,6 +42,7 @@ pub struct Hardware {
     pub ram: Vec<u8>,
     pub scratch: Vec<u8>,
     pub gpio: [u8; 18],
+    pub audio: crate::digital_audio::AudioCapture,
     pub banks: BTreeMap<u8, Vec<u8>>,
     pub cycle: u64,
     pub fault: Option<String>,
@@ -96,6 +97,9 @@ impl Hardware {
             },
             scratch: vec![0; 0x4000],
             gpio: [0; 18],
+            audio: crate::digital_audio::AudioCapture::with_policy(
+                crate::digital_audio::AudioModePolicy::PvF1Firmware,
+            ),
             banks,
             cycle: 0,
             fault: None,
@@ -260,12 +264,16 @@ pub fn sync_bank(hardware: &SharedHardware, memory: &mut crate::MemoryImage) -> 
     h.mapped = Some(h.selector);
     Ok(())
 }
-struct Boundary(SharedHardware, Option<u64>, u64);
+struct Boundary(SharedHardware, Option<u64>, u64, u8, bool);
 impl BoundaryDevice for Boundary {
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
         self.2 = c.elapsed_timing_units;
         let mut h = self.0.lock().unwrap();
+        if h.audio.enabled() {
+            self.3 = c.memory.read_internal_byte_silent(0xfd).unwrap_or(0);
+            self.4 = c.state.is_off();
+        }
         if h.card_presence_candidate {
             // Native card startup samples SSR.CI (bit1). This is an explicit
             // presence-wiring candidate; no card IRQ or menu event is injected.
@@ -318,6 +326,12 @@ impl BoundaryDevice for Boundary {
     }
     fn after_boundary(&mut self, c: &mut BoundaryContext<'_>, elapsed: u64) -> crate::Result<()> {
         let mut h = self.0.lock().unwrap();
+        h.audio.advance(
+            c.elapsed_timing_units.wrapping_sub(self.2),
+            self.3,
+            self.4,
+            false,
+        );
         if h.rtc_clock
             .advance(c.elapsed_timing_units.wrapping_sub(self.2))
         {
@@ -381,7 +395,7 @@ pub fn configure(
         .map_err(|e| e.to_string())?;
     sync_bank(&hardware, &mut rt.memory)?;
     rt.power_on_reset().map_err(|e| e.to_string())?;
-    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None, 0)))
+    rt.install_boundary_device(Box::new(Boundary(hardware.clone(), None, 0, 0, false)))
         .map_err(|e| e.to_string())?;
     if profile != BootstrapProfile::Strict {
         rt.state.set_block_transfer_policy(
