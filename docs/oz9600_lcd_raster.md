@@ -64,3 +64,25 @@ synchronous model does not qualify intermediate count decrement, electrical
 busy timing, maximum counts or another model's LCD silicon. Exact native code,
 counted acquisition and restoration receipts are preserved in the companion
 private research at `docs/oz-9600/reference/lcd_block_count_20261013/`.
+
+## Related firmware window policies
+
+The measured inclusive read/write contract is the shared controller's default
+for OZ-9600. PV-F1, PI-3000 and PA-9500 explicitly retain
+`firmware_window_candidate`: their inherited window behavior allows the extra
+Y-end bit to address their working store and reads backing pixels outside the
+selected write window. This remains firmware compatibility evidence, not a
+physical measurement of those controllers. Geometry and earlier-window write
+protection remain owned by each model.
+
+PV-F1's native full-area descriptor keeps Y end239 with the extra bit while its
+rectangle contract reaches working row288 of its292-row store. Applying the
+OZ window rule directly clipped that consumer. The explicit policy restores the
+native rectangle result while retaining the measured Boolean operations.
+
+Normal PV-F1 Calendar uses mode2 and global-phase AA/55 pattern bytes to dim
+its disabled Modify label. Its corrected pixels equal independently preserved
+enabled-label pixels AND that mask. All325 changes lie inside the label; every
+other Calendar pixel equals the prior frame. Historical frames/expectations are
+preserved; updated rendering regressions retain strict application, CPU, data,
+retention and exact-frame checks.

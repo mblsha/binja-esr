@@ -64,6 +64,10 @@ pub struct Hardware {
 impl Hardware {
     fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
         let mut lcd = LcdController::with_geometry(WIDTH, HEIGHT);
+        // Native PV full-area context keeps a 239 Y end with the extra bit,
+        // yet its IOCS operates on the 292-row working store. Retain the
+        // inherited window candidate; OZ's 240-row measurements are separate.
+        lcd.firmware_window_candidate = true;
         // Native CityChange draws in window2; the later Calendar redraw uses
         // window3. Earlier non-bypass windows must protect the foreground list.
         // This controller behavior is qualified in ROM execution, not silicon.

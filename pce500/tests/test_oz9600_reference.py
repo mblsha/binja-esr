@@ -346,7 +346,7 @@ def test_invalid_physical_replay_is_rejected_before_application(data):
 
 def full_lcd_window(lcd):
     # A component needs a real full descriptor, not the disproved bypass bit.
-    for n, word in enumerate((0, 0, 335, 239)):
+    for n, word in enumerate((0, 0, lcd.width - 1, lcd.height - 1)):
         lcd.write(24 + 2 * n, word & 255)
         lcd.write(25 + 2 * n, word >> 8)
 

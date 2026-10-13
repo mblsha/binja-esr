@@ -41,6 +41,11 @@ pub struct LcdController {
     /// separately establishes read clipping for overlapping windows 2 and 3.
     #[serde(default)]
     pub ordered_window_clipping_candidate: bool,
+    /// Related firmware uses extended storage and an extra-bit full-area view.
+    /// Preserve that unmeasured window contract explicitly; OZ uses the
+    /// physically measured inclusive read/write contract by default.
+    #[serde(default)]
+    pub firmware_window_candidate: bool,
 }
 
 // Older OZRUN01 images predate configurable controller geometry. Their backing
@@ -79,6 +84,7 @@ impl LcdController {
             data_reads: 0,
             block_operations: 0,
             ordered_window_clipping_candidate: false,
+            firmware_window_candidate: false,
         }
     }
 }
@@ -142,10 +148,9 @@ impl LcdController {
     fn read_pixels(&self, x: u16, y: u16) -> u8 {
         let mut value = 0;
         for bit in 0..8 {
-            if self
-                .bit_location(x, y, bit)
-                .is_some_and(|(px, py)| self.permits_pixel(px, py, true) && self.pixel(px, py))
-            {
+            if self.bit_location(x, y, bit).is_some_and(|(px, py)| {
+                (self.firmware_window_candidate || self.permits_pixel(px, py, true)) && self.pixel(px, py)
+            }) {
                 value |= 0x80 >> bit;
             }
         }
@@ -169,9 +174,11 @@ impl LcdController {
             return false;
         }
         let window = self.window_descriptor(usize::from(self.registers[9]));
-        // Physical 13 Oct controls: high Y-end bit 1 neither bypasses X
-        // nor relaxes the tested Y minimum/maximum. Keep its readback, but
-        // do not treat it as a clipping bypass or extra coordinate bit.
+        if self.firmware_window_candidate && window[7] & 2 != 0 {
+            return true;
+        }
+        // Physical OZ interior controls retain this bit on readback without
+        // bypassing the measured X/Y bounds; PV geometry remains model-owned.
         let xmin = Self::window_coordinate(window[0], window[1], 3);
         let ymin = Self::window_coordinate(window[2], window[3], 1);
         let xmax = Self::window_coordinate(window[4], window[5], 3);
@@ -502,6 +509,34 @@ mod tests {
         }
     }
 
+    fn full_window(lcd: &mut LcdController) {
+        let bounds = [0, 0, lcd.width as u16 - 1, lcd.height as u16 - 1];
+        measured_window(lcd, bounds);
+    }
+
+    #[test]
+    fn firmware_window_candidate_keeps_extended_storage_separate_from_oz_bounds() {
+        // PV native full-area context has Y end 239 plus the extra bit,
+        // while its independent rectangle fixture reaches working row 288.
+        for candidate in [false, true] {
+            let mut lcd = LcdController::with_geometry(336, 292);
+            lcd.firmware_window_candidate = candidate;
+            measured_window(&mut lcd, [0, 0, 335, 0x200 | 239]);
+            lcd.write(3, 255).unwrap();
+            lcd.write(8, 0x80).unwrap();
+            for (offset, value) in [(16, 304), (18, 288), (20, 304), (22, 288)] {
+                lcd.set_word(offset, value);
+            }
+            lcd.write(2, 255).unwrap();
+            assert_eq!(lcd.pixel(304, 288), candidate);
+            measured_window(&mut lcd, [305, 288, 306, 291]);
+            assert_eq!(
+                measured_group_read(&mut lcd),
+                if candidate { 0xf0 } else { 0 }
+            );
+        }
+    }
+
     #[test]
     fn ordered_window_candidate_preserves_earlier_region_and_advances_masked_blocks() {
         let mut lcd = LcdController::with_geometry(16, 8);
@@ -543,7 +578,7 @@ mod tests {
         lcd.set_word(16, 4);
         lcd.set_word(18, 2);
         lcd.write(2, 0).unwrap();
-        assert!(!lcd.pixel(4, 2)); // Explicit bypass remains available.
+        assert!(!lcd.pixel(4, 2)); // Selected background remains directly writable.
     }
 
     #[test]
@@ -602,7 +637,7 @@ mod tests {
         // Live mode 3 must agree with the ROM's software OR bitmap path.
         for vertical in [0, 128] {
             let mut lcd = LcdController::default();
-            measured_window(&mut lcd, [0, 0, 335, 239]);
+            full_window(&mut lcd);
             lcd.write(3, 255).unwrap();
             lcd.write(16, 48).unwrap();
             lcd.write(18, 88).unwrap();
