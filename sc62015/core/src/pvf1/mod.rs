@@ -62,11 +62,16 @@ pub struct Hardware {
 }
 impl Hardware {
     fn new(banks: BTreeMap<u8, Vec<u8>>, profile: BootstrapProfile) -> Self {
+        let mut lcd = LcdController::with_geometry(WIDTH, HEIGHT);
+        // Native CityChange draws in window2; the later Calendar redraw uses
+        // window3. Earlier non-bypass windows must protect the foreground list.
+        // This controller behavior is qualified in ROM execution, not silicon.
+        lcd.ordered_window_clipping_candidate = profile == BootstrapProfile::Firmware;
         Self {
             selector: 7,
             gate: [0; 64],
             pixel_expansion: 0,
-            lcd: LcdController::with_geometry(WIDTH, HEIGHT),
+            lcd,
             rtc: Rtc::default(),
             rtc_clock: {
                 let mut clock = rtc_clock::HalfSecondClock::default();
