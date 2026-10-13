@@ -138,6 +138,15 @@ impl Hardware {
         }
     }
     pub fn peek(&self, a: u32) -> Option<u8> {
+        // The PV-F1 1 MiB acquisition repeats the 64-byte gate read layout
+        // throughout 04000..04FFF; only offset19 changes during acquisition.
+        // Route to live modeled latches, including selector and expansion.
+        // This read evidence does not establish mirrored writes or 05000.
+        let a = if (0x4000..=0x4fff).contains(&a) {
+            0x4000 | (a & 63)
+        } else {
+            a
+        };
         match a {
             0..=0x3fff => Some(self.scratch[a as usize]),
             0x4021 => Some(self.selector),

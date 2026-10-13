@@ -96,6 +96,10 @@ class Hardware:
         self.halt_main_timer_units = 0
 
     def peek(self, address):
+        # Captured PV read layout repeats every 64 bytes through 04000..04FFF.
+        # Keep live latches; mirrored writes and 05000 are not established.
+        if 0x4000 <= address <= 0x4FFF:
+            address = 0x4000 | (address & 63)
         if 0 <= address <= 0x3FFF:
             return self.scratch[address]
         if address == 0x4021:
