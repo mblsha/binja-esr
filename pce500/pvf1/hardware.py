@@ -12,6 +12,7 @@ from pce500.pvf1.auxiliary import Auxiliary, CAPTURE_SAMPLE_PERIOD_CANDIDATE
 from pce500.pvf1.rtc_clock import CalendarClock, HalfSecondClock
 from pce500.tablet_geometry import quarter_to_adc
 from pce500.pa9500.card import Pa9c3Card
+from pce500.ram_media import RamMedia
 from pce500.peripherals.uart import Uart
 
 WIDTH, HEIGHT = 336, 292
@@ -86,6 +87,7 @@ class Hardware:
             self.auxiliary.configure_sample_period(CAPTURE_SAMPLE_PERIOD_CANDIDATE)
         self.expansion_absent = profile != "strict"
         self.card = None
+        self.ram_card = None
         self.card_presence_candidate = False
         # Separate logical PA-9C3 input buffer; physical alias/extent unverified.
         self.card_buffer = bytearray(0x1000)
@@ -128,11 +130,13 @@ class Hardware:
             return self.startup[address - 0xF01C]
         if (
             0xE000 <= address <= 0xEFFF
-            and self.card_presence_candidate
+            and self.card is not None
             and self.startup[0] == 1
         ):
             return self.card_buffer[address - 0xE000]
         if 0x20000 <= address <= 0x7FFFF:
+            if self.ram_card and address <= 0x3FFFF:
+                return self.ram_card.read(address - 0x20000)
             if self.card:
                 result = self.card.read(address)
                 return 255 if result is None else result
@@ -158,6 +162,28 @@ class Hardware:
         self.card = card
         self.card_presence_candidate = True
 
+    def configure_ram_card_candidate(
+        self, image, writable=True, *, instructions=0, elapsed=0
+    ):
+        media = RamMedia(image, 0x20000, writable)
+        if (
+            self.tablet is None
+            or self.card is not None
+            or self.ram_card is not None
+            or self.card_presence_candidate
+            or instructions != 0
+            or elapsed != 0
+            or self.cycle != 0
+        ):
+            raise ValueError("PV-F1 RAM card must be configured once before execution")
+        self.ram_card = media
+        self.card_presence_candidate = True
+
+    def ram_card_image(self):
+        if self.ram_card is None:
+            raise ValueError("PV-F1 RAM card is absent")
+        return self.ram_card.image()
+
     def configure_uart_candidate(self, baud_divisor, *, instructions=0, elapsed=0):
         if (
             baud_divisor <= 0
@@ -176,7 +202,9 @@ class Hardware:
         if not self.card_presence_candidate:
             return ssr
         # SSR.CI (bit1) is a card-presence wiring candidate, not an IRQ event.
-        return ssr | 2 if self.card is not None else ssr & ~2
+        return (
+            ssr | 2 if self.card is not None or self.ram_card is not None else ssr & ~2
+        )
 
     def read_mutated(self, address):
         try:
@@ -222,12 +250,14 @@ class Hardware:
                 self.startup[address - 0xF00C] = value
             elif (
                 0xE000 <= address <= 0xEFFF
-                and self.card_presence_candidate
+                and self.card is not None
                 and self.startup[0] == 1
             ):
                 self.card_buffer[address - 0xE000] = value
             elif address == 0xF103 and value in (0xA5, 0x5A):
                 self.mapping_unlock = value
+            elif 0x20000 <= address <= 0x3FFFF and self.ram_card:
+                self.ram_card.write(address - 0x20000, value)
             elif 0x20000 <= address <= 0x7FFFF and self.card:
                 self.card.write(address, value)
             elif 0x20000 <= address <= 0x7FFFF and self.expansion_absent:

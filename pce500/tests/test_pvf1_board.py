@@ -93,6 +93,27 @@ def test_registered_controller_backing_extends_restart_and_validates_before_muta
     assert fresh.ram[0] == 0x55 and fresh.auxiliary.registered_state() == glyphs
 
 
+def test_nominal_ram_card_guard_write_protection_and_unaliased_bounds():
+    board = Hardware({}, "control-candidate")
+    with pytest.raises(ValueError, match="exact"):
+        board.configure_ram_card_candidate(bytes(65536))
+    image = bytearray([0xFF]) * 0x20000
+    image[0], image[-1] = 0x12, 0x34
+    board.configure_ram_card_candidate(image, False)
+    assert board.card_presence_sample(0x40) == 0x42
+    board.write(0x20000, 0x56)
+    assert board.ram_card_image() == image
+    assert [board.peek(a) for a in (0x20000, 0x3FFFF, 0x40000, 0x7FFFF)] == [
+        0x12,
+        0x34,
+        0xFF,
+        0xFF,
+    ]
+    with pytest.raises(ValueError, match="once before"):
+        board.configure_ram_card_candidate(bytes(0x20000))
+    assert board.ram_card_image() == image
+
+
 def test_capture_clock_is_opt_in_latched_and_acknowledged_without_query_data():
     board = Hardware({}, "control-candidate")
     aux = board.auxiliary
