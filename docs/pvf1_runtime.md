@@ -95,11 +95,17 @@ case geometry/legends remain unverified. There is no inferred alphabetic mapping
 The functional application panel sends normal raw pen contacts through the
 ROM's two-column region table beyond the main LCD. It exposes Calendar,
 Schedule, Telephone, Business cards, Action List, Memo, World Clock, Drawing,
-Calculator, Optical communication, Add-in Software and Action Planner. Native
+Calculator, Optical communication, Add-in Software, Card, Action Planner and Search. Native
 Rust checks open these routes; a focused calculator consumer displays 5 after
 normal 2 + 3 = input. Optical communication exits with C/CE. Opening an application
-does not qualify its complete behavior or a physical exchange. Drawing points
-reach the native saved notice; reopening that stored drawing remains unresolved.
+does not qualify its complete behavior or a physical exchange. Native drawing
+creation, Modify and fresh retained reopen now preserve the checked pixels.
+Card delivers raw980,770 (logical40FF), matching the printed physical control.
+Without media it leaves the checked application unchanged. With the qualified
+PA-9C3 program image, native keyboard End and the Schedule contact return to
+saved TEST; Card reopens PA-9C3 and another End/Schedule returns to that same
+day. This qualifies the program-card route; formatted S1/S2 memory-card volume
+operations remain unverified.
 
 Native consumers can configure the verified PA-9C3 before execution with
 `configure_pvf1_pa9c3_candidate(rom, sram)`. The PV-F1 acquisition confirms both
