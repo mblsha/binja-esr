@@ -69,6 +69,7 @@ class Hardware:
         self.pixel_expansion = 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
+        self.lcd.firmware_window_candidate = True
         # PV-F1's CityChange window2 must survive the later Calendar window3 redraw.
         self.lcd.ordered_window_clipping_candidate = profile == "firmware"
         self.rtc_clock = HalfSecondClock()
