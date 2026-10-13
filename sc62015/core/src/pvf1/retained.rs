@@ -1,12 +1,14 @@
 // PY_SOURCE: pce500/pvf1/retained.py
 //! Restart backing for PV-F1 scratch RAM, main RAM and raw RTC registers.
-//! CPU, mapper, LCD, auxiliary, gate, GPIO, input and clock phases stay fresh.
+//! CPU, mapper, LCD, auxiliary transport, gate, GPIO, input and clock phases stay
+//! fresh. Optional PVRAM02 backing retains host-modeled registered pen templates.
 //! This emulator format does not establish physical battery-backed regions.
 use super::{Hardware, SharedHardware};
 use crate::CoreRuntime;
 use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8; 8] = b"PVRAM01\0";
+const CONTROLLER_MAGIC: &[u8; 8] = b"PVRAM02\0";
 const LAYOUT_TAG: &[u8] = b"pvf1-scratch16k-main256k-rtc32-1";
 const HEADER_SIZE: usize = 104;
 pub const MAIN_RAM_SIZE: usize = 0x40000;
@@ -32,8 +34,16 @@ pub fn retained_state(runtime: &CoreRuntime, hardware: &SharedHardware) -> Vec<u
     payload.extend_from_slice(&hw.ram);
     payload.extend_from_slice(&hw.scratch);
     payload.extend_from_slice(&hw.rtc.retained_registers());
+    let controller = hw.auxiliary.as_ref().and_then(|a| a.registered_state());
+    if let Some(bytes) = &controller {
+        payload.extend_from_slice(bytes);
+    }
     let mut image = Vec::with_capacity(IMAGE_SIZE);
-    image.extend_from_slice(MAGIC);
+    image.extend_from_slice(if controller.is_some() {
+        CONTROLLER_MAGIC
+    } else {
+        MAGIC
+    });
     image.extend_from_slice(&Sha256::digest(
         &runtime.memory.external_slice()[0xe0000..0x100000],
     ));
@@ -53,7 +63,8 @@ pub fn restore_retained_state(
     if runtime.instruction_count() != 0 || runtime.elapsed_timing_units() != 0 {
         return Err("PV-F1 retained state must be restored before the first CPU boundary".into());
     }
-    if image.len() != IMAGE_SIZE || &image[..8] != MAGIC {
+    let with_controller = image.len() > IMAGE_SIZE && image.get(..8) == Some(CONTROLLER_MAGIC);
+    if !with_controller && (image.len() != IMAGE_SIZE || image.get(..8) != Some(MAGIC)) {
         return Err("PV-F1 retained-state version/length mismatch".into());
     }
     let mut hw = hardware.lock().unwrap();
@@ -67,13 +78,31 @@ pub fn restore_retained_state(
             "PV-F1 retained-state ROM/bank/layout identity or payload checksum mismatch".into(),
         );
     }
+    // Parse and validate the optional controller backing before any RAM/RTC
+    // mutation. Old PVRAM01 images retain their byte-identical layout.
+    let glyphs = if with_controller {
+        Some(super::auxiliary::Auxiliary::decode_registered_state(
+            &payload[PAYLOAD_SIZE..],
+        )?)
+    } else {
+        None
+    };
+    if glyphs.is_some() && hw.auxiliary.is_none() {
+        return Err("PV-F1 controller backing requires a modeled auxiliary".into());
+    }
     hw.ram.copy_from_slice(&payload[..MAIN_RAM_SIZE]);
     hw.scratch
         .copy_from_slice(&payload[MAIN_RAM_SIZE..MAIN_RAM_SIZE + SCRATCH_SIZE]);
     hw.rtc.restore_retained_registers(
-        payload[MAIN_RAM_SIZE + SCRATCH_SIZE..]
+        payload[MAIN_RAM_SIZE + SCRATCH_SIZE..PAYLOAD_SIZE]
             .try_into()
             .expect("validated RTC length"),
     );
+    if let Some(glyphs) = glyphs {
+        hw.auxiliary
+            .as_mut()
+            .unwrap()
+            .restore_registered_state(glyphs);
+    }
     Ok(())
 }
