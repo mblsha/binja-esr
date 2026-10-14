@@ -452,6 +452,8 @@ pub fn configure(
         // SSR backing can retain an old sampled ONK bit. The external
         // contact owns that input on every read.
         rt.pvf1_on_input_live_candidate = true;
+        // Acknowledging ONKI consumes the contact edge; held SSR stays live.
+        rt.pvf1_on_contact_edge_candidate = true;
         // FAB25..FABCB retains the enabled A0/A1 alarm causes across OFF.
         // Their inferred power level uses the ordinary CPU wake/ROM path.
         rt.pvf1_alarm_wake_candidate = true;
@@ -614,6 +616,21 @@ impl CoreRuntime {
             );
         }
         self.pvf1_on_input_live_candidate = enabled;
+        Ok(())
+    }
+    /// ON contact edges latch once; ROM acknowledgement does not create a new
+    /// electrical press. The live SSR level remains independent of this latch.
+    pub fn configure_pvf1_on_edge_candidate(&mut self, enabled: bool) -> Result<(), String> {
+        let h = self
+            .pvf1_hardware
+            .as_ref()
+            .ok_or("requires a PV-F1 board")?
+            .lock()
+            .unwrap();
+        if h.tablet.is_none() || self.instruction_count() != 0 || self.elapsed_timing_units() != 0 {
+            return Err("PV-F1 ON edge policy requires an explicit fresh board candidate".into());
+        }
+        self.pvf1_on_contact_edge_candidate = enabled;
         Ok(())
     }
     /// An explicit ROM-derived candidate: IMR.IRM and source masks own IRQ

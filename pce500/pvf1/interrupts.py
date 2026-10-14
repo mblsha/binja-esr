@@ -10,3 +10,8 @@ def sample_on_input(backing, held, live_candidate=False):
     """PV-F1 SSR.ONK is an external input, separate from latched ISR.ONKI."""
     value = backing & ~0x08 if live_candidate else backing
     return value | (0x08 if held else 0)
+
+
+def on_irq_should_reassert(held, *, contact_edge_candidate=False, alarm_wake=False):
+    """A held SSR input is separate from a guest-acknowledged ON edge latch."""
+    return bool((held or alarm_wake) and not (held and contact_edge_candidate))
