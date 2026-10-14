@@ -66,6 +66,32 @@ fn workspace_and_top_ram_share_guest_byte_word_and_preflight_accesses() {
 }
 
 #[test]
+fn physical_calendar_basic_calendar_b_window_read_contrast() {
+    let mut rt = synthetic_runtime();
+    rt.memory.store(0x1fb10, 8, 0xa5).unwrap();
+    let hw = rt.oz9600_hardware().unwrap();
+    let controls = |mode: u8, selector: u8, page: u8, gpio: u8| {
+        let mut hw = hw.borrow_mut();
+        hw.gate[0x20] = mode;
+        hw.selector = selector;
+        hw.gate[0x22] = 0xff;
+        hw.gate[0x23] = page;
+        hw.gpio[5] = gpio;
+    };
+    controls(0x20, 0xfe, 1, 0);
+    assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xa5));
+    assert_eq!(rt.memory.load(0xbfb10, 8).unwrap(), 0xa5);
+    controls(0x35, 0xfc, 0, 2);
+    assert_eq!(rt.memory.read_byte_for_preflight(0x1fb10, None), Some(0xa5));
+    assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xf6));
+    assert_eq!(rt.memory.load(0xbfb10, 8).unwrap(), 0xf6);
+    controls(0x35, 7, 0, 2); // Earlier full BASIC capture used selector 07.
+    assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xf6));
+    controls(0x20, 0xfe, 1, 0);
+    assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xa5));
+}
+
+#[test]
 fn opt_in_audio_uses_shared_boundary_timing_and_does_not_mutate_execution() {
     let mut program = vec![0x30, 0xcc, 0xfd, 0x90]; // MV (SCR), ISE | BZ0
     program.extend([0x00; 64]); // NOPs

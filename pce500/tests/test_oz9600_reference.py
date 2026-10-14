@@ -102,6 +102,28 @@ def test_workspace_top_ram_reference_has_one_backing_for_both_directions():
     assert len(hw.ram) == MAIN_RAM_SIZE
 
 
+def test_physical_calendar_basic_calendar_b_window_read_contrast():
+    hw = Hardware()
+    hw.write(0x1FB10, 0xA5)
+
+    def controls(mode, selector, page, gpio):
+        hw.write(0x4020, mode)
+        hw.write(0x4021, selector)
+        hw.write(0x4022, 0xFF)
+        hw.write(0x4023, page)
+        hw.write(0x8B05, gpio)
+
+    controls(0x20, 0xFE, 1, 0)
+    assert hw.read(0xBFB10) == hw.architectural_read(0xBFB10) == 0xA5
+    controls(0x35, 0xFC, 0, 2)
+    assert hw.read(0x1FB10) == 0xA5
+    assert hw.read(0xBFB10) == hw.architectural_read(0xBFB10) == 0xF6
+    hw.write(0x4021, 7)  # The earlier complete BASIC dump selected bank 07.
+    assert hw.read(0xBFB10) == 0xF6
+    controls(0x20, 0xFE, 1, 0)
+    assert hw.read(0xBFB10) == 0xA5
+
+
 def legacy_payload_fixture():
     data = bytearray(WORKSPACE_SIZE + PAYLOAD_SIZE)
     for a, v in [(0xFF38, 0x10300), (0xFD00, 0x80100), (0xFD03, 0xB0300)]:

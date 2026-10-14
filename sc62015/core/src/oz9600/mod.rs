@@ -167,6 +167,13 @@ impl Hardware {
         }
     }
 
+    fn basic_b_window_f6_read(&self) -> bool {
+        self.gate[0x20] == 0x35
+            && self.gate[0x22] == 0xff
+            && self.gate[0x23] == 0
+            && (self.gpio[5] & 0x03) == 0x02
+    }
+
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0x04021 => Some(self.selector),
@@ -187,6 +194,11 @@ impl Hardware {
             0x10000..=0x1ffff => {
                 Some(self.ram[WORKSPACE_RAM_OFFSET + (address - 0x10000) as usize])
             }
+            // Normal CARD/BASIC reads show F6 throughout this window under
+            // 35/xx/FF/00 and GPIO readback 02. Calendar/native controls show
+            // the shared workspace instead. The individual mapper bits and
+            // writes behind the read view remain physically unqualified.
+            0xb0000..=0xbffff if self.basic_b_window_f6_read() => Some(0xf6),
             // The 256 KiB population in these two slots is a provisional boot
             // configuration, not established physical page wiring.
             0x80000..=0xbffff => Some(self.ram[(address - 0x80000) as usize]),

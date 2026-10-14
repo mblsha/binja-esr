@@ -56,6 +56,14 @@ class Hardware:
                 dict(kind=kind, address=address, value=value, pc=pc, cycle=self.cycle)
             )
 
+    def _basic_b_window_f6_read(self):
+        return (
+            self.gate[0x20] == 0x35
+            and self.gate[0x22] == 0xFF
+            and self.gate[0x23] == 0
+            and self.gpio[5] & 0x03 == 0x02
+        )
+
     def read(self, address):
         if address == 0x4021:
             return self.selector
@@ -77,6 +85,10 @@ class Hardware:
             return 0
         if 0x10000 <= address <= 0x1FFFF:
             return self.ram[WORKSPACE_RAM_OFFSET + address - 0x10000]
+        # CARD/BASIC's observed complete control tuple reads F6 here;
+        # Calendar/native aliases the low workspace. Writes are unqualified.
+        if 0xB0000 <= address <= 0xBFFFF and self._basic_b_window_f6_read():
+            return 0xF6
         if 0x80000 <= address <= 0xBFFFF:
             return self.ram[address - 0x80000]
         if 0x30000 <= address <= 0x3FFFF:
