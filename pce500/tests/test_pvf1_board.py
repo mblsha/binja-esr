@@ -316,3 +316,19 @@ def test_mode_handoff_requires_the_encoded_target_and_the_enabled_gate():
     assert not entered_legacy(3, 0, 1, 3)
     assert not entered_legacy(3, 0, 0, 0)
     assert not entered_legacy(3, 0xD0000, 0xD0000, 3)
+
+
+def test_pvf1_on_edge_latch_is_independent_of_live_ssr_contact():
+    from pce500.pvf1.interrupts import on_irq_should_reassert, sample_on_input
+
+    assert on_irq_should_reassert(True)
+    assert not on_irq_should_reassert(True, contact_edge_candidate=True)
+    assert not on_irq_should_reassert(False, contact_edge_candidate=True)
+    assert sample_on_input(4, True, live_candidate=True) == 12
+    assert sample_on_input(12, False, live_candidate=True) == 4
+
+
+def test_pvf1_on_edge_keeps_alarm_level_separate():
+    from pce500.pvf1.interrupts import on_irq_should_reassert
+
+    assert on_irq_should_reassert(False, contact_edge_candidate=True, alarm_wake=True)
