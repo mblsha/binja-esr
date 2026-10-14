@@ -697,6 +697,8 @@ pub struct CoreRuntime {
     #[cfg(feature = "pvf1")]
     pub(crate) pvf1_on_input_live_candidate: bool,
     #[cfg(feature = "pvf1")]
+    pub(crate) pvf1_on_contact_edge_candidate: bool,
+    #[cfg(feature = "pvf1")]
     pub(crate) pvf1_alarm_wake_candidate: bool,
     #[cfg(feature = "pa9500")]
     pub(crate) pa9500_compatibility: Option<pa9500::compat_runtime::CompatibilityCoordinator>,
@@ -759,6 +761,8 @@ impl CoreRuntime {
             pvf1_irq_imr_only_candidate: false,
             #[cfg(feature = "pvf1")]
             pvf1_on_input_live_candidate: false,
+            #[cfg(feature = "pvf1")]
+            pvf1_on_contact_edge_candidate: false,
             #[cfg(feature = "pvf1")]
             pvf1_alarm_wake_candidate: false,
             #[cfg(feature = "pa9500")]
@@ -1083,7 +1087,15 @@ impl CoreRuntime {
     }
 
     // PY_SOURCE: pce500/pa9500/bootstrap.py:on_irq_should_reassert
+    // PY_SOURCE: pce500/pvf1/interrupts.py:on_irq_should_reassert
     fn on_irq_edge_only(&self) -> bool {
+        #[cfg(feature = "pvf1")]
+        if self.device_model() == DeviceModel::PvF1
+            && self.pvf1_on_contact_edge_candidate
+            && self.onk_level
+        {
+            return true;
+        }
         #[cfg(feature = "pa9500")]
         if self.device_model() == DeviceModel::Pa9500 && self.pa9500_on_contact_edge_candidate {
             return true;
@@ -4227,6 +4239,52 @@ fn irq_source_priority(name: &str) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(feature = "pvf1")]
+    fn pvf1_on_contact_edge_survives_guest_ack_without_interrupt_storm() {
+        let mut rt = CoreRuntime::new();
+        rt.metadata.device_model = Some(DeviceModel::PvF1);
+        rt.pvf1_on_contact_edge_candidate = true;
+        rt.press_on_key();
+        assert!(rt.onk_level);
+        assert_ne!(
+            rt.memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap()
+                & ISR_ONKI,
+            0
+        );
+        // Simulate the guest acknowledging its latch while the contact is held.
+        rt.memory.write_internal_byte(IMEM_ISR_OFFSET, 0);
+        assert!(!rt.on_key_will_reassert());
+        rt.press_on_key();
+        assert_eq!(
+            rt.memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap()
+                & ISR_ONKI,
+            0
+        );
+        rt.release_on_key();
+        assert!(
+            !rt.on_irq_edge_only(),
+            "an unpressed alarm input keeps its level policy"
+        );
+        rt.press_on_key();
+        assert_ne!(
+            rt.memory
+                .read_internal_byte_silent(IMEM_ISR_OFFSET)
+                .unwrap()
+                & ISR_ONKI,
+            0
+        );
+        rt.pvf1_on_contact_edge_candidate = false;
+        assert!(
+            rt.on_key_will_reassert(),
+            "strict/opt-out policy remains level-based"
+        );
+    }
+
     use super::*;
     use crate::llama::opcodes::RegName;
     use crate::memory::IMEM_LCC_OFFSET;
