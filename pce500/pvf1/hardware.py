@@ -86,6 +86,9 @@ class Hardware:
         if profile == "firmware":
             self.auxiliary.configure_sample_period(CAPTURE_SAMPLE_PERIOD_CANDIDATE)
         self.expansion_absent = profile != "strict"
+        # Acquired idle08B1B=81 has bit1 low: FD:DE399 returns A0/C1.
+        # Firmware-only absent-CD input, independent of GPIO output latches.
+        self.cd_absent_input_candidate = 0x81 if profile == "firmware" else None
         self.card = None
         self.ram_card = None
         self.card_presence_candidate = False
@@ -120,6 +123,8 @@ class Hardware:
             return self.lcd.peek(address & 31, self.cycle)
         if address in (0x8B1A, 0x8B1C, 0x8B1D):
             return self.gpio[{0x8B1A: 2, 0x8B1C: 0, 0x8B1D: 5}[address]]
+        if address == 0x8B1B:
+            return self.cd_absent_input_candidate
         if 0x8A00 <= address <= 0x8A5F and self.auxiliary:
             return self.auxiliary.peek(address)
         if address == 0x8800 and self.tablet:
