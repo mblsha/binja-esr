@@ -129,7 +129,7 @@ impl Hardware {
             self.ram_access_samples
                 .push(json!({"kind":kind,"address":address,
                 "value":value,"pc":pc,"cycle":self.cycle,"selector":self.selector,
-                "gate_04020":self.gate[0x20],"page_04023":self.gate[0x23],
+                "gate_04020":self.gate[0x20],"page_04023":self.page_readback(),
                 "gpio_write_08b05":self.gpio[5]}));
         }
     }
@@ -167,16 +167,24 @@ impl Hardware {
         }
     }
 
+    fn page_readback(&self) -> u8 {
+        // A physical CARD/BASIC probe wrote 10 to 04023 and read back 00.
+        // Preserve the raw write latch for future mapper work; only bit 4's
+        // read masking is established. Other high bits remain unqualified.
+        self.gate[0x23] & !0x10
+    }
+
     fn basic_b_window_f6_read(&self) -> bool {
         self.gate[0x20] == 0x35
             && self.gate[0x22] == 0xff
-            && self.gate[0x23] == 0
+            && self.page_readback() == 0
             && (self.gpio[5] & 0x03) == 0x02
     }
 
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0x04021 => Some(self.selector),
+            0x04023 => Some(self.page_readback()),
             0x04000..=0x0403f => Some(self.gate[(address - 0x4000) as usize]),
             // The full capture repeats the same 32-byte RTC view through 083FF.
             0x08000..=0x083ff => Some(self.rtc.read((address & 31) as usize)),

@@ -60,13 +60,19 @@ class Hardware:
         return (
             self.gate[0x20] == 0x35
             and self.gate[0x22] == 0xFF
-            and self.gate[0x23] == 0
+            and self._page_readback() == 0
             and self.gpio[5] & 0x03 == 0x02
         )
+
+    def _page_readback(self):
+        # Physical CARD/BASIC write 10 -> read 00; retain the raw write latch.
+        return self.gate[0x23] & ~0x10
 
     def read(self, address):
         if address == 0x4021:
             return self.selector
+        if address == 0x4023:
+            return self._page_readback()
         if 0x4000 <= address <= 0x403F:
             return self.gate[address - 0x4000]
         if 0x8000 <= address <= 0x83FF:
