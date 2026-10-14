@@ -51,6 +51,7 @@ pub struct Hardware {
     mapping_unlock: u8,
     auxiliary: Option<auxiliary::Auxiliary>,
     expansion_absent: bool,
+    cd_absent_input_candidate: Option<u8>,
     pub card: Option<crate::pa9500::card::Pa9c3Card>,
     pub ram_card: Option<crate::ram_media::RamMedia>,
     card_presence_candidate: bool,
@@ -126,6 +127,11 @@ impl Hardware {
                 }
             },
             expansion_absent: profile != BootstrapProfile::Strict,
+            // Original PV-F1 memory acquisition reads 81 at 08B1B. Its bit1
+            // is low: FD:DE399 returns A0/C1 before absent-CD transport.
+            // This idle-input candidate is separate from GPIO output latches;
+            // it does not implement a connected controller or other 08B ports.
+            cd_absent_input_candidate: (profile == BootstrapProfile::Firmware).then_some(0x81),
             card: None,
             ram_card: None,
             card_presence_candidate: false,
@@ -162,6 +168,7 @@ impl Hardware {
                 Some(self.lcd.peek((a & 31) as usize, self.cycle))
             }
             0x8b1a => Some(self.gpio[2]), // FB6E9/FB6EF -> 08B02 read/modify/write
+            0x8b1b => self.cd_absent_input_candidate,
             0x8b1c => Some(self.gpio[0]),
             0x8b1d => Some(self.gpio[5]), // FB6E1 -> 08B05 paired feedback
             0x8a00..=0x8a5f => self.auxiliary.as_ref().and_then(|aux| aux.peek(a)),
@@ -848,6 +855,27 @@ fn add_bus_view(rt: &mut CoreRuntime, hardware: &SharedHardware, start: u32, end
 #[cfg(test)]
 mod ram_card_tests {
     use super::*;
+
+    #[test]
+    fn absent_cd_input_is_firmware_only_and_not_gpio_output_feedback() {
+        for profile in [
+            BootstrapProfile::Strict,
+            BootstrapProfile::AbsentAuxiliary,
+            BootstrapProfile::ControlCandidate,
+        ] {
+            let h = Hardware::new(BTreeMap::new(), profile);
+            assert_eq!(h.peek(0x8b1b), None);
+        }
+        let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Firmware);
+        assert_eq!(h.read(0x8b1b, Some(0xde39d)), 0x81);
+        h.write(0x8b03, 0x5a, None);
+        assert_eq!(h.gpio[3], 0x5a);
+        assert_eq!(h.peek(0x8b1b), Some(0x81));
+        assert_eq!(h.peek(0x8b18), None);
+        assert_eq!(h.peek(0x8b19), None);
+        assert_eq!(h.peek(0x8b1b).unwrap() & 2, 0);
+        assert!(h.fault.is_none());
+    }
 
     #[test]
     fn nominal_ram_card_mount_is_guarded_and_bus_bounds_do_not_alias() {
