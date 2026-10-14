@@ -81,10 +81,14 @@ fn physical_calendar_basic_calendar_b_window_read_contrast() {
     controls(0x20, 0xfe, 1, 0);
     assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xa5));
     assert_eq!(rt.memory.load(0xbfb10, 8).unwrap(), 0xa5);
+    assert_eq!(rt.memory.load(0x08b05, 8).unwrap(), 0xe0);
+    assert_eq!(rt.memory.load(0x08b1d, 8).unwrap(), 0);
     controls(0x35, 0xfc, 0, 2);
     assert_eq!(rt.memory.read_byte_for_preflight(0x1fb10, None), Some(0xa5));
     assert_eq!(rt.memory.read_byte_for_preflight(0xbfb10, None), Some(0xf6));
     assert_eq!(rt.memory.load(0xbfb10, 8).unwrap(), 0xf6);
+    assert_eq!(rt.memory.load(0x08b05, 8).unwrap(), 0xe0);
+    assert_eq!(rt.memory.load(0x08b1d, 8).unwrap(), 2);
     // A native probe wrote 10 to 04023 in CARD/BASIC. Hardware read back 00,
     // and both the low cache and F6 B-window were unchanged.
     hw.borrow_mut().write(0x04023, 0x10, None);

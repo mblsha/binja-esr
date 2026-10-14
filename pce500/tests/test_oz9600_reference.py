@@ -115,9 +115,13 @@ def test_physical_calendar_basic_calendar_b_window_read_contrast():
 
     controls(0x20, 0xFE, 1, 0)
     assert hw.read(0xBFB10) == hw.architectural_read(0xBFB10) == 0xA5
+    assert hw.read(0x8B05) == hw.architectural_read(0x8B05) == 0xE0
+    assert hw.read(0x8B1D) == hw.architectural_read(0x8B1D) == 0
     controls(0x35, 0xFC, 0, 2)
     assert hw.read(0x1FB10) == 0xA5
     assert hw.read(0xBFB10) == hw.architectural_read(0xBFB10) == 0xF6
+    assert hw.read(0x8B05) == hw.architectural_read(0x8B05) == 0xE0
+    assert hw.read(0x8B1D) == hw.architectural_read(0x8B1D) == 2
     hw.write(0x4023, 0x10)
     assert hw.read(0x4023) == hw.architectural_read(0x4023) == 0
     assert hw.read(0x1FB10) == 0xA5

@@ -81,6 +81,10 @@ class Hardware:
             return self.lcd.peek(address & 31, self.cycle)
         if address == 0x8800:
             return self.tablet.conversion_control
+        # Physical idle input port E0 differs from the 08B1D output latch.
+        # Non-idle electrical input changes remain unmodeled.
+        if address == 0x8B05:
+            return 0xE0
         if address in (0x8B1A, 0x8B1C, 0x8B1D):
             return self.gpio[{0x8B1A: 2, 0x8B1C: 0, 0x8B1D: 5}[address]]
         if 0x8B00 <= address <= 0x8BFF:

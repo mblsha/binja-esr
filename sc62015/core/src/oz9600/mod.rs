@@ -193,6 +193,10 @@ impl Hardware {
             // Native RMW sequences pair these read ports with distinct write
             // addresses. Only these firmware-qualified output readbacks are
             // modeled; input pin muxes and remaining 08Bxx aliases are pending.
+            // Physical idle read of the input-side port is E0 in both
+            // Calendar and CARD. Its write latch is read at 08B1D instead.
+            // Non-idle electrical input changes are not modeled yet.
+            0x08b05 => Some(0xe0),
             0x08b1a => Some(self.gpio[2]),
             0x08b1c => Some(self.gpio[0]),
             0x08b1d => Some(self.gpio[5]),
