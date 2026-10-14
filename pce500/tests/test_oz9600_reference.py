@@ -408,6 +408,26 @@ def test_ordered_window_candidate_preserves_earlier_region_and_advances_masked_b
     assert not lcd.pixel(4, 2)
 
 
+def test_physical_window_overlap_clips_reads_without_enabling_write_candidate():
+    lcd = LcdController(16, 8)
+    lcd.registers[3] = 0xFF
+    lcd.registers[9] = 3
+    lcd.windows[0][:] = bytes([8, 0, 0, 0, 15, 0, 7, 0])
+    lcd.windows[1][:] = bytes([0, 0, 0, 0, 15, 0, 7, 2])
+    for index in (2, 3):
+        lcd.windows[index][:] = bytes([0, 0, 0, 0, 7, 0, 7, 0])
+    lcd.pixels[:8] = bytes([1] * 8)
+
+    assert not lcd.ordered_window_clipping_candidate
+    assert lcd.read_pixels(0, 0) == 0
+    lcd.windows[2][0] = 8
+    assert lcd.read_pixels(0, 0) == 0xFF
+    lcd.windows[2][0] = 0
+    assert lcd.read_pixels(0, 0) == 0
+    lcd.write_pixels(0, 0, 0)
+    assert lcd.pixels[:8] == bytes(8)
+
+
 @pytest.mark.parametrize("mode,data", [(1, 255), (5, 0)])
 def test_rom_highlight_operations_preserve_and_restore_mixed_pixels(mode, data):
     # Calendar's solid pattern uses mode 1/FF; Notebook uses mode 5/00.

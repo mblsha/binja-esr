@@ -56,7 +56,7 @@ class LcdController:
         value = sum(
             (0x80 >> bit)
             for bit in range(8)
-            if self.permits_pixel(*self.bit_location(x, y, bit))
+            if self.permits_pixel(*self.bit_location(x, y, bit), read=True)
             and self.pixel(*self.bit_location(x, y, bit))
         )
         return value & self.registers[3]
@@ -67,7 +67,7 @@ class LcdController:
         word = low | (high << 8)
         return word - 65536 if word & 32768 else word
 
-    def permits_pixel(self, x, y):
+    def permits_pixel(self, x, y, *, read=False):
         if not 0 <= x < self.width or not 0 <= y < self.height:
             return False
         window = self.windows[self.registers[9]]
@@ -79,7 +79,9 @@ class LcdController:
         ]
         if not (coords[0] <= x <= coords[2] and coords[1] <= y <= coords[3]):
             return False
-        if self.ordered_window_clipping_candidate:
+        # The physical To Do overlap probe established window-2/3 read clipping.
+        # Other layouts remain provisional; write priority is opt-in.
+        if read or self.ordered_window_clipping_candidate:
             for previous in self.windows[: self.registers[9]]:
                 if previous[7] & 2:
                     continue

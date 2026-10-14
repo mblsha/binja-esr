@@ -37,8 +37,8 @@ pub struct LcdController {
     pub data_writes: u64,
     pub data_reads: u64,
     pub block_operations: u64,
-    /// ROM-derived experiment: earlier non-bypass windows protect their pixels.
-    /// PI FA47E/FA592 reorder descriptors from window 2; silicon is unqualified.
+    /// Provisional write-side priority. The physical To Do overlap measurement
+    /// separately establishes read clipping for overlapping windows 2 and 3.
     #[serde(default)]
     pub ordered_window_clipping_candidate: bool,
 }
@@ -144,7 +144,7 @@ impl LcdController {
         for bit in 0..8 {
             if self
                 .bit_location(x, y, bit)
-                .is_some_and(|(px, py)| self.permits_pixel(px, py) && self.pixel(px, py))
+                .is_some_and(|(px, py)| self.permits_pixel(px, py, true) && self.pixel(px, py))
             {
                 value |= 0x80 >> bit;
             }
@@ -164,7 +164,7 @@ impl LcdController {
         i32::from(i16::from_le_bytes([low, high]))
     }
 
-    fn permits_pixel(&self, x: usize, y: usize) -> bool {
+    fn permits_pixel(&self, x: usize, y: usize, read: bool) -> bool {
         if x >= self.width || y >= self.height {
             return false;
         }
@@ -179,7 +179,9 @@ impl LcdController {
         if !(xmin..=xmax).contains(&(x as i32)) || !(ymin..=ymax).contains(&(y as i32)) {
             return false;
         }
-        if self.ordered_window_clipping_candidate {
+        // The physical To Do overlap probe established window-2/3 read clipping.
+        // Other layouts remain provisional; write priority is opt-in.
+        if read || self.ordered_window_clipping_candidate {
             for previous in &self.windows[..usize::from(self.registers[9])] {
                 if previous[7] & 2 != 0 {
                     continue;
@@ -202,7 +204,7 @@ impl LcdController {
             let Some((px, py)) = self.bit_location(x, y, bit) else {
                 continue;
             };
-            if self.registers[3] & mask != 0 && self.permits_pixel(px, py) {
+            if self.registers[3] & mask != 0 && self.permits_pixel(px, py, false) {
                 let destination = &mut self.pixels[py * self.width + px];
                 let source = u8::from(value & mask != 0) ^ ((self.registers[8] >> 2) & 1);
                 let combined = match self.registers[8] & 3 {
@@ -542,6 +544,28 @@ mod tests {
         lcd.set_word(18, 2);
         lcd.write(2, 0).unwrap();
         assert!(!lcd.pixel(4, 2)); // Explicit bypass remains available.
+    }
+
+    #[test]
+    fn physical_window_overlap_clips_reads_without_enabling_write_candidate() {
+        let mut lcd = LcdController::with_geometry(16, 8);
+        lcd.registers[3] = 0xff;
+        lcd.registers[9] = 3;
+        lcd.windows[0] = [8, 0, 0, 0, 15, 0, 7, 0];
+        lcd.windows[1] = [0, 0, 0, 0, 15, 0, 7, 2];
+        for index in [2, 3] {
+            lcd.windows[index] = [0, 0, 0, 0, 7, 0, 7, 0];
+        }
+        lcd.pixels[..8].fill(1);
+
+        assert!(!lcd.ordered_window_clipping_candidate);
+        assert_eq!(lcd.read_pixels(0, 0), 0);
+        lcd.windows[2][0] = 8;
+        assert_eq!(lcd.read_pixels(0, 0), 0xff);
+        lcd.windows[2][0] = 0;
+        assert_eq!(lcd.read_pixels(0, 0), 0);
+        lcd.write_pixels(0, 0, 0);
+        assert_eq!(&lcd.pixels[..8], &[0; 8]);
     }
 
     #[test]
