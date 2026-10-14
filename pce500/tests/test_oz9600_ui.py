@@ -81,8 +81,11 @@ def test_combined_owners_short_click_and_focus_loss_release_all_contacts():
     assert contacts.sync({3}, None, 40_000) == [("tablet", 61, 141, False)]
     assert set(contacts.keys) == {3}
     assert contacts.sync(set(), None, 40_001) == [("matrix", 3, False)]
-    assert len(contacts.sync({3}, (227, 68), 50_000)) == 2
+    # The first contact's release leaves a 40,000-unit separation. A new
+    # host press is queued during that gap, not emitted to the guest yet.
+    assert contacts.sync({3}, (227, 68), 50_000) == [("matrix", 3, True)]
     assert contacts.sync(set(), None, 50_001) == []
+    assert contacts.sync(set(), None, 80_000) == [("tablet", 227, 68, True)]
     assert contacts.cancel() == [("matrix", 3, False), ("tablet", 227, 68, False)]
     assert contacts.cancel() == []
 
