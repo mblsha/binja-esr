@@ -106,6 +106,42 @@ def test_registered_controller_backing_extends_restart_and_validates_before_muta
     assert fresh.ram[0] == 0x55 and fresh.auxiliary.registered_state() == glyphs
 
 
+def test_clear_all_handwritten_registrations_removes_labels_and_ink_after_restart():
+    from pce500.pvf1.auxiliary import Auxiliary
+
+    a = Auxiliary(control=True)
+    glyph = {
+        "code": 0x7382,
+        "width": 138,
+        "height": 222,
+        "strokes": [[[1.0, 2.0], [3.0, 4.0]]],
+    }
+    a.restore_registered_state(
+        Auxiliary.decode_registered_state({"0": glyph, "9": glyph})
+    )
+    a.registration_channel, a.registration_response = 9, b"\x82\x73"
+    a.stroke_read, a.raw_confirmation = (9, b"\x01\x02", 0), True
+    a.input_flags = 7
+    for i, value in enumerate((0xFB, 0x31)):
+        a.write(0x8A20 + i, value, 100)
+    a.write(0x8A02, 0x80, 100)
+    assert a.peek(0x8A40) is None
+    a.advance(132)
+    assert a.peek(0x8A40) == 1 and a.peek(0x8A41) is None
+    assert not a.registrations and not a.registered_glyphs
+    assert a.registration_channel is None and a.registration_response is None
+    assert a.stroke_read is None and not a.raw_confirmation
+    assert (
+        a.input_flags == 7
+        and not a.registration_exchange
+        and not a.engine.capture_active
+    )
+    a.write(0x8A03, 0xBF, 132)
+    a.write(0x8A01, 0xFD, 200)
+    a.write(0x8A01, 2, 300)
+    assert a.registered_state() == {}
+
+
 def test_nominal_ram_card_guard_write_protection_and_unaliased_bounds():
     board = Hardware({}, "control-candidate")
     with pytest.raises(ValueError, match="exact"):

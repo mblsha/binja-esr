@@ -397,6 +397,16 @@ class Auxiliary:
                     self.engine.start_packet(self.request, cycle, 2, 1, True)
                     self.registration_exchange = command == 0x01FB
                     return
+                if command == 0x31FB:
+                    # FE DCB16/DD780: two-byte global registration erase,
+                    # outside the per-slot exchange; status01 and BF ack.
+                    self.engine.start_packet(self.request, cycle, 2, 1, True)
+                    self.registrations.clear()
+                    self.registered_glyphs.clear()
+                    self.registration_channel = self.registration_response = None
+                    self.stroke_read = None
+                    self.raw_confirmation = False
+                    return
                 if command == 0x12FB:
                     if not self.registration_exchange or self.request[2] >= 10:
                         raise ValueError(
