@@ -3196,6 +3196,10 @@ impl CoreRuntime {
                     )
                 })?;
             let initial_i = (self.state.get_reg(RegName::I) & mask_for(RegName::I)) as u16;
+            let branch_taken = prepared_timing.conditional_branch_taken(
+                self.state.get_reg(RegName::FZ) & 1 != 0,
+                self.state.get_reg(RegName::FC) & 1 != 0,
+            );
             let (opcode, instr_len, pc_after, deferred_instruction_trace) = {
                 let onk_level = self.effective_onk_level();
                 let mut bus = RuntimeBus {
@@ -3264,9 +3268,6 @@ impl CoreRuntime {
             // evaluator has already performed every fail-closed check, so
             // devices only observe time for an instruction that retired.
             let run_timer_cycles = true;
-            let sequential_pc = pc_before.wrapping_add(u32::from(instr_len)) & ADDRESS_MASK;
-            let branch_taken = matches!(prepared_timing.resolved_opcode(), 0x14..=0x1f)
-                && pc_after != sequential_pc;
             let cycle_increment = prepared_timing.timing_units(initial_i, branch_taken);
             let prev_cycle = self.metadata.cycle_count;
             let new_cycle = prev_cycle.wrapping_add(cycle_increment);

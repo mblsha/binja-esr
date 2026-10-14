@@ -100,6 +100,19 @@ impl PreparedInstructionTiming {
     pub fn resolved_opcode(self) -> u8 {
         self.resolved_opcode
     }
+
+    /// Evaluate the branch condition from the pre-instruction flags. A taken
+    /// relative branch with displacement zero has the same PC as fallthrough,
+    /// so comparing PCs after execution loses its timing distinction.
+    pub fn conditional_branch_taken(self, zero: bool, carry: bool) -> bool {
+        match self.resolved_opcode {
+            0x14 | 0x18 | 0x19 => zero,
+            0x15 | 0x1a | 0x1b => !zero,
+            0x16 | 0x1c | 0x1d => carry,
+            0x17 | 0x1e | 0x1f => !carry,
+            _ => false,
+        }
+    }
 }
 
 fn selector_is_timing_relevant(opcode: u8) -> bool {
@@ -349,6 +362,33 @@ mod tests {
         ] {
             assert_eq!(prepared(opcode, &[]).timing_units(1, taken), expected);
         }
+    }
+
+    #[test]
+    fn conditional_branch_timing_uses_flags_even_when_target_is_fallthrough() {
+        for (opcode, zero, carry, expected) in [
+            (0x14, true, false, true),
+            (0x15, true, false, false),
+            (0x16, false, true, true),
+            (0x17, false, true, false),
+            (0x18, true, false, true),
+            (0x19, false, false, false),
+            (0x1a, true, false, false),
+            (0x1b, false, false, true),
+            (0x1c, false, true, true),
+            (0x1d, false, false, false),
+            (0x1e, false, true, false),
+            (0x1f, false, false, true),
+            (0x12, true, true, false),
+        ] {
+            assert_eq!(
+                prepared(opcode, &[]).conditional_branch_taken(zero, carry),
+                expected,
+                "opcode {opcode:02x}"
+            );
+        }
+        assert_eq!(prepared(0x18, &[]).timing_units(1, true), 3);
+        assert_eq!(prepared(0x18, &[]).timing_units(1, false), 2);
     }
 
     #[test]
