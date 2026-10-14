@@ -646,6 +646,21 @@ impl Auxiliary {
                         *registration_exchange = command == 0x01fb;
                         return Ok(());
                     }
+                    if command == 0x31fb {
+                        // FE DCB16 -> DD780 clears all handwritten registrations.
+                        // It sends only31FB outside the per-slot01FB/02FB exchange,
+                        // then expects timed status01 and a BF acknowledgement.
+                        // Clearing model-owned learned ink is an explicit storage
+                        // candidate; the supplied recognition model is retained.
+                        engine.start_packet(request, cycle, 2, Some(1), true)?;
+                        registrations.clear();
+                        registered_glyphs.clear();
+                        *registration_channel = None;
+                        *registration_response = None;
+                        *stroke_read = None;
+                        *raw_confirmation = false;
+                        return Ok(());
+                    }
                     if command == 0x12fb {
                         // Native registration Cancel runs DCB35/DD607 with
                         // its channel within the exchange bracket. Remove that
@@ -1061,6 +1076,77 @@ mod tests {
             assert!(!registrations.contains_key(&9));
             assert_eq!(registrations.get(&0), Some(&0x5678));
         }
+    }
+
+    #[test]
+    fn clear_all_registration_removes_labels_and_ink_with_timed_status() {
+        let mut a = Auxiliary::control();
+        if let Auxiliary::Control {
+            registrations,
+            registered_glyphs,
+            registration_channel,
+            registration_response,
+            raw_confirmation,
+            stroke_read,
+            recognition,
+            ..
+        } = &mut a
+        {
+            for (channel, code) in [(0, 0x7382), (9, 0x6082)] {
+                registrations.insert(channel, code);
+                registered_glyphs.insert(
+                    channel,
+                    RegisteredGlyph {
+                        code,
+                        width: 138,
+                        height: 222,
+                        strokes: vec![vec![[1., 2.], [3., 4.]]],
+                    },
+                );
+            }
+            *registration_channel = Some(9);
+            *registration_response = Some(vec![0x82, 0x60]);
+            *stroke_read = Some((9, vec![1, 2], 0));
+            *raw_confirmation = true;
+            recognition.input_flags = 7;
+        }
+        // The native global erase is not a per-slot exchange operation.
+        start(&mut a, 0x31fb, 100);
+        assert_eq!(a.peek(0x8a40), None);
+        a.advance(132);
+        assert_eq!(a.peek(0x8a40), Some(1));
+        assert_eq!(a.peek(0x8a41), None);
+        if let Auxiliary::Control {
+            registrations,
+            registered_glyphs,
+            registration_channel,
+            registration_response,
+            raw_confirmation,
+            stroke_read,
+            recognition,
+            registration_exchange,
+            engine,
+            ..
+        } = &a
+        {
+            assert!(registrations.is_empty() && registered_glyphs.is_empty());
+            assert!(registration_channel.is_none() && registration_response.is_none());
+            assert!(!raw_confirmation && stroke_read.is_none());
+            assert_eq!(recognition.input_flags, 7);
+            assert!(!registration_exchange && !engine.capture_active);
+        }
+        a.write(0x8a03, 0xbf, 132).unwrap();
+        a.write(0x8a01, 0xfd, 200).unwrap();
+        a.write(0x8a01, 2, 300).unwrap();
+        assert_eq!(a.snapshot()["bound_raw_samples"], json!([]));
+        for (i, b) in [0xfb, 0x13, 9].into_iter().enumerate() {
+            a.write(0x8a20 + i as u32, b, 400).unwrap();
+        }
+        a.write(0x8a02, 0x80, 400).unwrap();
+        a.advance(432);
+        assert_eq!(a.peek(0x8a40), Some(0));
+        assert_eq!(a.peek(0x8a41), Some(0));
+        assert_eq!(a.peek(0x8a42), Some(0));
     }
 
     fn start(a: &mut Auxiliary, header: u16, cycle: u64) {
