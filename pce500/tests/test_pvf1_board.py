@@ -37,6 +37,19 @@ def test_rtc_a2_candidate_latches_through_the_native_gate_and_not_guest_ram():
         Hardware({}).configure_rtc_half_second_candidate(4)
 
 
+def test_absent_cd_input_is_firmware_only_and_not_gpio_output_feedback():
+    for profile in ("strict", "absent-auxiliary", "control-candidate"):
+        assert Hardware({}, profile).peek(0x8B1B) is None
+    board = Hardware({}, "firmware")
+    assert board.read_mutated(0x8B1B) == 0x81
+    board.write(0x8B03, 0x5A)
+    assert board.gpio[3] == 0x5A
+    assert board.peek(0x8B1B) == 0x81
+    assert board.peek(0x8B18) is None and board.peek(0x8B19) is None
+    assert board.peek(0x8B1B) & 2 == 0
+    assert board.fault is None
+
+
 def test_auxiliary_control_readback_matches_the_native_diagnostic():
     board = Hardware({}, "control-candidate")
     for value in (0xAA, 0x55):
