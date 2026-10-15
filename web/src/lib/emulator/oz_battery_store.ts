@@ -17,7 +17,9 @@ export function ozBatteryIdentity(create: () => IdentityMachine, bundle: Uint8Ar
 		candidate.free();
 	}
 }
-export type SavedBattery = { image: Uint8Array; session?: Uint8Array; savedAt: number };
+export type BatteryVersion = { image: Uint8Array; session?: Uint8Array; savedAt: number };
+export type SavedBattery = BatteryVersion & { previous?: BatteryVersion[] };
+export const BATTERY_HISTORY_LIMIT = 3;
 export interface BatteryStorage {
 	read(key: string): Promise<SavedBattery | null>;
 	write(key: string, record: SavedBattery): Promise<void>;
@@ -62,22 +64,18 @@ export const browserBatteryStorage: BatteryStorage = {
 			throw new Error('Saved records have an invalid storage format; the original was preserved');
 		if (record.session !== undefined && !(record.session instanceof Uint8Array))
 			throw new Error('Saved session has an invalid storage format; the original was preserved');
-		return {
-			image: record.image.slice(),
-			...(record.session !== undefined ? { session: record.session.slice() } : {}),
-			savedAt: record.savedAt,
-		};
+		if (
+			record.previous !== undefined &&
+			(!Array.isArray(record.previous) ||
+				record.previous.length > BATTERY_HISTORY_LIMIT ||
+				record.previous.some((v: BatteryVersion) => !(v?.image instanceof Uint8Array) || !Number.isFinite(v?.savedAt)))
+		)
+			throw new Error('Saved-record history has an invalid storage format; the original was preserved');
+		return { ...copyVersion(record), previous: record.previous?.map(copyVersion) };
 	},
 	async write(key, record) {
 		await transaction('readwrite', (store) =>
-			store.put(
-				{
-					image: record.image.slice(),
-					...(record.session !== undefined ? { session: record.session.slice() } : {}),
-					savedAt: record.savedAt,
-				},
-				key,
-			),
+			store.put({ ...copyVersion(record), previous: record.previous?.map(copyVersion) }, key),
 		);
 	},
 };
@@ -114,12 +112,16 @@ export const browserBatteryLock: BatteryLock = async (key) => {
 function equalImage(a: Uint8Array | null, b: Uint8Array): boolean {
 	return a !== null && a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
+function copyVersion(record: BatteryVersion): BatteryVersion {
+	return { image: record.image.slice(), session: record.session?.slice(), savedAt: record.savedAt };
+}
 export class BatterySession {
 	private pending: Promise<void> = Promise.resolve();
 	private closing: Promise<void> | null = null;
 	private image: Uint8Array | null;
 	private savedAt: number | null;
 	private session: Uint8Array | null;
+	private previous: BatteryVersion[];
 	private constructor(
 		readonly key: string,
 		readonly loaded: SavedBattery | null,
@@ -129,6 +131,13 @@ export class BatterySession {
 		this.image = loaded?.image.slice() ?? null;
 		this.savedAt = loaded?.savedAt ?? null;
 		this.session = loaded?.session?.slice() ?? null;
+		this.previous = loaded?.previous?.map(copyVersion) ?? [];
+	}
+	/** Newest committed version first. Owned copies cannot mutate storage. */
+	versions(): BatteryVersion[] {
+		return this.image === null
+			? []
+			: [copyVersion({ image: this.image, session: this.session ?? undefined, savedAt: this.savedAt! }), ...this.previous.map(copyVersion)];
 	}
 	static async open(key: string, storage = browserBatteryStorage, lock = browserBatteryLock): Promise<BatterySession> {
 		const release = await lock(key);
@@ -152,14 +161,13 @@ export class BatterySession {
 			)
 				return { changed: false, savedAt: this.savedAt! };
 			const savedAt = Date.now();
-			await this.storage.write(this.key, {
-				image: owned,
-				...(ownedSession !== null ? { session: ownedSession } : {}),
-				savedAt,
-			});
+			const previous = this.versions().slice(0, BATTERY_HISTORY_LIMIT);
+			// One transaction commits the new image and its bounded recovery history.
+			await this.storage.write(this.key, { image: owned, session: ownedSession ?? undefined, savedAt, previous });
 			this.image = owned;
 			this.session = ownedSession;
 			this.savedAt = savedAt;
+			this.previous = previous;
 			return { changed: true, savedAt };
 		});
 		this.pending = write.then(

@@ -425,3 +425,27 @@ passing evidence reused. Current web artifacts are rebuilt from the same Rust
 source; loader bindings are checked without a second CPU-flow campaign. These
 software results do not establish physical bus timing, accessory interoperability
 or comprehensive handwriting accuracy.
+
+## Browser automatic saves and recovery
+
+PV-F1 can automatically save its organizer backing and active card in the browser,
+using the same IndexedDB transactions and exclusive tab ownership as OZ-9600.
+Saves occur periodically, on Pause, and when the page becomes hidden. A failed
+write preserves the last committed save. The latest image and three prior
+successful versions are committed together; Previous saves can explicitly recover
+an older version. Corrupt current images are reported and preserved until the
+user selects a recovery action. Automatic saving can be disabled independently
+for each organizer model without deleting its existing saves.
+
+PV browser saves use the checked `PVWEB01` container, including ROM-bound retained
+RAM/RTC and learned templates, active program-card ROM/SRAM or RAM-card image,
+write protection, and recognition model bytes. Pending card-file selections are
+not mounted media and are excluded. The firmware key ignores the PVRAM01/02
+format distinction so registering a pen template does not fork saved records.
+Manual `.pvram` backups still contain organizer backing only; manual card exports
+remain available separately.
+
+Recovery starts a fresh paused CPU/peripheral state from saved backing. This is
+not a live CPU/LCD snapshot and does not promise to resume an unfinished editor
+operation. Browser data clearing still removes local saves; exported backups
+remain useful for recovery on another browser or computer.

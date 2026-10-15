@@ -1,7 +1,15 @@
 <script lang="ts">
 	import { configuredPvHandwriting, type PvHandwritingAsset } from '$lib/pvf1_bootstrap';
 	import { onDestroy, onMount, tick } from 'svelte';
-	import { BatterySession, ozBatteryIdentity } from '$lib/emulator/oz_battery_store';
+	import { BatterySession, ozBatteryIdentity, type BatteryVersion } from '$lib/emulator/oz_battery_store';
+	import {
+		capturePvSession,
+		encodePvSession,
+		decodePvSession,
+		pvBatteryIdentity,
+		type PvAssets,
+		type PvSession,
+	} from '$lib/emulator/pvf1_session';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
@@ -100,15 +108,29 @@
 		serialize: (value) => String(value),
 		deserialize: (value) => value !== 'false',
 	});
-	let ozBatterySession: BatterySession | null = null;
-	let ozBatteryGeneration = -1;
-	let ozBatteryStatus = 'Automatic saving is ready';
-	let ozBatteryError = '';
+	const pvAutosaveStore = createPersistedStore<boolean>('sc62015:pv-autosave', true, {
+		serialize: String,
+		deserialize: (v) => v !== 'false',
+	});
+	let pvActiveAssets: PvAssets = {
+		cardRom: new Uint8Array(),
+		handwritingModel: new Uint8Array(),
+		ramCardWritable: true,
+	};
+	let pvRecoveryVersions: BatteryVersion[] = [];
+	let pvRecoveryOverride: Uint8Array | null = null;
+	function autosaveEnabled(model: RomModel) {
+		return model === 'pv-f1' ? $pvAutosaveStore : model === 'oz-9600' && $ozAutosaveStore;
+	}
+	let batterySession: BatterySession | null = null;
+	let batteryGeneration = -1;
+	let batteryStatus = 'Automatic saving is ready';
+	let batteryError = '';
+	let batteryBusy = false;
+	let batterySave: Promise<boolean> | null = null;
+	let batteryTimer: ReturnType<typeof setInterval> | null = null;
 	let ozRejectedBattery: Uint8Array | null = null;
 	let ozRejectedSession: Uint8Array | null = null;
-	let ozBatteryBusy = false;
-	let ozBatterySave: Promise<boolean> | null = null;
-	let ozBatteryTimer: ReturnType<typeof setInterval> | null = null;
 	let requestedRom: { bytes: Uint8Array; model: RomModel; source: string | null } | null = null;
 	let ozProfile: OzProfile = 'provisional-v1';
 	let ozLoadedProfile: OzProfile = 'strict';
@@ -135,6 +157,7 @@
 	let pvCardSram = new Uint8Array();
 	let pvCardNames = { rom: '', sram: '' };
 	let pvCardError = '';
+	let pvCardStatus = '';
 	let pvRamCard = new Uint8Array();
 	let pvRamCardName = '';
 	let pvRamCardWritable = true;
@@ -979,12 +1002,12 @@
 		}
 	}
 
-	async function saveOzBattery(force = false): Promise<boolean> {
-		if (ozBatterySave) return ozBatterySave;
-		const session = ozBatterySession;
-		const generation = ozBatteryGeneration;
+	async function saveBattery(force = false): Promise<boolean> {
+		if (batterySave) return batterySave;
+		const session = batterySession;
+		const generation = batteryGeneration;
 		if (!session) return true;
-		if (workerHealth !== 'ready' || installedRom?.model !== 'oz-9600') return false;
+		if (workerHealth !== 'ready' || !installedRom || !['oz-9600', 'pv-f1'].includes(installedRom.model)) return false;
 		if (
 			!force &&
 			(loadingRom || !romLoaded || stepBusy || functionRunnerBusy || controlPending || generation !== romLoadGeneration)
@@ -992,62 +1015,67 @@
 			return true;
 		const save = (async () => {
 			try {
-				const checkpoint: { image: Uint8Array; session: Uint8Array } = worker
-					? await workerCall('oz_checkpoint_export', { generation })
-					: { image: emulator.export_oz9600_retained(), session: emulator.export_oz9600_session() };
-				if (session !== ozBatterySession) return false;
+				const checkpoint: { image: Uint8Array; session?: Uint8Array } = installedRom?.model === 'pv-f1'
+                    ? { image: await encodePvSession(worker ? await workerCall('pv_session_export', { generation }) : capturePvSession(emulator, pvActiveAssets)) }
+                    : worker ? await workerCall('oz_checkpoint_export', { generation })
+                    : { image: emulator.export_oz9600_retained(), session: emulator.export_oz9600_session() };
+				if (session !== batterySession) return false;
 				const result = await session.save(checkpoint.image, checkpoint.session);
-				if (session !== ozBatterySession) return false;
-				ozBatteryError = '';
-				ozBatteryStatus = `Saved at ${new Date(result.savedAt).toLocaleTimeString()}`;
+				if (session !== batterySession) return false;
+				batteryError = '';
+				batteryStatus = `Saved at ${new Date(result.savedAt).toLocaleTimeString()}`;
+				if (installedRom?.model === 'pv-f1') pvRecoveryVersions = session.versions();
 				return true;
 			} catch (error) {
-				if (session === ozBatterySession)
-					ozBatteryError = `Automatic save failed: ${String(error)}. Export a backup or retry.`;
+				if (session === batterySession)
+					batteryError = `Automatic save failed: ${String(error)}. Export a backup or retry.`;
 				return false;
 			}
 		})();
-		ozBatterySave = save;
+		batterySave = save;
 		try {
 			return await save;
 		} finally {
-			if (ozBatterySave === save) ozBatterySave = null;
+			if (batterySave === save) batterySave = null;
 		}
 	}
-	async function closeOzBattery() {
-		if (!(await saveOzBattery(true)))
+	async function closeBattery() {
+		if (!(await saveBattery(true)))
 			throw new Error('Current records could not be saved. Export a backup or retry before replacing the session.');
-		const session = ozBatterySession;
-		ozBatterySession = null;
+		const session = batterySession;
+		batterySession = null;
 		await session?.close();
 	}
 	async function retryRequestedRom() {
-		if (!requestedRom || loadingRom) return;
+		if (!requestedRom || loadingRom) return false;
 		const requested = requestedRom;
 		if (
 			romLoaded &&
 			!window.confirm('Recover saved records? Export a backup first if you want to keep current session changes.')
 		)
-			return;
+			return false;
 		const generation = ++romLoadGeneration;
 		loadingRom = true;
 		try {
 			await ensureWorker();
 			await installRom(requested.bytes.slice(), requested.model, requested.source, generation);
+			return generation === romLoadGeneration;
 		} catch (error) {
 			if (generation === romLoadGeneration) lastError = `Load failed: ${String(error)}`;
+			return false;
 		} finally {
 			if (generation === romLoadGeneration) loadingRom = false;
 		}
 	}
-	async function changeOzAutosave() {
-		if (ozBatteryBusy) return;
-		ozBatteryBusy = true;
+	async function changeAutosave() {
+		if (batteryBusy) return;
+		const model = installedRom?.model ?? romModel;
+		batteryBusy = true;
 		try {
-			if (!$ozAutosaveStore) {
-				await closeOzBattery();
-				ozBatteryStatus = 'Automatic saving is off; export backups to keep records';
-				ozBatteryError = '';
+			if (!autosaveEnabled(model)) {
+				await closeBattery();
+				batteryStatus = 'Automatic saving is off; export backups to keep records';
+				batteryError = '';
 				if (!romLoaded) await retryRequestedRom();
 				return;
 			}
@@ -1057,12 +1085,24 @@
 			}
 			try {
 				const generation = romLoadGeneration;
-				const bytes: Uint8Array = worker
-					? await workerCall('oz_retained_export', { generation })
-					: emulator.export_oz9600_retained();
-				const key = 'oz9600:' + Array.from(bytes.subarray(0, 72), (b) => b.toString(16).padStart(2, '0')).join('');
+				const bytes: Uint8Array =
+					installedRom?.model === 'pv-f1'
+						? await encodePvSession(
+								worker
+									? await workerCall('pv_session_export', { generation })
+									: capturePvSession(emulator, pvActiveAssets),
+							)
+						: worker
+							? await workerCall('oz_retained_export', { generation })
+							: emulator.export_oz9600_retained();
+				const key =
+					model === 'pv-f1'
+						? worker
+							? await workerCall('pv_battery_identity', { bytes: installedRom!.bytes.slice() })
+							: pvBatteryIdentity(() => new wasm.Sc62015Emulator(), installedRom!.bytes)
+						: 'oz9600:' + Array.from(bytes.subarray(0, 72), (b) => b.toString(16).padStart(2, '0')).join('');
 				const session = await BatterySession.open(key);
-				if (generation !== romLoadGeneration || !$ozAutosaveStore || loadingRom) {
+				if (generation !== romLoadGeneration || !autosaveEnabled(model) || loadingRom) {
 					await session.close();
 					return;
 				}
@@ -1075,21 +1115,22 @@
 						'Existing saved records are present. Reload to recover them before enabling automatic saving.',
 					);
 				}
-				ozBatterySession = session;
-				ozBatteryGeneration = generation;
-				await saveOzBattery(true);
+				batterySession = session;
+				batteryGeneration = generation;
+				await saveBattery(true);
 			} catch (error) {
-				ozBatteryError = String(error);
+				batteryError = String(error);
 			}
 		} catch (error) {
-			$ozAutosaveStore = true;
-			ozBatteryError = String(error);
+			if (model === 'pv-f1') $pvAutosaveStore = true;
+			else $ozAutosaveStore = true;
+			batteryError = String(error);
 		} finally {
-			ozBatteryBusy = false;
+			batteryBusy = false;
 		}
 	}
-	function saveOzOnHidden() {
-		if (document.hidden) void saveOzBattery(true);
+	function saveOnHidden() {
+		if (document.hidden) void saveBattery(true);
 	}
 	async function installRom(
 		bytes: Uint8Array,
@@ -1102,33 +1143,38 @@
 		backupOverride?: Uint8Array,
 	) {
 		const originalBytes = bytes.slice();
-		const handwritingModel = configuredModel?.bytes ?? pvHandwritingModel;
+		let handwritingModel = configuredModel?.bytes ?? pvHandwritingModel;
 		if (generation !== romLoadGeneration) return;
 		requestedRom = { bytes: originalBytes, model, source };
 		if (!(await stop())) throw new Error('Pause was not acknowledged; ROM was not replaced');
 		if (generation !== romLoadGeneration) return;
 		releaseAllPhysicalHeldCodes();
 		try {
-			await closeOzBattery();
+			await closeBattery();
 		} catch (error) {
 			romLoaded = installedRom !== null;
 			throw error;
 		}
 		if (generation !== romLoadGeneration) return;
 		let candidateBattery: BatterySession | null = null;
-		if (model === 'oz-9600' && $ozAutosaveStore) {
+		if (autosaveEnabled(model)) {
 			try {
 				let key: string;
 				if (worker) {
 					const copy = originalBytes.slice();
-					key = await workerCall('oz_battery_identity', { bytes: copy }, [copy.buffer]);
+					key = await workerCall(model === 'pv-f1' ? 'pv_battery_identity' : 'oz_battery_identity', { bytes: copy }, [
+						copy.buffer,
+					]);
 				} else {
 					await ensureEmulator();
-					key = ozBatteryIdentity(() => new wasm.Sc62015Emulator(), originalBytes);
+					key =
+						model === 'pv-f1'
+							? pvBatteryIdentity(() => new wasm.Sc62015Emulator(), originalBytes)
+							: ozBatteryIdentity(() => new wasm.Sc62015Emulator(), originalBytes);
 				}
 				candidateBattery = await BatterySession.open(key);
 			} catch (error) {
-				ozBatteryError = `Saved records were preserved: ${String(error)}`;
+				batteryError = `Saved records were preserved: ${String(error)}`;
 				throw error;
 			}
 		}
@@ -1138,11 +1184,26 @@
 		}
 		const retained = backupOverride?.slice() ?? candidateBattery?.loaded?.image.slice() ?? new Uint8Array();
 		const savedSession = backupOverride === undefined ? candidateBattery?.loaded?.session?.slice() : undefined;
+		let media: PvSession = {
+			retained: pvRetained,
+			cardRom: pvCardRom.slice(),
+			cardSram: pvCardSram.slice(),
+			ramCard: pvRamCardRequested ? pvRamCard.slice() : new Uint8Array(),
+			ramCardWritable: pvRamCardWritable,
+			handwritingModel,
+		};
 		resetSymbols();
 		try {
-			// Empty constructor input is a fresh organizer, never a valid backup.
 			if ((backupOverride !== undefined || candidateBattery?.loaded) && retained.length === 0)
 				throw new Error('Retained image is empty');
+			if (model === 'pv-f1') {
+				pvRecoveryVersions = candidateBattery?.versions() ?? [];
+				const recover = pvRecoveryOverride ?? (!pvRetained.length ? candidateBattery?.loaded?.image : null);
+				pvRecoveryOverride = null;
+				if (recover) media = await decodePvSession(recover, candidateBattery?.key);
+				handwritingModel = Uint8Array.from(media.handwritingModel);
+			}
+
 			if (worker) {
 				await workerCall(
 					'load_rom',
@@ -1155,11 +1216,11 @@
 						...(model === 'pv-f1'
 							? {
 									pvHandwritingModel: handwritingModel.slice(),
-									pvRetained,
-									pvCardRom: pvCardRom.slice(),
-									pvCardSram: pvCardSram.slice(),
-									pvRamCard: pvRamCardRequested ? pvRamCard.slice() : new Uint8Array(),
-									pvRamCardWritable,
+									pvRetained: media.retained,
+									pvCardRom: media.cardRom,
+									pvCardSram: media.cardSram,
+									pvRamCard: media.ramCard,
+									pvRamCardWritable: media.ramCardWritable,
 								}
 							: {}),
 						...(model === 'pa-9500'
@@ -1178,9 +1239,10 @@
 					if (savedSession) emu.load_oz9600_checkpoint(bytes, retained, savedSession, ozProfile);
 					else emu.load_oz9600(bytes, retained, ozProfile);
 				} else if (model === 'pa-9500') loadPa9500(emu, bytes, paProfile, paCardRom, paCardSram, paUart, paRetained);
-				else if (model === 'pv-f1' && pvRamCardRequested && pvRamCard.length)
-					emu.load_pvf1_with_ram_card(bytes, pvRetained, handwritingModel, pvRamCard, pvRamCardWritable);
-				else if (model === 'pv-f1') emu.load_pvf1(bytes, pvRetained, handwritingModel, pvCardRom, pvCardSram);
+				else if (model === 'pv-f1' && media.ramCard.length)
+					emu.load_pvf1_with_ram_card(bytes, media.retained, handwritingModel, media.ramCard, media.ramCardWritable);
+				else if (model === 'pv-f1')
+					emu.load_pvf1(bytes, media.retained, handwritingModel, media.cardRom, media.cardSram);
 				else if (typeof emu.load_rom_with_model === 'function') emu.load_rom_with_model(bytes, model);
 				else emu.load_rom(bytes);
 				fallbackInputs.clear();
@@ -1196,23 +1258,42 @@
 					ozRejectedBattery = candidateBattery.loaded.image.slice();
 					ozRejectedSession = candidateBattery.loaded.session?.slice() ?? null;
 				}
-				ozBatteryError = `Saved records were preserved: ${String(error)}`;
+				batteryError = `Saved records were preserved: ${String(error)}`;
 			}
+			if (['oz-9600', 'pv-f1'].includes(model)) batteryError = `Saved records were preserved: ${String(error)}`;
 			throw error;
 		}
 		if (generation !== romLoadGeneration) {
 			await candidateBattery?.close();
 			return;
 		}
-		if (model === 'pv-f1' && configuredModel) {
-			pvHandwritingModel = configuredModel.bytes;
-			pvHandwritingName = configuredModel.name;
+		if (model === 'pv-f1') {
+			pvHandwritingModel = handwritingModel;
+			pvActiveAssets = {
+				cardRom: media.cardRom.slice(),
+				handwritingModel: handwritingModel.slice(),
+				ramCardWritable: media.ramCardWritable,
+			};
+			pvCardRom = Uint8Array.from(media.cardRom);
+			pvCardSram = Uint8Array.from(media.cardSram);
+			pvRamCard = Uint8Array.from(media.ramCard);
+			pvRamCardRequested = !!media.ramCard.length;
+			pvRamCardWritable = media.ramCardWritable;
+			if (configuredModel) pvHandwritingName = configuredModel.name;
+			if (candidateBattery?.loaded && !pvRetained.length) {
+				pvCardNames = {
+					rom: media.cardRom.length ? 'Recovered program card' : '',
+					sram: media.cardSram.length ? 'Recovered SRAM' : '',
+				};
+				pvRamCardName = media.ramCard.length ? 'Recovered memory card' : '';
+				pvHandwritingName = handwritingModel.length ? 'Recovered recognition model' : '';
+			}
 		}
-		ozBatterySession = candidateBattery;
-		ozBatteryGeneration = generation;
-		if (model === 'oz-9600') {
-			ozBatteryError = '';
-			ozBatteryStatus = candidateBattery?.loaded
+		batterySession = candidateBattery;
+		batteryGeneration = generation;
+		if (['oz-9600', 'pv-f1'].includes(model)) {
+			batteryError = '';
+			batteryStatus = candidateBattery?.loaded
 				? savedSession
 					? 'Recovered saved records and unfinished work; paused'
 					: 'Recovered saved records; paused'
@@ -1235,11 +1316,12 @@
 		lastError = null;
 		// Only a successfully constructed machine may replace saved records.
 		// Failed writes leave the rejected original available to export.
-		if (!backupOverride || (await saveOzBattery(true))) {
+		if (!backupOverride || (await saveBattery(true))) {
 			ozRejectedBattery = null;
 			ozRejectedSession = null;
 		}
 		if (callStackOpen) void ensureSymbols();
+		await saveBattery(true);
 	}
 
 	function refreshFast() {
@@ -1576,6 +1658,7 @@
 			} else emulator.configure_pvf1_recognizer(bytes);
 			if (generation !== romLoadGeneration) return;
 			pvHandwritingModel = bytes;
+			pvActiveAssets.handwritingModel = bytes.slice();
 			pvHandwritingName = file.name;
 		} catch (error) {
 			if (generation === romLoadGeneration) pvHandwritingError = String(error);
@@ -1593,7 +1676,7 @@
 			installedRom &&
 			!window.confirm(
 				installedRom.model === 'oz-9600'
-					? ozBatterySession
+					? batterySession
 						? 'Replace the current ROM? OZ-9600 RAM/RTC will be saved before replacement; execution restarts when reloaded.'
 						: 'Replace the current ROM and discard unsaved records? Use Export backup first to keep them.'
 					: 'Replace the current ROM and discard device RAM changes?',
@@ -1636,7 +1719,7 @@
 			installedRom &&
 			!window.confirm(
 				installedRom.model === 'oz-9600'
-					? ozBatterySession
+					? batterySession
 						? 'Change device model? OZ-9600 RAM/RTC will be saved before replacement; execution restarts when reloaded.'
 						: 'Change device model and discard unsaved records? Use Export backup first to keep them.'
 					: 'Change device model and discard device RAM changes?',
@@ -1838,6 +1921,7 @@
 			oldSram = pvCardSram,
 			oldNames = pvCardNames,
 			oldRamRequested = pvRamCardRequested;
+		pvCardStatus = '';
 		loadingRom = true;
 		try {
 			const retained = Uint8Array.from(
@@ -1852,6 +1936,7 @@
 			next = ++romLoadGeneration;
 			await installRom(installedRom.bytes.slice(), 'pv-f1', installedRom.source, next, new Uint8Array(), retained);
 			pvCardError = '';
+			pvCardStatus = remove ? 'Card removed; organizer paused' : 'Program card imported; organizer paused';
 		} catch (error) {
 			if (romLoadGeneration === next) {
 				pvCardError = String(error);
@@ -1909,6 +1994,7 @@
 			requested: pvRamCardRequested,
 		};
 		let next = generation;
+		pvCardStatus = '';
 		loadingRom = true;
 		try {
 			const retained = Uint8Array.from(
@@ -1927,6 +2013,7 @@
 			next = ++romLoadGeneration;
 			await installRom(installedRom.bytes.slice(), 'pv-f1', installedRom.source, next, new Uint8Array(), retained);
 			pvCardError = '';
+			pvCardStatus = remove ? 'Memory card removed; organizer paused' : 'Memory card imported; organizer paused';
 		} catch (error) {
 			if (romLoadGeneration === next) {
 				romLoadGeneration = generation;
@@ -1960,6 +2047,8 @@
 				}
 				if (!worker) resetFallbackSerial();
 				refreshAllNow();
+				batteryGeneration = romLoadGeneration;
+				await saveBattery(true);
 				lastError = null;
 			} catch (error) {
 				if (romLoadGeneration === generation + 1) {
@@ -2011,8 +2100,8 @@
 
 		if (
 			!window.confirm(
-				installedRom.model === 'oz-9600' && $ozAutosaveStore
-					? 'Recover the OZ-9600 from its last automatic save? Changes since that save will be lost.'
+				autosaveEnabled(installedRom.model)
+					? 'Recover from the last automatic save? Changes since that save will be lost.'
 					: 'Reset the machine and discard all session changes? This reloads the last successfully loaded ROM, not a saved session.',
 			)
 		)
@@ -2025,8 +2114,8 @@
 		}
 		// The user accepted recovery from the last durable image. A failed worker
 		// cannot supply a final snapshot; release ownership before replacing it.
-		const battery = ozBatterySession;
-		ozBatterySession = null;
+		const battery = batterySession;
+		batterySession = null;
 		await battery?.close();
 		const generation = ++romLoadGeneration;
 		workerRequests?.fail(new Error('Machine reset by user'));
@@ -2076,6 +2165,15 @@
 			lastError = String(error);
 		}
 	}
+	async function recoverPvVersion(version: BatteryVersion) {
+		if (loadingRom || batteryBusy) return;
+		pvRecoveryOverride = version.image.slice();
+		try {
+			if (await retryRequestedRom()) pvBackupStatus = 'Recovered selected automatic save; paused';
+		} finally {
+			pvRecoveryOverride = null;
+		}
+	}
 	async function exportPvBackup() {
 		if (!romLoaded || romModel !== 'pv-f1' || !(await stop())) return;
 		try {
@@ -2112,6 +2210,8 @@
 			}
 			if (generation !== romLoadGeneration) return;
 			romLoadGeneration = generation + 1;
+			batteryGeneration = romLoadGeneration;
+			await saveBattery(true);
 			pvBackupError = '';
 			pvBackupStatus = `Restored ${file.name}; Resume to boot from saved records`;
 			releaseAllPhysicalHeldCodes();
@@ -2243,7 +2343,7 @@
 			}
 			lastError = null;
 			ozReplayStatus = `Restored ${file.name}; ${fullSession ? 'saved session resumed' : 'fresh CPU'}`;
-			await saveOzBattery(true);
+			await saveBattery(true);
 		} catch (error) {
 			lastError = String(error);
 		} finally {
@@ -2385,7 +2485,7 @@
 				await workerCall('stop');
 				running = false;
 				workerHealth = 'ready';
-				await saveOzBattery(true);
+				await saveBattery(true);
 				return true;
 			} catch (error) {
 				lastError = String(error);
@@ -2399,7 +2499,7 @@
 		running = false;
 		runLoopId += 1;
 		syncFallbackAudio();
-		await saveOzBattery(true);
+		await saveBattery(true);
 		return true;
 	}
 
@@ -2503,10 +2603,10 @@
 
 	onMount(() => {
 		mounted = true;
-		ozBatteryTimer = setInterval(() => {
-			void saveOzBattery();
+		batteryTimer = setInterval(() => {
+			void saveBattery();
 		}, 5000);
-		document.addEventListener('visibilitychange', saveOzOnHidden);
+		document.addEventListener('visibilitychange', saveOnHidden);
 		document.addEventListener('visibilitychange', onAudioVisibilityChange);
 		try {
 			const requestedModel = normalizeRomModel(new URL(window.location.href).searchParams.get('model'));
@@ -2539,10 +2639,10 @@
 	}
 
 	onDestroy(() => {
-		if (ozBatteryTimer) clearInterval(ozBatteryTimer);
-		document.removeEventListener('visibilitychange', saveOzOnHidden);
-		const battery = ozBatterySession;
-		ozBatterySession = null;
+		if (batteryTimer) clearInterval(batteryTimer);
+		document.removeEventListener('visibilitychange', saveOnHidden);
+		const battery = batterySession;
+		batterySession = null;
 		void battery?.close();
 		document.removeEventListener('visibilitychange', onAudioVisibilityChange);
 		audioPlayback.close();
@@ -2821,6 +2921,47 @@
 	{/if}
 	{#if romModel === 'pv-f1'}
 		<section class="serial-panel" aria-label="Saved records" data-testid="pv-saved-records">
+			<label
+				><input
+					type="checkbox"
+					bind:checked={$pvAutosaveStore}
+					on:change={changeAutosave}
+					data-testid="pv-autosave"
+					disabled={loadingRom || batteryBusy || !!controlPending}
+				/> Automatically save to this browser</label
+			>
+			<p role="status" data-testid="pv-save-status">{batteryStatus}</p>
+			{#if batteryError}<p class="error" role="alert" data-testid="pv-save-error">{batteryError}</p>{/if}
+			<button
+				on:click={() => saveBattery(true)}
+				data-testid="pv-save-now"
+				disabled={!romLoaded ||
+					!batterySession ||
+					!!batterySave ||
+					loadingRom ||
+					functionRunnerBusy ||
+					stepBusy ||
+					!!controlPending}>Save now</button
+			>
+			{#if !loadingRom && !batteryBusy && (!romLoaded || ($pvAutosaveStore && !batterySession))}<button
+					on:click={retryRequestedRom}
+					data-testid="pv-retry-load">Retry recovery</button
+				>{/if}
+			{#if pvRecoveryVersions.length > 1}<details data-testid="pv-save-history">
+					<summary>Previous saves</summary>
+					{#each pvRecoveryVersions as version, i}<button
+							on:click={() => recoverPvVersion(version)}
+							disabled={loadingRom || batteryBusy || !!controlPending}
+							>Recover {i === 0 ? 'latest save' : `previous save ${i}`} ({new Date(
+								version.savedAt,
+							).toLocaleString()})</button
+						>{/each}
+				</details>{/if}
+			<p class="hint">
+				Automatic saves include organizer records, recognition configuration and the mounted card. Recovery restarts the
+				organizer. Keep exported backups before clearing browser data.
+			</p>
+
 			<button
 				data-testid="pv-backup-export"
 				on:click={exportPvBackup}
@@ -2848,24 +2989,20 @@
 				><input
 					type="checkbox"
 					bind:checked={$ozAutosaveStore}
-					on:change={changeOzAutosave}
+					on:change={changeAutosave}
 					data-testid="oz-autosave"
-					disabled={loadingRom || ozBatteryBusy || functionRunnerBusy || !!controlPending}
+					disabled={loadingRom || batteryBusy || functionRunnerBusy || !!controlPending}
 				/> Automatically save to this browser</label
 			>
-			<p role="status" data-testid="oz-save-status">{ozBatteryStatus}</p>
-			{#if ozBatteryError}<p class="error" role="alert" data-testid="oz-save-error">{ozBatteryError}</p>{/if}
+			<p role="status" data-testid="oz-save-status">{batteryStatus}</p>
+			{#if batteryError}<p class="error" role="alert" data-testid="oz-save-error">{batteryError}</p>{/if}
 			<button
-				on:click={() => saveOzBattery(true)}
+				on:click={() => saveBattery(true)}
 				data-testid="oz-save-now"
-				disabled={!romLoaded ||
-					!ozBatterySession ||
-					!!ozBatterySave ||
-					functionRunnerBusy ||
-					stepBusy ||
-					!!controlPending}>Save now</button
+				disabled={!romLoaded || !batterySession || !!batterySave || functionRunnerBusy || stepBusy || !!controlPending}
+				>Save now</button
 			>
-			{#if !loadingRom && !ozBatteryBusy && (!romLoaded || ($ozAutosaveStore && !ozBatterySession))}<button
+			{#if !loadingRom && !batteryBusy && (!romLoaded || ($ozAutosaveStore && !batterySession))}<button
 					on:click={retryRequestedRom}
 					data-testid="oz-retry-load">Retry recovery</button
 				>{/if}
@@ -3080,6 +3217,7 @@
 				{#if pvHandwritingError}<p role="alert">{pvHandwritingError}</p>{/if}
 			</section>
 			<section aria-label="PV-F1 card" data-testid="pv-card">
+				{#if pvCardStatus}<p role="status" data-testid="pv-card-status">{pvCardStatus}</p>{/if}
 				<label
 					>Memory card image (128 KiB) <input
 						type="file"
