@@ -3,6 +3,7 @@ import {
 	BatterySession,
 	ozBatteryIdentity,
 	type BatteryStorage,
+	type BatteryVersion,
 	type SavedBattery,
 	type BatteryLock,
 } from './oz_battery_store';
@@ -11,7 +12,11 @@ function fixture() {
 	const storage: BatteryStorage = {
 		read: vi.fn(async (key) => records.get(key) ?? null),
 		write: vi.fn(async (key, record) => {
-			records.set(key, { image: record.image.slice(), savedAt: record.savedAt });
+			records.set(key, {
+				image: record.image.slice(),
+				savedAt: record.savedAt,
+				previous: record.previous?.map((v: BatteryVersion) => ({ image: v.image.slice(), savedAt: v.savedAt })),
+			});
 		}),
 	};
 	const locks = new Set<string>();
@@ -25,6 +30,26 @@ function fixture() {
 	return { records, storage, lock, locks };
 }
 describe('OZ battery session ownership and persistence', () => {
+	it('commits bounded previous versions with the image and preserves them after failed writes', async () => {
+		const f = fixture();
+		const session = await BatterySession.open('pvf1:rom', f.storage, f.lock);
+		for (let n = 1; n <= 5; n++) await session.save(new Uint8Array([n]));
+		expect(session.versions().map((v) => v.image[0])).toEqual([5, 4, 3, 2]);
+		const before = f.records.get('pvf1:rom');
+		vi.mocked(f.storage.write).mockRejectedValueOnce(new Error('quota'));
+		await expect(session.save(new Uint8Array([6]))).rejects.toThrow('quota');
+		expect(f.records.get('pvf1:rom')).toEqual(before);
+		expect(session.versions().map((v) => v.image[0])).toEqual([5, 4, 3, 2]);
+		const copies = session.versions();
+		copies[1].image[0] = 99;
+		await session.close();
+		const recovered = await BatterySession.open('pvf1:rom', f.storage, f.lock);
+		expect(recovered.versions().map((v) => v.image[0])).toEqual([5, 4, 3, 2]);
+		// Choosing an old save creates a new commit; it does not destroy the current one.
+		await recovered.save(recovered.versions()[2].image);
+		expect(recovered.versions().map((v) => v.image[0])).toEqual([3, 5, 4, 3]);
+		await recovered.close();
+	});
 	it('loads committed images, deduplicates and excludes another owner', async () => {
 		const f = fixture();
 		const first = await BatterySession.open('rom-a', f.storage, f.lock);
