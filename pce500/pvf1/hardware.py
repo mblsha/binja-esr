@@ -18,6 +18,16 @@ from pce500.peripherals.uart import Uart
 WIDTH, HEIGHT = 336, 292
 
 
+def _low_open_bus(address):
+    # Uniform E0 read spans in PV's acquisition; keep unknown MMIO strict.
+    return (
+        0 <= address <= 0x3FFF
+        or 0x5000 <= address <= 0x7FFF
+        or 0x9000 <= address <= 0xEFFF
+        or 0xF200 <= address <= 0xFFFF
+    )
+
+
 class Hardware:
     def lcd_to_raw(self, x, y, workspace):
         if (
@@ -69,6 +79,7 @@ class Hardware:
         self.audio = AudioCapture(software_only=True, allow_clocked=True)
         self.pixel_expansion = 0
         self.ram, self.scratch = bytearray(0x40000), bytearray(0x4000)
+        self.legacy_port_f = 0
         self.lcd, self.rtc = LcdController(WIDTH, HEIGHT), Rtc()
         self.lcd.firmware_window_candidate = True
         # PV-F1's CityChange window2 must survive the later Calendar window3 redraw.
@@ -102,11 +113,9 @@ class Hardware:
 
     def peek(self, address):
         # Captured PV read layout repeats every 64 bytes through 04000..04FFF.
-        # Keep live latches; mirrored writes and 05000 are not established.
+        # Keep live latches; mirrored gate writes are not established.
         if 0x4000 <= address <= 0x4FFF:
             address = 0x4000 | (address & 63)
-        if 0 <= address <= 0x3FFF:
-            return self.scratch[address]
         if address == 0x4021:
             return self.selector
         if address in (0x401E, 0x401F):
@@ -149,6 +158,10 @@ class Hardware:
                 return 255
         if 0x80000 <= address <= 0xBFFFF:
             return self.ram[address - 0x80000]
+        if 0x10000 <= address <= 0x1FFFF:
+            return self.ram[address - 0x10000 + 0x30000]
+        if _low_open_bus(address):
+            return 0xE0
         return None
 
     def configure_pa9c3_candidate(self, rom, sram, *, instructions=0, elapsed=0):
@@ -227,9 +240,7 @@ class Hardware:
 
     def write(self, address, value):
         try:
-            if 0 <= address <= 0x3FFF:
-                self.scratch[address] = value
-            elif address == 0x4021:
+            if address == 0x4021:
                 self.selector = value
             elif address == 0x401E:
                 # Native F2CDA/F2CFA request a doubled packed pixel column.
@@ -269,6 +280,10 @@ class Hardware:
                 pass
             elif 0x80000 <= address <= 0xBFFFF:
                 self.ram[address - 0x80000] = value
+            elif 0x10000 <= address <= 0x1FFFF:
+                self.ram[address - 0x10000 + 0x30000] = value
+            elif _low_open_bus(address):
+                pass
             else:
                 raise ValueError(f"unresolved PV-F1 write {address:05X}={value:02X}")
         except ValueError as error:
