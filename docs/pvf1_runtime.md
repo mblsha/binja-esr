@@ -28,6 +28,18 @@ auxiliary transport engine and bounded legacy CPU, without adopting PI mapper
 or mode-register addresses. The Python PV-F1 modules mirror the board contracts
 and provide an independent legacy replay bus.
 
+The logical PV board shares `10000–1FFFF` with the live `B0000–BFFFF` RAM
+page. PV's own sequential acquisition matches 65,487 of those 65,536 bytes;
+the runtime shares backing and does not replay acquired RAM. Non-device spans
+`00000–03FFF`, `05000–07FFF`, `09000–0EFFF` and `0F200–0FFFF` read `E0`
+and have no writable backing. Known peripheral routes take precedence, and
+unknown peripheral ports remain strict. This prevents a stale invented size
+word at `00402` from shortening a longer native editor extraction. Physical
+write aliases and every mapper state remain unmeasured.
+
+Retained images keep their original 16 KiB low-backing field for format
+compatibility; those bytes no longer affect mapped low-bus reads.
+
 ## Bundle and bootstrap profiles
 
 The bundle consists of an eight-byte magic, a little-endian JSON length, the
@@ -344,8 +356,8 @@ policy. One changed-host integration submits both い strokes before execution,
 delivers all55 distinct coordinate/release updates and renders い through the
 normal native controller. With the old queue and the same core binary, the
 incomplete path instead renders 八. This is assisted input, not measured timing.
-Broader handwriting accuracy, physical type-2 triggers and remaining
-application/card workflows stay open. Routine
+Broader handwriting accuracy and physical type-2 triggers remain unmeasured.
+Normal application/card flow coverage is described below. Routine
 behavioral checks use standalone Rust; WASM checks only the changed bindings.
 
 The hybrid engine centers each character, preserves its aspect ratio and
@@ -395,4 +407,21 @@ changed8264 to0064 and rejected the second character. The scoped Rust and LLIL
 correction preserves IH, low-byte wrap and carry, and derives zero from IL.
 IL value-load behavior retains its existing high-byte clearing. Tiny Rust
 opcode/word-compare regressions and normal unmodified-ROM query consumers cover
-the correction. Broader report/edit/navigation behavior remains separate work.
+the correction. Normal report/edit/navigation flows are also covered below.
+
+
+## Normal built-in application flows
+
+The acquired PV-F1 firmware has a closed software inventory of 304 grouped
+normal-flow rows: 294 verified and 10 justified inapplicable on the unit without
+installed add-ins. This includes ordinary create/edit/delete/search/navigation,
+settings, text and graphics clipboard, Planner reports, card startup, backup,
+connection recovery and fresh retained restart. A disabled Move menu entry was
+observed in the reviewed built-in contexts; no universal absence claim is made.
+
+Qualification uses one standalone Rust core. The 93-case integration milestone
+was followed by focused repairs and reruns of its 19 failures, with unchanged
+passing evidence reused. Current web artifacts are rebuilt from the same Rust
+source; loader bindings are checked without a second CPU-flow campaign. These
+software results do not establish physical bus timing, accessory interoperability
+or comprehensive handwriting accuracy.
