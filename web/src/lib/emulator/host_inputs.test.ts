@@ -142,6 +142,47 @@ describe('host contact ownership', () => {
 });
 
 describe('buffered typing through physical contacts', () => {
+	it('preserves repeated paused virtual taps, counts actual progress, and isolates source cancellation', () => {
+		const { sink, inputs } = setup();
+		const set = (down: boolean) =>
+			inputs.set({
+				source: 'virtual',
+				owner: 'pointer:1',
+				contact: 1,
+				down,
+				buffered: true,
+				minimumHold: 200_000,
+				minimumGap: 50_000,
+			});
+		set(true);
+		set(false);
+		set(true);
+		set(false);
+		expect(inputs.typingStatus().pending).toBe(2);
+		inputs.advance(0);
+		expect(inputs.limitBudget(1_000_000)).toBe(200_000);
+		inputs.releaseSource('physical'); // A focus change must not delete virtual taps.
+		inputs.advance(200_000);
+		inputs.advance(50_000);
+		inputs.advance(200_000);
+		expect(sink.mock.calls).toEqual([
+			[1, true],
+			[1, false],
+			[1, true],
+			[1, false],
+		]);
+		set(true);
+		set(false);
+		set(true);
+		set(false);
+		inputs.releaseSource('virtual');
+		expect(inputs.snapshot().owners).toEqual([]);
+		expect(inputs.typingStatus().pending).toBe(0);
+		set(true);
+		set(false);
+		inputs.advance(200_000);
+		expect(sink.mock.calls.at(-1)).toEqual([1, false]);
+	});
 	const key = (inputs: HostInputs, owner: string, contact: number, down: boolean) =>
 		inputs.set({ source: 'physical', owner, contact, down, buffered: true });
 	const advance = (inputs: HostInputs, budget: number) => {
