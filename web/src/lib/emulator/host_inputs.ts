@@ -8,6 +8,7 @@ export type ContactChange = {
 	contact: InputContact;
 	down: boolean;
 	minimumHold?: number;
+	minimumGap?: number;
 	/** Serialize ordinary typing through real contacts. Raw mode is unchanged. */
 	buffered?: boolean;
 	/** Cancellation bypasses assisted-tap timing, even when the machine is paused. */
@@ -26,7 +27,7 @@ export class InputBufferOverflow extends Error {
 		super('Typing buffer overflow (128 keys). Pending typing cancelled; clear queued keys before continuing.');
 	}
 }
-type BufferedContact = HeldContact & { id: string };
+type BufferedContact = HeldContact & { id: string; gap: number };
 // Compatibility policy shared by both browser models, not measured silicon
 // timing. Native IQ typing uses this same hold/gap budget. No CPU runs on input.
 export const TYPING_HOLD = 40_000;
@@ -54,7 +55,16 @@ export class HostInputs {
 	}
 
 	set(change: ContactChange): void {
-		const { source, owner, contact, down, cancel = false, minimumHold = 0, buffered = false } = change;
+		const {
+			source,
+			owner,
+			contact,
+			down,
+			cancel = false,
+			minimumHold = 0,
+			minimumGap = TYPING_GAP,
+			buffered = false,
+		} = change;
 		if (!['physical', 'virtual', 'script', 'diagnostic'].includes(source)) throw new Error('Invalid input source');
 		if (typeof owner !== 'string' || !owner.length || owner.length > 128) throw new Error('Invalid input owner');
 		if (contact !== 'on' && (!Number.isInteger(contact) || contact < 0 || contact >= 128))
@@ -65,10 +75,11 @@ export class HostInputs {
 			else throw new Error('Paste in progress; cancel queued keys before entering other input.');
 		}
 		checkBoundaryBudget(minimumHold);
-		if (typeof buffered !== 'boolean' || (buffered && (source !== 'physical' || contact === 'on')))
-			throw new Error('Buffered typing requires a physical matrix key');
+		checkBoundaryBudget(minimumGap);
+		if (typeof buffered !== 'boolean' || (buffered && (!['physical', 'virtual'].includes(source) || contact === 'on')))
+			throw new Error('Buffered typing requires a host matrix key');
 		if (buffered) {
-			this.setBuffered(owner, contact, down, cancel);
+			this.setBuffered(source, owner, contact, down, cancel, minimumHold || TYPING_HOLD, minimumGap);
 			return;
 		}
 		const id = `${source}:${owner}`;
@@ -88,19 +99,28 @@ export class HostInputs {
 		this.held.set(id, { source, owner, contact, down: true, remaining: minimumHold });
 	}
 
-	private setBuffered(owner: string, contact: InputContact, down: boolean, cancel: boolean) {
+	private setBuffered(
+		source: InputSource,
+		owner: string,
+		contact: InputContact,
+		down: boolean,
+		cancel: boolean,
+		hold = TYPING_HOLD,
+		gap = TYPING_GAP,
+	) {
 		if (this.typingBlocked) throw new InputBufferOverflow();
-		const previous = this.typingDown.get(owner);
+		const ownerId = `${source}:${owner}`;
+		const previous = this.typingDown.get(ownerId);
 		if (previous && previous.contact !== contact)
 			throw new Error('Release the old typing contact before reusing its owner');
 		if (cancel) {
-			this.clearTyping();
+			this.cancelBuffered(source);
 			return;
 		}
 		if (!down) {
 			if (!previous) return;
 			previous.down = false;
-			this.typingDown.delete(owner);
+			this.typingDown.delete(ownerId);
 			if (previous === this.typingActive && previous.remaining === 0) this.finishTyping();
 			return;
 		}
@@ -111,15 +131,16 @@ export class HostInputs {
 			throw new InputBufferOverflow();
 		}
 		const entry: BufferedContact = {
-			source: 'physical',
+			source,
 			owner,
 			contact,
 			down: true,
-			remaining: TYPING_HOLD,
+			remaining: hold,
 			id: `typing:${++this.typingSequence}`,
+			gap,
 		};
 		this.typing.push(entry);
-		this.typingDown.set(owner, entry);
+		this.typingDown.set(ownerId, entry);
 		this.startTyping();
 	}
 
@@ -136,7 +157,24 @@ export class HostInputs {
 		this.remove(active.id, active);
 		this.typing.shift();
 		this.typingActive = null;
-		this.typingGap = TYPING_GAP;
+		this.typingGap = active.gap;
+	}
+
+	private cancelBuffered(source: InputSource) {
+		if (source === 'physical') {
+			this.pastePlan = null;
+			this.pasteCursor = 0;
+		}
+		if (this.typingActive?.source === source) {
+			this.remove(this.typingActive.id, this.typingActive);
+			this.typingGap = this.typingActive.gap;
+			this.typingActive = null;
+		}
+		this.typing = this.typing.filter((entry) => entry.source !== source);
+		for (const [id, entry] of this.typingDown) if (entry.source === source) this.typingDown.delete(id);
+		if (!this.typing.length) this.typingGap = 0;
+		this.typingBlocked = false;
+		this.startTyping();
 	}
 
 	clearTyping() {
@@ -181,8 +219,8 @@ export class HostInputs {
 		while (this.pasteCursor < this.pastePlan.length && this.typing.length < TYPING_CAPACITY) {
 			const owner = `paste:${this.pasteCursor}`;
 			const contact = this.pastePlan[this.pasteCursor++];
-			this.setBuffered(owner, contact, true, false);
-			this.setBuffered(owner, contact, false, false);
+			this.setBuffered('physical', owner, contact, true, false);
+			this.setBuffered('physical', owner, contact, false, false);
 		}
 		if (!this.pasteStatus().pending) this.pastePlan = null;
 	}
@@ -201,7 +239,7 @@ export class HostInputs {
 	}
 
 	releaseSource(source: InputSource): void {
-		if (source === 'physical') this.clearTyping();
+		if (source === 'physical' || source === 'virtual') this.cancelBuffered(source);
 		for (const [id, state] of this.held) if (state.source === source) this.remove(id, state);
 	}
 
