@@ -90,5 +90,5 @@ class LegacyBus:
         self.outputs.append({"port": port, "p": p, "value": value})
 
     def outf(self, value):
-        if value:
-            raise ValueError("unqualified OUTF")
+        # Raw ESR-P latch; physical pin feedback/routing remains unmodeled.
+        self.hardware.legacy_port_f = value & 255
