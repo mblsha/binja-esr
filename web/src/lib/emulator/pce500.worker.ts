@@ -1,6 +1,17 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { ozBatteryIdentity } from './oz_battery_store';
-import { capturePvSession, pvBatteryIdentity, type PvAssets } from './pvf1_session';
+import { capturePvSession, pvBatteryIdentity, encodePvSession, decodePvSession, type PvAssets } from './pvf1_session';
+import {
+	SessionRecorder,
+	decodeRecordedSession,
+	encodeRecordedSession,
+	replayRecordedSession,
+	sessionPbm,
+	sessionHash,
+	type SessionContext,
+	type DeliveredInput,
+	type SessionModel,
+} from './session_recording';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 import { ExecutionCancelled, stepBounded } from './bounded_step';
@@ -35,6 +46,8 @@ type DebugOptions = {
 };
 
 type WorkerRequest =
+	| { id: number; type: 'record_start' | 'record_checkpoint' | 'record_end' | 'record_discard'; generation: number }
+	| { id: number; type: 'session_replay'; bytes: Uint8Array; generation: number }
 	| {
 			id: number;
 			type: 'pv_lcd';
@@ -65,6 +78,7 @@ type WorkerRequest =
 			pvRamCardWritable?: boolean;
 	  }
 	| { id: number; type: 'pv_recognizer'; bytes: Uint8Array; generation: number }
+	| { id: number; type: 'pv_state' }
 	| { id: number; type: 'pv_retained_export'; generation: number }
 	| { id: number; type: 'pv_session_export'; generation: number }
 	| { id: number; type: 'pv_battery_identity'; bytes: Uint8Array }
@@ -155,6 +169,7 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	recording: ReturnType<SessionRecorder['status']> | null;
 	paste: ReturnType<HostInputs['pasteStatus']>;
 	inputContacts: { matrix: number[]; on: boolean };
 	typing: ReturnType<HostInputs['typingStatus']>;
@@ -200,6 +215,60 @@ let buildInfo: { version: string; git_commit: string; build_timestamp: string } 
 let romModel: RomModel = 'pc-e500';
 let machineGeneration = 0;
 let pvAssets: PvAssets = { cardRom: new Uint8Array(), handwritingModel: new Uint8Array(), ramCardWritable: true };
+let sessionRecorder: SessionRecorder | null = null;
+let currentBundle = new Uint8Array();
+let currentOzProfile: OzProfile = 'strict';
+let coreIdentity: Promise<string> | null = null;
+async function recordingCoreIdentity() {
+	return (coreIdentity ??= (async () => {
+		const response = await fetch(new URL('../wasm/pce500_wasm/pce500_wasm_bg.wasm', import.meta.url));
+		if (!response.ok) throw new Error('Cannot identify loaded emulator core');
+		return 'wasm-sha256:' + (await sessionHash(new Uint8Array(await response.arrayBuffer())));
+	})());
+}
+function recordingFrame() {
+	return sessionPbm(romModel as SessionModel, emulator.lcd_pixels());
+}
+function deliverSessionInput(event: DeliveredInput) {
+	if (event.kind === 'matrix') applyContact(emulator, event.code, event.pressed);
+	else if (event.kind === 'on') applyContact(emulator, 'on', event.pressed);
+	else if (romModel === 'pv-f1') emulator.set_pvf1_tablet_contact(event.raw_x, event.raw_y, event.pressed);
+	else emulator.set_oz9600_tablet_contact(event.raw_x, event.raw_y, event.pressed);
+}
+async function installSessionBacking(context: SessionContext, initial: Uint8Array) {
+	if (context.model !== romModel || context.firmwareSha256 !== (await sessionHash(currentBundle)))
+		throw new Error('Load the recording’s matching organizer firmware first');
+	if (context.coreIdentity !== (await recordingCoreIdentity()))
+		throw new Error('Recording requires its matching emulator build');
+	if (context.model === 'pv-f1') {
+		const media = await decodePvSession(initial);
+		if (media.ramCard.length)
+			emulator.load_pvf1_with_ram_card(
+				currentBundle,
+				media.retained,
+				media.handwritingModel,
+				media.ramCard,
+				media.ramCardWritable,
+			);
+		else emulator.load_pvf1(currentBundle, media.retained, media.handwritingModel, media.cardRom, media.cardSram);
+		pvAssets = {
+			cardRom: media.cardRom,
+			handwritingModel: media.handwritingModel,
+			ramCardWritable: media.ramCardWritable,
+		};
+	} else {
+		emulator.load_oz9600(currentBundle, initial, context.profile);
+		currentOzProfile = context.profile as OzProfile;
+	}
+	inputs.clear();
+	tabletInputs.discard();
+	resetSerial();
+	emulator.set_execution_mode(context.settings.executionMode);
+	soundWanted = context.settings.sound;
+	targetFps = context.settings.targetFps;
+	typingCatchUp = context.settings.typingCatchUp;
+	syncAudio(true);
+}
 
 let running = false;
 let targetFps = 30;
@@ -217,14 +286,21 @@ let runLoopId = 0;
 let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
-const inputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+const inputs = new HostInputs((contact, down) => {
+	applyContact(emulator, contact, down);
+	sessionRecorder?.input(
+		contact === 'on' ? { kind: 'on', pressed: down } : { kind: 'matrix', code: contact, pressed: down },
+	);
+});
 const tabletInputs = new TabletInputs(
-	(c) =>
+	(c) => {
 		romModel === 'pv-f1'
 			? emulator.set_pvf1_tablet_contact(c.raw_x, c.raw_y, c.pressed)
 			: romModel === 'pi-3000'
 				? emulator.set_pi3000_tablet_contact(c.raw_x, c.raw_y, c.pressed)
-				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed),
+				: emulator.set_oz9600_tablet_contact(c.raw_x, c.raw_y, c.pressed);
+		sessionRecorder?.input({ kind: 'tablet', ...c });
+	},
 	() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 	() => (romModel === 'pv-f1' ? 50_000 : 0),
 	() => (romModel === 'pv-f1' ? 20_000 : 0),
@@ -232,6 +308,7 @@ const tabletInputs = new TabletInputs(
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
 	advance: (n: number) => {
+		sessionRecorder?.advance(n);
 		inputs.advance(n);
 		tabletInputs.advance(n);
 	},
@@ -651,6 +728,7 @@ function captureFrame(forceText: boolean, forceDisplay = false): Frame {
 
 	const kb = snapshotKeyboard();
 	return {
+		recording: sessionRecorder?.status() ?? null,
 		lcdPixels: pixels?.buffer as ArrayBuffer | undefined,
 		paste: inputs.pasteStatus(),
 		inputContacts: emulator.input_contacts(),
@@ -734,7 +812,121 @@ function pumpRender(id: number) {
 
 async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 	try {
+		if (
+			sessionRecorder &&
+			[
+				'load_rom',
+				'eval_js',
+				'pv_recognizer',
+				'pv_reset',
+				'pv_retained_restore',
+				'oz_reset',
+				'oz_retained_restore',
+				'oz_replay',
+				'set_execution_mode',
+				'serial_send',
+				'session_replay',
+			].includes(msg.type)
+		)
+			throw new Error(
+				'Finish or discard the recording before changing machine state or supplying external serial input',
+			);
 		switch (msg.type) {
+			case 'record_start': {
+				if (msg.generation !== machineGeneration || !['pv-f1', 'oz-9600'].includes(romModel))
+					throw new Error('Recording requires the current PV-F1 or OZ-9600');
+				if (sessionRecorder) throw new Error('Finish or discard the current recording first');
+				ozReplayActive = true;
+				try {
+					inputs.clear();
+					tabletInputs.clear();
+					releaseScriptInputs();
+					const initial =
+						romModel === 'pv-f1'
+							? await encodePvSession(capturePvSession(emulator, pvAssets))
+							: Uint8Array.from(emulator.export_oz9600_retained());
+					const context: SessionContext = {
+						model: romModel as SessionModel,
+						profile: romModel === 'pv-f1' ? 'firmware' : currentOzProfile,
+						firmwareSha256: await sessionHash(currentBundle),
+						coreIdentity: await recordingCoreIdentity(),
+						settings: { executionMode: emulator.execution_mode(), typingCatchUp, targetFps, sound: soundWanted },
+					};
+					if (signal?.aborted) throw new ExecutionCancelled(0);
+					await installSessionBacking(context, initial);
+					sessionRecorder = new SessionRecorder(context, initial);
+					await sessionRecorder.checkpoint(recordingFrame());
+					requestFrame(true, true);
+					replyOk(msg.id, sessionRecorder.status());
+				} finally {
+					ozReplayActive = false;
+				}
+				return;
+			}
+			case 'record_checkpoint': {
+				if (msg.generation !== machineGeneration || !sessionRecorder) throw new Error('No current recording');
+				const recorder = sessionRecorder;
+				await recorder.checkpoint(recordingFrame());
+				replyOk(msg.id, recorder.status());
+				return;
+			}
+			case 'record_end': {
+				if (msg.generation !== machineGeneration || !sessionRecorder) throw new Error('No current recording');
+				const recorder = sessionRecorder;
+				ozReplayActive = true;
+				try {
+					inputs.clear();
+					tabletInputs.clear();
+					await recorder.checkpoint(recordingFrame());
+					const recording = await recorder.finish();
+					const bytes = await encodeRecordedSession(recording);
+					sessionRecorder = null;
+					requestFrame(true, true);
+					replyOk(msg.id, { bytes, boundaries: recording.duration, events: recording.events.length });
+				} finally {
+					ozReplayActive = false;
+				}
+				return;
+			}
+			case 'record_discard': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale recording generation');
+				if (ozReplayActive) throw new Error('Wait for recording setup/export to finish');
+				sessionRecorder = null;
+				requestFrame(true);
+				replyOk(msg.id);
+				return;
+			}
+			case 'session_replay': {
+				if (msg.generation !== machineGeneration) throw new Error('Stale replay generation');
+				const recording = await decodeRecordedSession(msg.bytes);
+				ozReplayActive = true;
+				try {
+					if (signal?.aborted) throw new ExecutionCancelled(0);
+					await installSessionBacking(recording.context, recording.initial);
+					let result: object;
+					try {
+						result = {
+							status: 'verified',
+							...(await replayRecordedSession(
+								{ run_slice: (n, ms) => emulator.run_slice(n, ms), input: deliverSessionInput, frame: recordingFrame },
+								recording,
+								{ signal, onProgress: pumpSerial },
+							)),
+						};
+					} catch (error) {
+						result = { status: signal?.aborted ? 'cancelled' : 'mismatch', error: String(error) };
+					}
+					requestFrame(true, true);
+					replyOk(msg.id, {
+						...result,
+						context: recording.context,
+						pvAssets: romModel === 'pv-f1' ? capturePvSession(emulator, pvAssets) : null,
+					});
+				} finally {
+					ozReplayActive = false;
+				}
+				return;
+			}
 			case 'serial_send': {
 				if (msg.generation !== machineGeneration) throw new Error('Stale serial generation');
 				if (operations.busy) throw new Error('Wait for the current replay or step to finish before sending');
@@ -836,6 +1028,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					emu.load_rom_with_model(msg.bytes, model);
 				}
 				romModel = model;
+				currentBundle = msg.bytes.slice();
+				currentOzProfile = msg.ozProfile ?? 'strict';
 				pvAssets = {
 					cardRom: msg.pvCardRom?.slice() ?? new Uint8Array(),
 					handwritingModel: msg.pvHandwritingModel?.slice() ?? new Uint8Array(),
@@ -943,6 +1137,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 			case 'oz_state': {
 				await ensureEmulator();
 				replyOk(msg.id, emulator.oz9600_state());
+				return;
+			}
+			case 'pv_state': {
+				if (!emulator?.has_rom() || romModel !== 'pv-f1') throw new Error('Requires loaded PV-F1');
+				replyOk(msg.id, emulator.pvf1_state());
 				return;
 			}
 			case 'pi_state': {
@@ -1204,7 +1403,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					down: msg.down,
 					cancel: msg.cancel,
 					minimumHold: msg.type === 'virtual_key' ? (msg.minimumHold ?? 40_000) : 0,
-					buffered: msg.type === 'physical_key' && (msg.buffered ?? false),
+					minimumGap: romModel === 'pv-f1' && msg.type === 'virtual_key' ? 50_000 : undefined,
+					buffered: (msg.type === 'physical_key' || romModel === 'pv-f1') && (msg.buffered ?? false),
 				});
 				(self as any).postMessage({
 					type: 'input_status',
@@ -1297,6 +1497,9 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'oz_reset',
 			'pa_reset',
 			'oz_replay',
+			'record_start',
+			'record_end',
+			'session_replay',
 		].includes(msg.type)
 	) {
 		try {

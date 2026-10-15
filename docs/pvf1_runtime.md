@@ -1,5 +1,8 @@
 # PV-F1 runtime checkpoint
 
+For browser record/export/replay controls and their scope, see
+[Organizer session recording](organizer_sessions.md).
+
 The shared Rust factory accepts `DeviceModel::PvF1` when built with the `pvf1`
 feature. It loads a verified `PVROM01\0` bundle and runs the acquired firmware
 with fresh RAM. The bounded scheduler coordinates native ESR-L execution and

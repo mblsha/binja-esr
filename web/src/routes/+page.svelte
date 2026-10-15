@@ -160,6 +160,12 @@
 	let pvRamCardName = '';
 	let pvRamCardWritable = true;
 	let pvRamCardRequested = false;
+	let sessionRecording = false;
+	let sessionBusy = false;
+	let sessionStatus = '';
+	let sessionError = '';
+	let sessionProgress: { boundaries: number; events: number; error: string | null } | null = null;
+	let sessionStepBudget = 1_000_000;
 	let running = false;
 	let soundEnabled = false;
 	let soundBusy = false;
@@ -364,6 +370,7 @@
 		if (frame.typing) typingStatus = frame.typing;
 		if (frame.paste) pasteStatus = frame.paste;
 		if (frame?.model && frame.model !== romModel) return;
+		if (frame.recording && sessionRecording) sessionProgress = frame.recording;
 		try {
 			if (frame?.lcdPixels instanceof ArrayBuffer) {
 				lcdPixels = new Uint8Array(frame.lcdPixels);
@@ -418,7 +425,8 @@
 		if (!workerRequests) return Promise.reject(new Error('worker not ready'));
 		const id = workerNextId++;
 		const message = { id, type, ...payload };
-		const timeoutMs = type === 'stop' ? 1_000 : type === 'eval_js' || type === 'oz_replay' ? 300_000 : 30_000;
+		const timeoutMs =
+			type === 'stop' ? 1_000 : ['eval_js', 'oz_replay', 'session_replay'].includes(type) ? 300_000 : 30_000;
 		return workerRequests.request<T>(message, transfer, timeoutMs);
 	}
 
@@ -426,6 +434,9 @@
 		audioPlayback.pause();
 		lastError = `${message}. Use Reset machine to replace the worker; unsaved emulator state will be lost.`;
 		workerHealth = 'faulted';
+		if (sessionRecording) sessionError = 'Recording lost when the worker failed; recover the last automatic save.';
+		sessionRecording = false;
+		sessionProgress = null;
 		running = false;
 		romLoaded = false;
 		workerRequests?.fail(new Error(message));
@@ -703,8 +714,13 @@
 		holdOverride?: number,
 	) {
 		const generation = romLoadGeneration;
-		const minimumHold = holdOverride ?? (source === 'virtual' && assistedTaps ? 40_000 : 0);
-		const buffered = source === 'physical' && hostKeyboardMode === 'symbols' && code !== 'on';
+		const minimumHold =
+			holdOverride ??
+			(source === 'virtual' && assistedTaps ? (romModel === 'pv-f1' && code !== 'on' ? 200_000 : 40_000) : 0);
+		const buffered =
+			code !== 'on' &&
+			((source === 'physical' && hostKeyboardMode === 'symbols') ||
+				(source === 'virtual' && romModel === 'pv-f1' && assistedTaps));
 		const label = code === 'on' ? 'ON' : hex(code, 2);
 		if (down && (!romLoaded || workerHealth !== 'ready')) return;
 		if (down && pasteStatus.pending && code !== 'on') {
@@ -725,7 +741,16 @@
 		} else if (emulator) {
 			try {
 				if (code === 'on' && down) fallbackInputs.clearTyping();
-				fallbackInputs.set({ source, owner, contact: code, down, cancel, minimumHold, buffered });
+				fallbackInputs.set({
+					source,
+					owner,
+					contact: code,
+					down,
+					cancel,
+					minimumHold,
+					minimumGap: romModel === 'pv-f1' && source === 'virtual' ? 50_000 : undefined,
+					buffered,
+				});
 				recordAck();
 			} catch (error) {
 				lastError = `Input failed: ${String(error)}`;
@@ -2098,6 +2123,11 @@
 		await battery?.close();
 		const generation = ++romLoadGeneration;
 		workerRequests?.fail(new Error('Machine reset by user'));
+		sessionRecording = false;
+		sessionProgress = null;
+		sessionBusy = false;
+		sessionStatus = '';
+		sessionError = '';
 		audioPlayback.pause();
 		worker?.terminate();
 		worker = null;
@@ -2164,6 +2194,128 @@
 			pvBackupStatus = 'Backup saved';
 		} catch (error) {
 			pvBackupError = String(error);
+		}
+	}
+	async function beginSessionRecording() {
+		if (!worker || sessionBusy || sessionRecording || !romLoaded || !(await stop())) return;
+		sessionBusy = true;
+		loadingRom = true;
+		sessionError = '';
+		releaseAllPhysicalHeldCodes();
+		releaseInputSource('virtual');
+		try {
+			sessionProgress = await workerCall('record_start', { generation: romLoadGeneration });
+			sessionRecording = true;
+			sessionStatus = 'Recording from a fresh restart; Resume or Step to use the organizer';
+		} catch (error) {
+			sessionError = String(error);
+		} finally {
+			sessionBusy = false;
+			loadingRom = false;
+		}
+	}
+	async function checkpointSession() {
+		if (!worker || sessionBusy || !sessionRecording) return;
+		sessionBusy = true;
+		try {
+			sessionProgress = await workerCall('record_checkpoint', { generation: romLoadGeneration });
+			sessionStatus = 'Screen checkpoint added';
+		} catch (error) {
+			sessionError = String(error);
+		} finally {
+			sessionBusy = false;
+		}
+	}
+	async function finishSessionRecording() {
+		if (!worker || sessionBusy || !sessionRecording || !(await stop())) return;
+		sessionBusy = true;
+		loadingRom = true;
+		releaseAllPhysicalHeldCodes();
+		releaseInputSource('virtual');
+		try {
+			const result = await workerCall('record_end', { generation: romLoadGeneration });
+			downloadBlob(
+				new Blob([Uint8Array.from(result.bytes)], { type: 'application/octet-stream' }),
+				`${romModel}.orgsession`,
+			);
+			sessionRecording = false;
+			sessionProgress = null;
+			sessionStatus = `Recording exported: ${result.events} events, ${result.boundaries} boundaries`;
+		} catch (error) {
+			sessionError = String(error);
+		} finally {
+			sessionBusy = false;
+			loadingRom = false;
+		}
+	}
+	async function discardSessionRecording() {
+		if (!worker || sessionBusy || !sessionRecording) return;
+		try {
+			await workerCall('record_discard', { generation: romLoadGeneration });
+			sessionRecording = false;
+			sessionProgress = null;
+			sessionError = '';
+			sessionStatus = 'Recording discarded';
+		} catch (error) {
+			sessionError = String(error);
+		}
+	}
+	async function replaySessionFile(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file || !worker || sessionBusy || sessionRecording || !romLoaded || !(await stop())) return;
+		sessionBusy = true;
+		functionRunnerBusy = true;
+		sessionError = '';
+		sessionStatus = 'Checking and replaying session…';
+		releaseAllPhysicalHeldCodes();
+		releaseInputSource('virtual');
+		try {
+			if (file.size > 80 * 1024 * 1024) throw new Error('Recording file exceeds size limit');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			const result = await workerCall('session_replay', { bytes, generation: romLoadGeneration }, [bytes.buffer]);
+			const context = result.context;
+			executionMode = context.settings.executionMode;
+			typingCatchUp = context.settings.typingCatchUp;
+			targetFps = context.settings.targetFps;
+			soundEnabled = context.settings.sound;
+			if (result.pvAssets) {
+				const a = result.pvAssets;
+				pvActiveAssets = {
+					cardRom: Uint8Array.from(a.cardRom),
+					handwritingModel: Uint8Array.from(a.handwritingModel),
+					ramCardWritable: a.ramCardWritable,
+				};
+				pvCardRom = Uint8Array.from(a.cardRom);
+				pvCardSram = Uint8Array.from(a.cardSram);
+				pvRamCard = Uint8Array.from(a.ramCard);
+				pvRamCardRequested = !!a.ramCard.length;
+				pvRamCardWritable = a.ramCardWritable;
+				pvHandwritingModel = Uint8Array.from(a.handwritingModel);
+				pvCardNames = {
+					rom: a.cardRom.length ? 'Recorded program card' : '',
+					sram: a.cardSram.length ? 'Recorded SRAM' : '',
+				};
+				pvRamCardName = a.ramCard.length ? 'Recorded memory card' : '';
+				pvHandwritingName = a.handwritingModel.length ? 'Recorded recognition model' : '';
+			} else {
+				ozLoadedProfile = context.profile;
+				ozProfile = context.profile;
+			}
+			sessionStatus =
+				result.status === 'verified'
+					? `Replay verified: ${result.checkpoints} screen checkpoints, ${result.boundaries} boundaries`
+					: `Replay ${result.status}; organizer paused`;
+			if (result.error) sessionError = result.error;
+			await saveBattery(true);
+		} catch (error) {
+			sessionError = String(error);
+			sessionStatus = 'Replay did not complete';
+		} finally {
+			sessionBusy = false;
+			functionRunnerBusy = false;
+			running = false;
 		}
 	}
 	async function importPvBackup(event: Event) {
@@ -2427,6 +2579,8 @@
 		}
 		if (
 			event.defaultPrevented ||
+			loadingRom ||
+			(sessionBusy && functionRunnerBusy) ||
 			!romLoaded ||
 			workerHealth !== 'ready' ||
 			event.isComposing ||
@@ -2582,7 +2736,7 @@
 		<h1>{romModel.toUpperCase()}</h1>
 		<div class="toolbar-actions">
 			<button
-				disabled={!romLoaded || workerHealth !== 'ready'}
+				disabled={!romLoaded || loadingRom || workerHealth !== 'ready' || functionRunnerBusy}
 				on:click={() => {
 					setContact('virtual', 'on', true, 'toolbar-on', false, 40_000);
 					setContact('virtual', 'on', false, 'toolbar-on', false, 40_000);
@@ -2939,6 +3093,77 @@
 			</p>
 		</section>
 	{/if}
+	{#if ['pv-f1', 'oz-9600'].includes(romModel)}
+		<details class="serial-panel" data-testid="session-panel">
+			<summary>Session recording and replay</summary>
+			<p class="hint">
+				Recording restarts with current saved backing and card configuration. Use the organizer normally, add screen
+				checkpoints, then export. Replay restarts with the recorded backing and checks those screens. Finish releases
+				held inputs. Pause stops a replay.
+			</p>
+			<button
+				data-testid="session-record-start"
+				on:click={beginSessionRecording}
+				disabled={!worker ||
+					!romLoaded ||
+					sessionBusy ||
+					sessionRecording ||
+					loadingRom ||
+					functionRunnerBusy ||
+					stepBusy}>Restart and record</button
+			>
+			<button data-testid="session-checkpoint" on:click={checkpointSession} disabled={!sessionRecording || sessionBusy}
+				>Add screen checkpoint</button
+			>
+			<button
+				data-testid="session-record-end"
+				on:click={finishSessionRecording}
+				disabled={!sessionRecording || sessionBusy}>Finish and export recording</button
+			>
+			<button
+				data-testid="session-record-discard"
+				on:click={discardSessionRecording}
+				disabled={!sessionRecording || sessionBusy}>Discard recording</button
+			>
+			<label
+				>Replay recording <input
+					type="file"
+					accept=".orgsession"
+					data-testid="session-replay-file"
+					on:change={replaySessionFile}
+					disabled={!worker || !romLoaded || sessionRecording || sessionBusy || loadingRom}
+				/></label
+			>
+			<label
+				>Paused step budget <input
+					type="number"
+					min="1"
+					max="10000000"
+					bind:value={sessionStepBudget}
+					data-testid="session-step-budget"
+				/></label
+			>
+			<button
+				data-testid="session-step"
+				on:click={() => stepOnce(sessionStepBudget)}
+				disabled={!romLoaded ||
+					running ||
+					sessionBusy ||
+					stepBusy ||
+					functionRunnerBusy ||
+					!Number.isInteger(sessionStepBudget) ||
+					sessionStepBudget < 1 ||
+					sessionStepBudget > 10000000}>Advance paused organizer</button
+			>
+			<p role="status" data-testid="session-status">{sessionStatus}</p>
+			{#if sessionProgress}<p data-testid="session-progress">
+					{sessionProgress.events} events · {sessionProgress.boundaries} boundaries
+				</p>{/if}
+			{#if sessionError || sessionProgress?.error}<p role="alert" data-testid="session-error">
+					{sessionError || sessionProgress?.error}
+				</p>{/if}
+		</details>
+	{/if}
 	{#if supportsSerial(romModel)}
 		<details class="serial-panel" data-testid="serial-panel">
 			<summary>Serial</summary>
@@ -3017,7 +3242,7 @@
 		{:else}
 			<DeviceShell
 				model={romModel}
-				disabled={!romLoaded || workerHealth !== 'ready' || functionRunnerBusy}
+				disabled={!romLoaded || loadingRom || workerHealth !== 'ready' || functionRunnerBusy}
 				onTablet={tabletContact}
 				onLcdTablet={lcdTabletContact}
 				{hostKeyboardMode}
