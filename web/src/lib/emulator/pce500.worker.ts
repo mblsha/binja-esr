@@ -1,5 +1,6 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { ozBatteryIdentity } from './oz_battery_store';
+import { capturePvSession, pvBatteryIdentity, type PvAssets } from './pvf1_session';
 import { normalizeLcdKind, type LcdKind } from '../lcd_kind';
 import { PCE500_KEY_FIFO_CAPACITY, resolvePce500KeyboardFifo } from './pce500_iocs_workspace';
 import { ExecutionCancelled, stepBounded } from './bounded_step';
@@ -66,6 +67,8 @@ type WorkerRequest =
 	  }
 	| { id: number; type: 'pv_recognizer'; bytes: Uint8Array; generation: number }
 	| { id: number; type: 'pv_retained_export'; generation: number }
+	| { id: number; type: 'pv_session_export'; generation: number }
+	| { id: number; type: 'pv_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'pv_card_export'; generation: number }
 	| { id: number; type: 'pv_ram_card_export'; generation: number }
 	| { id: number; type: 'pv_reset'; model: Uint8Array; generation: number; nextGeneration: number }
@@ -199,6 +202,7 @@ const operations = new WorkerOperations();
 let buildInfo: { version: string; git_commit: string; build_timestamp: string } | null = null;
 let romModel: RomModel = 'pc-e500';
 let machineGeneration = 0;
+let pvAssets: PvAssets = { cardRom: new Uint8Array(), handwritingModel: new Uint8Array(), ramCardWritable: true };
 
 let running = false;
 let targetFps = 30;
@@ -844,6 +848,11 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					emu.load_rom_with_model(msg.bytes, model);
 				}
 				romModel = model;
+				pvAssets = {
+					cardRom: msg.pvCardRom?.slice() ?? new Uint8Array(),
+					handwritingModel: msg.pvHandwritingModel?.slice() ?? new Uint8Array(),
+					ramCardWritable: msg.pvRamCardWritable !== false,
+				};
 				perfettoSymbolsPromise = null;
 				releaseScriptInputs();
 				inputs.clear();
@@ -866,7 +875,22 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration) throw new Error('Stale PV-F1 model generation');
 				if (romModel !== 'pv-f1' || !emulator?.has_rom()) throw new Error('Requires loaded PV-F1');
 				emulator.configure_pvf1_recognizer(msg.bytes);
+				pvAssets.handwritingModel = msg.bytes.slice();
 				replyOk(msg.id);
+				return;
+			}
+			case 'pv_battery_identity': {
+				await ensureEmulator();
+				replyOk(
+					msg.id,
+					pvBatteryIdentity(() => new wasm.Sc62015Emulator(), msg.bytes),
+				);
+				return;
+			}
+			case 'pv_session_export': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
+					throw new Error('Requires idle current PV-F1 generation');
+				replyOk(msg.id, capturePvSession(emulator, pvAssets));
 				return;
 			}
 			case 'pv_retained_export': {
@@ -891,6 +915,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
 					throw new Error('Stale PV-F1 reset generation');
 				emulator.reset_pvf1(msg.model);
+				pvAssets.handwritingModel = msg.model.slice();
 				machineGeneration = msg.nextGeneration;
 				inputs.clear();
 				tabletInputs.discard();
@@ -903,6 +928,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
 					throw new Error('Stale PV-F1 backup generation');
 				emulator.restore_pvf1_retained(msg.bytes, msg.model);
+				pvAssets.handwritingModel = msg.model.slice();
 				machineGeneration = msg.nextGeneration;
 				inputs.clear();
 				tabletInputs.discard();
