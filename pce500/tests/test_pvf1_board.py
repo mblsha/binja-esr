@@ -7,6 +7,20 @@ from pce500.pvf1.compatibility import entered_legacy
 from pce500.pvf1.hardware import Hardware
 
 
+def test_low_bus_is_unbacked_and_workspace_shares_live_top_ram():
+    board = Hardware({}, "firmware")
+    for address in (0x402, 0x60E8, 0xC1CA, 0xF800):
+        board.write(address, 9)
+        assert board.read_mutated(address) == 0xE0
+    for offset in (0, 0x22AC, 0xFFFF):
+        board.write(0x10000 + offset, 0x5A)
+        assert board.peek(0xB0000 + offset) == 0x5A
+        board.write(0xB0000 + offset, 0xA5)
+        assert board.peek(0x10000 + offset) == 0xA5
+    assert board.peek(0x8B18) is None and board.peek(0x8B19) is None
+    assert board.fault is None
+
+
 def test_rtc_a2_candidate_latches_through_the_native_gate_and_not_guest_ram():
     board = Hardware({}, "control-candidate")
     board.configure_rtc_half_second_candidate(4)
@@ -300,7 +314,7 @@ def test_gate_read_aliases_use_live_selector_expansion_and_latches():
             assert board.read_mutated(base + offset) == expected
     board.write(0x402F, 0x5A)
     assert board.peek(0x40AF) == 0x5A
-    assert board.peek(0x4FFF) == 0 and board.peek(0x5000) is None
+    assert board.peek(0x4FFF) == 0 and board.peek(0x5000) == 0xE0
     with pytest.raises(ValueError, match="write 04061"):
         board.write(0x4061, 7)
     assert board.selector == 0xFE and "write 04061" in board.fault

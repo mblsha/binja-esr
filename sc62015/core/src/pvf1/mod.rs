@@ -40,7 +40,10 @@ pub struct Hardware {
     rtc_clock: rtc_clock::HalfSecondClock,
     calendar_clock: rtc_clock::CalendarClock,
     pub ram: Vec<u8>,
+    // Retained-format compatibility only; low bus reads do not use these bytes.
     pub scratch: Vec<u8>,
+    // Raw ESR-P output latch; no physical pin routing is asserted here.
+    pub legacy_port_f: u8,
     pub gpio: [u8; 18],
     pub audio: crate::digital_audio::AudioCapture,
     pub banks: BTreeMap<u8, Vec<u8>>,
@@ -102,6 +105,7 @@ impl Hardware {
                 clock
             },
             scratch: vec![0; 0x4000],
+            legacy_port_f: 0,
             gpio: [0; 18],
             audio: crate::digital_audio::AudioCapture::with_policy(
                 crate::digital_audio::AudioModePolicy::PvF1Firmware,
@@ -156,7 +160,6 @@ impl Hardware {
             a
         };
         match a {
-            0..=0x3fff => Some(self.scratch[a as usize]),
             0x4021 => Some(self.selector),
             // F2CDA/F2CFA write a packed column and read the little-endian
             // sixteen-bit result. Each input pixel becomes two adjacent bits.
@@ -188,6 +191,10 @@ impl Hardware {
             }
             0x20000..=0x7ffff if self.expansion_absent => Some(255),
             0x80000..=0xbffff => Some(self.ram[(a - 0x80000) as usize]),
+            // Independent PV acquisition: 65487/65536 bytes match B0000.
+            // Share live backing rather than replay captured workspace bytes.
+            0x10000..=0x1ffff => Some(self.ram[(a - 0x10000 + 0x30000) as usize]),
+            _ if low_open_bus(a) => Some(0xe0),
             _ => None,
         }
     }
@@ -218,7 +225,6 @@ impl Hardware {
     }
     fn write(&mut self, a: u32, v: u8, pc: Option<u32>) {
         match a {
-            0..=0x3fff => self.scratch[a as usize] = v,
             0x4021 => self.selector = v,
             0x401e => {
                 self.gate[0x1e] = v;
@@ -272,6 +278,8 @@ impl Hardware {
             0x20000..=0x7ffff if self.card.is_some() => self.card.as_mut().unwrap().write(a, v),
             0x20000..=0x7ffff if self.expansion_absent => {}
             0x80000..=0xbffff => self.ram[(a - 0x80000) as usize] = v,
+            0x10000..=0x1ffff => self.ram[(a - 0x10000 + 0x30000) as usize] = v,
+            _ if low_open_bus(a) => {}
             _ => {
                 self.fault.get_or_insert_with(|| {
                     format!("unresolved PV-F1 write {a:05X}={v:02X}, PC {pc:?}")
@@ -281,6 +289,14 @@ impl Hardware {
     }
 }
 pub type SharedHardware = Arc<Mutex<Hardware>>;
+
+// These non-device spans read uniformly E0 in the PV-F1 full acquisition.
+// They have no modeled writable backing. Keep unknown peripheral ports strict.
+// In particular, a formatted-field size argument must not persist in invented
+// RAM at 00402 and truncate the next, longer native editor extraction.
+fn low_open_bus(address: u32) -> bool {
+    matches!(address, 0..=0x3fff | 0x5000..=0x7fff | 0x9000..=0xefff | 0xf200..=0xffff)
+}
 pub fn sync_bank(hardware: &SharedHardware, memory: &mut crate::MemoryImage) -> Result<(), String> {
     let mut h = hardware.lock().unwrap();
     if h.mapped == Some(h.selector) {
@@ -855,6 +871,24 @@ fn add_bus_view(rt: &mut CoreRuntime, hardware: &SharedHardware, start: u32, end
 #[cfg(test)]
 mod ram_card_tests {
     use super::*;
+
+    #[test]
+    fn low_bus_is_unbacked_and_workspace_shares_live_top_ram() {
+        let mut h = Hardware::new(BTreeMap::new(), BootstrapProfile::Firmware);
+        for address in [0x402, 0x60e8, 0xc1ca, 0xf800] {
+            h.write(address, 9, None);
+            assert_eq!(h.read(address, None), 0xe0);
+        }
+        for offset in [0, 0x22ac, 0xffff] {
+            h.write(0x10000 + offset, 0x5a, None);
+            assert_eq!(h.peek(0xb0000 + offset), Some(0x5a));
+            h.write(0xb0000 + offset, 0xa5, None);
+            assert_eq!(h.peek(0x10000 + offset), Some(0xa5));
+        }
+        assert_eq!(h.peek(0x8b18), None);
+        assert_eq!(h.peek(0x8b19), None);
+        assert!(h.fault.is_none());
+    }
 
     #[test]
     fn absent_cd_input_is_firmware_only_and_not_gpio_output_feedback() {

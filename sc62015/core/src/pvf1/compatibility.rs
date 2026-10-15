@@ -179,9 +179,10 @@ impl StartupBus for Bus<'_> {
         Ok(())
     }
     fn outf(&mut self, value: u8) -> Result<(), String> {
-        if value != 0 {
-            return Err(format!("unqualified PV-F1 legacy OUTF {value:02X}"));
-        }
+        // Cold firmware restores IRAM before its first legacy entry; OUTF can
+        // inherit E0 from the unmapped native view. Preserve the byte as a raw
+        // output latch, without inventing pin feedback or rejecting the write.
+        self.0.lock().unwrap().legacy_port_f = value;
         Ok(())
     }
 }
