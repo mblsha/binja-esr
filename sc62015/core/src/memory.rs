@@ -300,6 +300,19 @@ impl Default for MemoryImage {
 }
 
 impl MemoryImage {
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_capture(&self) -> Result<()> {
+        if self.dirty_tracking
+            || self.overlay_logging
+            || self.write_capture.is_some()
+            || self.rollback_capture.is_some()
+        {
+            return Err(CoreError::InvalidSnapshot(
+                "live state cannot represent active memory diagnostics".into(),
+            ));
+        }
+        Ok(())
+    }
     fn default_internal() -> [u8; INTERNAL_SPACE] {
         [0u8; INTERNAL_SPACE]
     }

@@ -8,7 +8,7 @@ pub const TIMEBASE_HZ: u64 = 1_024_000;
 pub const QUEUE_CAPACITY: usize = SAMPLE_RATE as usize * 2;
 const HIGH_LEVEL: i64 = 8192;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AudioModePolicy {
     #[default]
     ProvisionalClocked,

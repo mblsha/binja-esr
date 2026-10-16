@@ -16,6 +16,7 @@ pub mod auxiliary;
 pub mod bundle;
 pub mod compatibility;
 mod lcd_view;
+pub mod live_state;
 pub mod retained;
 mod rtc_clock;
 pub(crate) use rtc_clock::alarm_wake_level;
@@ -31,8 +32,10 @@ pub enum BootstrapProfile {
     ControlCandidate,
     Firmware,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Hardware {
     pub selector: u8,
+    #[serde(with = "crate::state_codec::array")]
     pub gate: [u8; 64],
     pixel_expansion: u16,
     pub lcd: LcdController,
@@ -46,6 +49,7 @@ pub struct Hardware {
     pub legacy_port_f: u8,
     pub gpio: [u8; 18],
     pub audio: crate::digital_audio::AudioCapture,
+    #[serde(skip)]
     pub banks: BTreeMap<u8, Vec<u8>>,
     pub cycle: u64,
     pub fault: Option<String>,
@@ -313,6 +317,13 @@ pub fn sync_bank(hardware: &SharedHardware, memory: &mut crate::MemoryImage) -> 
 }
 struct Boundary(SharedHardware, Option<u64>, u64, u8, bool);
 impl BoundaryDevice for Boundary {
+    fn save_live_state(&self) -> crate::Result<Vec<u8>> {
+        serde_json::to_vec(&(self.1, self.2, self.3, self.4)).map_err(CoreError::from)
+    }
+    fn restore_live_state(&mut self, bytes: &[u8]) -> crate::Result<()> {
+        (self.1, self.2, self.3, self.4) = serde_json::from_slice(bytes)?;
+        Ok(())
+    }
     fn before_boundary(&mut self, c: &mut BoundaryContext<'_>) -> crate::Result<Option<bool>> {
         sync_bank(&self.0, c.memory).map_err(CoreError::Other)?;
         self.2 = c.elapsed_timing_units;
@@ -491,6 +502,11 @@ pub fn configure(
     Ok((rt, hardware))
 }
 impl CoreRuntime {
+    pub fn pvf1_legacy_active(&self) -> bool {
+        self.pvf1_compatibility
+            .as_ref()
+            .is_some_and(|owner| owner.active)
+    }
     /// Nominal linear128KiB S2 medium at20000..3FFFF, derived from the native
     /// F9BD6 writable probe and F9074 CARDRAM format. Physical aliases/capacity
     /// are not established. The existing SSR.CI wiring candidate is reused.

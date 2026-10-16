@@ -40,9 +40,12 @@ pub struct InterruptSnapshot {
     pub delivered_masks: Vec<u8>,
 }
 
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "oz9600", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TimerContext {
+    /// Last entered boundary of this runtime, for host-side IRQ observations.
+    /// The process-global trace PC may belong to another organizer instance.
+    #[serde(default)]
+    pub(crate) observation_pc: u32,
     pub enabled: bool,
     pub mti_period: u64,
     pub sti_period: u64,
@@ -171,6 +174,16 @@ impl TimerContext {
         Ok(())
     }
 
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        if !self.timer_scale.is_finite()
+            || self.timer_scale <= 0.0
+            || (self.enabled && (self.mti_period == 0 || self.sti_period == 0))
+        {
+            return Err("invalid live timer periods/scale".into());
+        }
+        Ok(())
+    }
     /// Capture interrupt execution state without serialization or dynamic maps.
     pub fn interrupt_snapshot(&self) -> InterruptSnapshot {
         InterruptSnapshot {
@@ -216,6 +229,7 @@ impl TimerContext {
 
     pub fn new(enabled: bool, mti_period: i32, sti_period: i32) -> Self {
         let mut ctx = Self {
+            observation_pc: 0,
             enabled,
             mti_period: mti_period.max(0) as u64,
             sti_period: sti_period.max(0) as u64,
