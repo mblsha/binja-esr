@@ -145,7 +145,7 @@ pub struct LlamaState {
     /// Identifies the contents of `call_stack`: 0 while empty since
     /// construction/reset, otherwise a process-unique value renewed on every
     /// mutation. Lets observers skip re-snapshotting an unchanged stack.
-    #[serde(skip)]
+    #[serde(skip, default = "fresh_call_stack_stamp")]
     call_stack_stamp: u64,
 }
 
@@ -194,6 +194,36 @@ impl LlamaState {
                 .any(|v| ![16, 24].contains(v))
         {
             return Err("Invalid saved CPU state".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        for (name, value) in [
+            (RegName::BA, self.ba),
+            (RegName::I, self.i),
+            (RegName::X, self.x),
+            (RegName::Y, self.y),
+            (RegName::U, self.u),
+            (RegName::S, self.s),
+            (RegName::F, self.f),
+            (RegName::PC, self.pc),
+            (RegName::IMR, self.imr),
+        ] {
+            if value & !mask_for(name) != 0 {
+                return Err(format!("invalid live register {name:?}"));
+            }
+        }
+        if self.temps.iter().any(|v| *v > 0xff_ffff)
+            || self.call_stack.len() > 65536
+            || self.call_page_stack.len() > 65536
+            || self
+                .call_return_widths
+                .iter()
+                .any(|v| ![16, 24].contains(v))
+        {
+            return Err("invalid live temporary/call state".into());
         }
         Ok(())
     }

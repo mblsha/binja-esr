@@ -134,6 +134,77 @@ class BufferedTabletInputs {
 	private gap = 0;
 	private blocked = false;
 	private pendingPoints = 0;
+	checkpoint() {
+		const strokes = this.held ? [this.held, ...this.pending] : this.pending;
+		return structuredClone({
+			strokes,
+			held: this.held !== null,
+			physical: this.physical ? strokes.indexOf(this.physical) : -1,
+			gap: this.gap,
+			blocked: this.blocked,
+			points: this.pendingPoints,
+		});
+	}
+	restoreCheckpoint(input: ReturnType<TabletInputs['checkpoint']>) {
+		const d = structuredClone(input);
+		const fail = () => {
+			throw new Error('Invalid tablet-input checkpoint');
+		};
+		const budget = (n: number) => {
+			if (!Number.isSafeInteger(n) || n < 0 || n > 2_000_000_000) fail();
+		};
+		if (
+			!d ||
+			!Array.isArray(d.strokes) ||
+			d.strokes.length > 128 ||
+			typeof d.held !== 'boolean' ||
+			typeof d.blocked !== 'boolean' ||
+			!Number.isInteger(d.physical) ||
+			d.physical < -1 ||
+			d.physical >= d.strokes.length ||
+			(d.held && !d.strokes.length)
+		)
+			fail();
+		budget(d.gap);
+		budget(d.points);
+		const contact = (p: TabletContact) => {
+			if (
+				!p ||
+				p.pressed !== true ||
+				!Number.isInteger(p.raw_x) ||
+				!Number.isInteger(p.raw_y) ||
+				p.raw_x < 0 ||
+				p.raw_x > 1023 ||
+				p.raw_y < 0 ||
+				p.raw_y > 1023
+			)
+				fail();
+		};
+		let points = 0;
+		for (const stroke of d.strokes) {
+			if (
+				!stroke ||
+				typeof stroke.owner !== 'string' ||
+				!stroke.owner.length ||
+				stroke.owner.length > 128 ||
+				typeof stroke.release !== 'boolean' ||
+				!Array.isArray(stroke.points)
+			)
+				fail();
+			contact(stroke.contact);
+			for (const p of stroke.points) contact(p);
+			for (const n of [stroke.remaining, stroke.pointHold, stroke.pointRemaining]) budget(n);
+			points += stroke.points.length;
+		}
+		if (points !== d.points || points > 4096 || (d.held && d.gap)) fail();
+		const held = d.held ? d.strokes[0] : null;
+		this.physical = d.physical === -1 ? null : d.strokes[d.physical];
+		this.pending = d.held ? d.strokes.slice(1) : d.strokes;
+		this.held = held;
+		this.gap = d.gap;
+		this.blocked = d.blocked;
+		this.pendingPoints = d.points;
+	}
 	constructor(
 		private apply: (contact: TabletContact) => void,
 		private minimumHold: () => number = () => 40_000,

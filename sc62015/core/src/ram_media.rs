@@ -1,5 +1,6 @@
 // PY_SOURCE: pce500/ram_media.py
 //! Passive RAM media backing. Device profiles own capacity and bus mapping.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct RamMedia {
     bytes: Vec<u8>,
     writable: bool,

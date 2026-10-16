@@ -60,7 +60,7 @@ impl SioQueuedByte {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioSnapshot {
     pub register_uart: Option<Uart>,
     pub ucr: u8,
@@ -108,7 +108,7 @@ impl Default for SioTimingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioTimingSnapshot {
     pub config: SioTimingConfig,
     pub rx_ready_countdown: Option<u32>,
@@ -169,6 +169,27 @@ impl SioStub {
         Ok(())
     }
 
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        let uart = self
+            .register_uart
+            .as_ref()
+            .ok_or("live PV-F1 state requires a register UART")?;
+        if uart.timebase_hz == 0
+            || uart.baud_divisor == 0
+            || uart.pending_rx.len() > 4096
+            || uart.completed_tx.len() > 4096
+            || self.rx_queue.len() > 16384
+            || self.pending_rx_queue.len() > 16384
+            || self.tx_queue.len() > 16384
+            || self.completed_tx_queue.len() > 16384
+            || self.rom_shortcuts_enabled
+            || self.auto_response.is_some()
+        {
+            return Err("invalid live UART timing/queues".into());
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             register_uart: None,

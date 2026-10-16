@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// Provisional sample cadence, independent of the acquired register/IRQ ABI.
 pub const CAPTURE_SAMPLE_PERIOD_CANDIDATE: u64 = 4096;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CaptureClock {
     period: Option<u64>,
     next: Option<u64>,
@@ -42,7 +42,7 @@ impl CaptureClock {
 }
 
 /// Explicit controller-response fixture. It does not recognize pen strokes.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CandidateResults {
     ready: bool,
     notification_type: u8,
@@ -52,8 +52,9 @@ pub struct CandidateResults {
 }
 
 /// Optional portable inference backend; protocol state remains PV-owned.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Recognition {
+    #[serde(skip)]
     model: Option<Arc<Model>>,
     width: u16,
     height: u16,
@@ -179,6 +180,7 @@ impl Recognition {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Auxiliary {
     Absent {
         request: [u8; 32],
@@ -209,6 +211,61 @@ pub enum Auxiliary {
     },
 }
 impl Auxiliary {
+    pub(super) fn validate_live_state(&self) -> Result<(), String> {
+        if let Self::Control {
+            clock,
+            recognition,
+            registered_glyphs,
+            stroke_read,
+            ..
+        } = self
+        {
+            if clock.period == Some(0)
+                || recognition.active.is_some_and(|index| index >= 4)
+                || recognition.strokes.len() > 4
+                || registered_glyphs.len() > 10
+                || stroke_read
+                    .as_ref()
+                    .is_some_and(|(_, bytes, offset)| *offset > bytes.len())
+            {
+                return Err("invalid live auxiliary clock/channel/cursor".into());
+            }
+            let valid_strokes = |strokes: &Strokes| {
+                strokes.len() <= 64
+                    && strokes.iter().all(|s| s.len() <= 16384)
+                    && strokes.iter().flatten().flatten().all(|v| v.is_finite())
+            };
+            if recognition.strokes.values().any(|s| !valid_strokes(s))
+                || registered_glyphs
+                    .values()
+                    .any(|glyph| !valid_strokes(&glyph.strokes))
+            {
+                return Err("invalid live auxiliary stroke geometry".into());
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn live_model_identity(&self) -> Option<String> {
+        match self {
+            Self::Control { recognition, .. } => {
+                recognition.model.as_ref().map(|m| m.state_fingerprint())
+            }
+            _ => None,
+        }
+    }
+    pub(super) fn restore_live_model(&mut self, source: &Self) {
+        if let (
+            Self::Control {
+                recognition: dst, ..
+            },
+            Self::Control {
+                recognition: src, ..
+            },
+        ) = (self, source)
+        {
+            dst.model = src.model.clone();
+        }
+    }
     pub(super) fn registered_state(&self) -> Option<Vec<u8>> {
         match self {
             Self::Control {

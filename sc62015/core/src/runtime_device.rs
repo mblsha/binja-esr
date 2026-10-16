@@ -18,6 +18,17 @@ pub struct BoundaryContext<'a> {
 }
 
 pub trait BoundaryDevice: Send {
+    /// Exact device-owned continuation state. Unsupported devices fail closed.
+    fn save_live_state(&self) -> Result<Vec<u8>> {
+        Err(crate::CoreError::InvalidSnapshot(
+            "device has no live-state codec".into(),
+        ))
+    }
+    fn restore_live_state(&mut self, _bytes: &[u8]) -> Result<()> {
+        Err(crate::CoreError::InvalidSnapshot(
+            "device has no live-state codec".into(),
+        ))
+    }
     /// Publish bank views and sample external IRQ before CPU/vector preflight.
     /// None leaves the existing external input unchanged; Some supplies its
     /// physical level through the runtime's ordinary IRQ setter.

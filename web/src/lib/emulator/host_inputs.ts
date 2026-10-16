@@ -53,6 +53,99 @@ export class HostInputs {
 		private readonly canDeliver: () => boolean = () => true,
 	) {}
 
+	checkpoint() {
+		return structuredClone({
+			raw: [...this.held].filter(([id]) => !id.startsWith('typing:')),
+			typing: this.typing,
+			down: [...this.typingDown].map(([owner, item]) => [owner, item.id]),
+			active: this.typingActive?.id ?? null,
+			gap: this.typingGap,
+			sequence: this.typingSequence,
+			blocked: this.typingBlocked,
+			paste: this.pastePlan,
+			cursor: this.pasteCursor,
+		});
+	}
+	/** Restore ownership without emitting contacts: the native state owns levels. */
+	restoreCheckpoint(input: ReturnType<HostInputs['checkpoint']>) {
+		const d = structuredClone(input);
+		const fail = () => {
+			throw new Error('Invalid host-input checkpoint');
+		};
+		if (
+			!d ||
+			!Array.isArray(d.raw) ||
+			d.raw.length > 512 ||
+			!Array.isArray(d.typing) ||
+			d.typing.length > TYPING_CAPACITY ||
+			!Array.isArray(d.down) ||
+			d.down.length > TYPING_CAPACITY ||
+			typeof d.blocked !== 'boolean'
+		)
+			fail();
+		for (const value of [d.gap, d.sequence, d.cursor]) if (!Number.isSafeInteger(value) || value < 0) fail();
+		const valid = (item: HeldContact) => {
+			if (
+				!item ||
+				!['physical', 'virtual', 'script', 'diagnostic'].includes(item.source) ||
+				typeof item.owner !== 'string' ||
+				!item.owner.length ||
+				item.owner.length > 128 ||
+				typeof item.down !== 'boolean' ||
+				(item.contact !== 'on' && (!Number.isInteger(item.contact) || item.contact < 0 || item.contact >= 128))
+			)
+				fail();
+			checkBoundaryBudget(item.remaining);
+		};
+		const held = new Map<string, HeldContact>(),
+			byId = new Map<string, BufferedContact>();
+		for (const [id, item] of d.raw) {
+			valid(item);
+			if (id !== `${item.source}:${item.owner}` || held.has(id)) fail();
+			held.set(id, item);
+		}
+		for (const item of d.typing) {
+			valid(item);
+			checkBoundaryBudget(item.gap);
+			if (
+				!['physical', 'virtual'].includes(item.source) ||
+				item.contact === 'on' ||
+				!/^typing:[1-9]\d*$/.test(item.id) ||
+				byId.has(item.id)
+			)
+				fail();
+			byId.set(item.id, item);
+		}
+		const active = d.active === null ? null : byId.get(d.active);
+		if (active === undefined || (active && (d.typing[0] !== active || d.gap !== 0))) fail();
+		if (active) held.set(active.id, active);
+		const down = new Map<string, BufferedContact>();
+		for (const [owner, id] of d.down) {
+			const item = byId.get(id);
+			if (!item || !item.down || owner !== `${item.source}:${item.owner}` || down.has(owner)) fail();
+			down.set(owner, item!);
+		}
+		if (d.typing.some((item) => item.down && down.get(`${item.source}:${item.owner}`) !== item)) fail();
+		if (
+			d.paste !== null &&
+			(!Array.isArray(d.paste) ||
+				!d.paste.length ||
+				d.paste.length > 8192 ||
+				d.paste.some((n) => !Number.isInteger(n) || n < 0 || n >= 128) ||
+				d.cursor > d.paste.length)
+		)
+			fail();
+		this.held = held;
+		this.typing = d.typing;
+		this.typingDown = down;
+		this.typingActive = active!;
+		this.typingGap = d.gap;
+		this.typingSequence = d.sequence;
+		this.typingBlocked = d.blocked;
+		this.pastePlan = d.paste;
+		this.pasteCursor = d.cursor;
+	}
+
 	private isHeld(contact: InputContact, except?: string): boolean {
 		return [...this.held].some(([id, state]) => id !== except && state.contact === contact);
 	}
