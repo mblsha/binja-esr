@@ -48,7 +48,10 @@ export class HostInputs {
 	private typingBlocked = false;
 	private pastePlan: number[] | null = null;
 	private pasteCursor = 0;
-	constructor(private readonly sink: (contact: InputContact, down: boolean) => void) {}
+	constructor(
+		private readonly sink: (contact: InputContact, down: boolean) => void,
+		private readonly canDeliver: () => boolean = () => true,
+	) {}
 
 	private isHeld(contact: InputContact, except?: string): boolean {
 		return [...this.held].some(([id, state]) => id !== except && state.contact === contact);
@@ -145,7 +148,7 @@ export class HostInputs {
 	}
 
 	private startTyping() {
-		if (this.typingActive || this.typingGap || !this.typing.length) return;
+		if (this.typingActive || this.typingGap || !this.typing.length || !this.canDeliver()) return;
 		const next = this.typing[0];
 		if (!this.isHeld(next.contact)) this.sink(next.contact, true);
 		this.held.set(next.id, next); // Different namespace from raw owners.

@@ -120,6 +120,7 @@
 			/>
 		</div>
 	</div>
+	<slot name="input-status" />
 	{#if model === 'pv-f1'}<PvTabletControls {disabled} onContact={onTablet} />{/if}
 	{#if model === 'pi-3000'}
 		<div class="pi-app-controls" aria-label="Applications">
