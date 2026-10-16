@@ -193,7 +193,8 @@ export async function recordsVcard(records: NativeRecords): Promise<string> {
 function date(value: string): { parameter: string; value: string } | null {
 	const text = value.trim();
 	if (!text) return null;
-	if (!/^\d{8}(\d{6})?$/.test(text)) throw new Error('Native calendar date cannot be represented without guessing');
+	if (!/^\d{8}(\d{4}(\d{2})?)?$/.test(text))
+		throw new Error('Native calendar date cannot be represented without guessing');
 	const year = Number(text.slice(0, 4)),
 		month = Number(text.slice(4, 6)),
 		day = Number(text.slice(6, 8)),
@@ -203,7 +204,9 @@ function date(value: string): { parameter: string; value: string } | null {
 	if (text.length === 8) return { parameter: ';VALUE=DATE', value: text };
 	if (Number(text.slice(8, 10)) > 23 || Number(text.slice(10, 12)) > 59 || Number(text.slice(12, 14)) > 59)
 		throw new Error('Invalid native calendar time');
-	return { parameter: '', value: text.slice(0, 8) + 'T' + text.slice(8) };
+	// Native Schedule Send emits HHMM with blank seconds for minute precision.
+	// iCalendar requires seconds; preserve the native field in X-PVF1 metadata.
+	return { parameter: '', value: text.slice(0, 8) + 'T' + text.slice(8).padEnd(6, '0') };
 }
 export async function recordsCalendar(
 	records: NativeRecords,
