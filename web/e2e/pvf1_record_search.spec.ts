@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 test.skip(!process.env.PVF1_ROM_PATH || !process.env.PVF1_PRESSURE_RECORDS, 'Requires native near-capacity export');
 
 test('search finds records beyond the displayed page and keeps all original export bytes', async ({
@@ -26,6 +26,15 @@ test('search finds records beyond the displayed page and keeps all original expo
 	const pending = page.waitForEvent('download');
 	await page.getByTestId('pv-record-native').click();
 	expect(await readFile((await (await pending).path())!)).toEqual(await readFile(process.env.PVF1_PRESSURE_RECORDS!));
+	const report = {
+		browserName,
+		bytes: 165207,
+		rows: 160,
+		opened_ms: opened,
+		search_ms: searches,
+		includes_automation_overhead: true,
+	};
+	await writeFile(info.outputPath('latency.json'), JSON.stringify(report, null, 2));
 	await info.attach('explorer-latency', {
 		body: JSON.stringify({
 			browserName,
