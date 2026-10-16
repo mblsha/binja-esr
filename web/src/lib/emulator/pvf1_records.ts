@@ -8,6 +8,9 @@ export type NativeRecords = {
 	warnings: string[];
 };
 const LIMIT = 4 * 1024 * 1024;
+// Base64, JSON escaping and pretty-printed short/empty cells expand the wire.
+// Keep the original 4 MiB wire limit after decoding this bounded envelope.
+export const RECORD_JSON_LIMIT = 16 * LIMIT + 65536;
 const decoder = new TextDecoder('shift_jis');
 const readable = (bytes: Uint8Array) => decoder.decode(bytes).replace(/\x1f/g, '\n');
 export function parseNativeRecords(input: Uint8Array): NativeRecords {
@@ -106,7 +109,7 @@ export async function recordsJson(records: NativeRecords): Promise<string> {
 	);
 }
 export async function importRecordsJson(text: string): Promise<NativeRecords> {
-	if (text.length > LIMIT * 3) throw new Error('Record JSON exceeds size limit');
+	if (text.length > RECORD_JSON_LIMIT) throw new Error('Record JSON exceeds size limit');
 	const value = JSON.parse(text);
 	if (
 		value.schema !== 'pvf1-native-records-1' ||
