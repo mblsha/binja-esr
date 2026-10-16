@@ -34,6 +34,8 @@ import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from '
 import { piPanelCapture } from '$lib/pi3000_panel';
 import { TabletInputs } from './tablet_inputs';
 import { PvReadiness, type PvInputPhase } from './pvf1_readiness';
+import { encodePvLiveState, decodePvLiveState } from './pvf1_live_state';
+import { transferNativeRecords } from './pvf1_record_transfer';
 import { AudioDelivery, supportsAudio } from './oz_audio';
 import { SerialDelivery, queueSerialInput, supportsSerial } from './oz_serial';
 import {
@@ -91,6 +93,9 @@ type WorkerRequest =
 	| { id: number; type: 'pv_state' }
 	| { id: number; type: 'pv_retained_export'; generation: number }
 	| { id: number; type: 'pv_session_export'; generation: number }
+	| { id: number; type: 'pv_live_export'; generation: number }
+	| { id: number; type: 'pv_live_restore'; bytes: Uint8Array; generation: number; nextGeneration: number }
+	| { id: number; type: 'pv_record_import'; bytes: Uint8Array; generation: number }
 	| { id: number; type: 'pv_session_restore'; bytes: Uint8Array; generation: number; nextGeneration: number }
 	| { id: number; type: 'pv_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'pv_card_export'; generation: number }
@@ -851,6 +856,8 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				'pv_reset',
 				'pv_retained_restore',
 				'pv_session_restore',
+				'pv_live_restore',
+				'pv_record_import',
 				'oz_reset',
 				'oz_retained_restore',
 				'oz_replay',
@@ -1130,6 +1137,73 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				syncAudio(true);
 				requestFrame(true, true);
 				replyOk(msg.id, media);
+				return;
+			}
+			case 'pv_live_export': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1') throw new Error('Stale PV-F1 live state');
+				const context = {
+					firmwareSha256: await sessionHash(currentBundle),
+					coreIdentity: await recordingCoreIdentity(),
+				};
+				const bytes = await encodePvLiveState({
+					context,
+					settings: { executionMode: emulator.execution_mode(), typingCatchUp, targetFps, sound: soundWanted },
+					model: pvAssets.handwritingModel,
+					native: emulator.export_pvf1_live_state(),
+					inputs: inputs.checkpoint(),
+					tablet: tabletInputs.checkpoint(),
+					readiness: pvReadiness.checkpoint(),
+				});
+				replyOk(msg.id, bytes);
+				return;
+			}
+			case 'pv_record_import': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1') throw new Error('Stale PV-F1 record import');
+				if (inputs.snapshot().owners.length || inputs.typingStatus().pending || tabletInputs.status().strokes)
+					throw new Error('Clear pending input before importing records');
+				const prior = emulator.export_pvf1_live_state();
+				try {
+					const result = await transferNativeRecords(emulator, msg.bytes, {
+						signal,
+						onWire: (bytes) => serial.pump(() => bytes),
+						onProgress: (sent, total, boundaries) =>
+							self.postMessage({ type: 'record_progress', generation: machineGeneration, sent, total, boundaries }),
+					});
+					requestFrame(true, true);
+					replyOk(msg.id, result);
+				} catch (error) {
+					emulator.restore_pvf1_live_state(currentBundle, pvAssets.handwritingModel, prior);
+					requestFrame(true, true);
+					throw new Error(`Import stopped; prior organizer state restored: ${String(error)}`);
+				}
+				return;
+			}
+			case 'pv_live_restore': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1') throw new Error('Stale PV-F1 live state');
+				const context = {
+					firmwareSha256: await sessionHash(currentBundle),
+					coreIdentity: await recordingCoreIdentity(),
+				};
+				const state = await decodePvLiveState(msg.bytes, context);
+				if (signal?.aborted) throw new ExecutionCancelled(0);
+				emulator.restore_pvf1_live_state(currentBundle, state.model, state.native);
+				inputs.restoreCheckpoint(state.inputs);
+				tabletInputs.restoreCheckpoint(state.tablet);
+				pvReadiness.restoreCheckpoint(state.readiness);
+				emulator.set_execution_mode(state.settings.executionMode);
+				typingCatchUp = state.settings.typingCatchUp;
+				targetFps = state.settings.targetFps;
+				soundWanted = state.settings.sound;
+				pvAssets = {
+					cardRom: emulator.pvf1_card_rom(),
+					handwritingModel: state.model,
+					ramCardWritable: emulator.pvf1_ram_card_writable(),
+				};
+				machineGeneration = msg.nextGeneration;
+				resetSerial();
+				syncAudio(true);
+				requestFrame(true, true);
+				replyOk(msg.id, { media: capturePvSession(emulator, pvAssets), settings: state.settings });
 				return;
 			}
 			case 'pv_retained_export': {
@@ -1564,6 +1638,9 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'oz_replay',
 			'record_start',
 			'pv_session_restore',
+			'pv_live_export',
+			'pv_live_restore',
+			'pv_record_import',
 			'record_end',
 			'session_replay',
 		].includes(msg.type)

@@ -14,7 +14,7 @@ pub fn alarm_wake_level(rtc: &Rtc) -> bool {
 /// Calendar progression at a nominal model period. PV-F1 FC C01F6/C0228
 /// copies these packed fields; CA856..CA8D4 independently extract them.
 /// HOLD freezes calendar phase without replay; silicon timing is unqualified.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CalendarClock {
     period: Option<u64>,
     phase: u64,
@@ -24,6 +24,12 @@ pub struct CalendarClock {
     elapsed: u64,
 }
 impl CalendarClock {
+    pub(super) fn validate_live_state(&self) -> Result<(), String> {
+        if self.period == Some(0) || self.period.is_some_and(|period| self.phase >= period) {
+            return Err("invalid live calendar clock phase/period".into());
+        }
+        Ok(())
+    }
     pub fn configure(&mut self, period: Option<u64>) -> Result<(), String> {
         if period == Some(0) {
             return Err("PV-F1 calendar candidate requires a positive period".into());
@@ -59,7 +65,7 @@ impl CalendarClock {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct HalfSecondClock {
     period: Option<u64>,
     phase: u64,
@@ -68,6 +74,12 @@ pub struct HalfSecondClock {
 }
 
 impl HalfSecondClock {
+    pub(super) fn validate_live_state(&self) -> Result<(), String> {
+        if self.period == Some(0) || self.period.is_some_and(|period| self.phase >= period) {
+            return Err("invalid live RTC clock phase/period".into());
+        }
+        Ok(())
+    }
     pub fn configure(&mut self, period: Option<u64>) -> Result<(), String> {
         if period == Some(0) {
             return Err("PV-F1 RTC candidate requires a positive period".into());

@@ -64,6 +64,17 @@ impl Default for LcdController {
 }
 
 impl LcdController {
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_geometry(&self, width: usize, height: usize) -> Result<(), String> {
+        if self.width != width
+            || self.height != height
+            || self.pixels.len() != width * height
+            || self.pixels.iter().any(|p| *p > 1)
+        {
+            return Err("invalid live LCD geometry/pixels".into());
+        }
+        Ok(())
+    }
     /// Explicit controller storage for related boards; panel cropping is separate.
     pub fn with_geometry(width: usize, height: usize) -> Self {
         assert!(width > 0 && height > 0 && width <= 1024 && height <= 512);

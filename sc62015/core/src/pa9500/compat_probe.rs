@@ -4,7 +4,7 @@
 //! WRIT is an explicit scalar-output hypothesis supplied by the caller; its
 //! board decode and cycle timing are unqualified. Unsupported operations trap.
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StartupState {
     pub pc: u16,
     pub dp: u16,
@@ -12,6 +12,7 @@ pub struct StartupState {
     pub q: u8,
     pub r: u8,
     pub table_count: u8,
+    #[serde(with = "crate::state_codec::array")]
     pub internal: [u8; 128],
     pub carry: bool,
     pub zero: bool,

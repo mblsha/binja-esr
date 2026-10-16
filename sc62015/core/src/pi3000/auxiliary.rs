@@ -2,7 +2,7 @@
 //! Provisional firmware-derived auxiliary status control protocol.
 //! No recognition/query data is synthesized. Unknown commands remain errors.
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Auxiliary {
     written: u32,
     ready_at: Option<u64>,
