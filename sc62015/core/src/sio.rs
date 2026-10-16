@@ -27,7 +27,7 @@ const SIO_CMD42_DIRECT_INPUT_ADDR: u32 = 0x00EB030;
 const SIO_TX_WAIT_READY_ADDR: u32 = 0x00EB31C;
 const SIO_CMD41_DIRECT_OUTPUT_ADDR: u32 = 0x00EB33D;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioQueuedByte {
     pub value: u8,
     pub parity_error: bool,
@@ -60,7 +60,7 @@ impl SioQueuedByte {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioSnapshot {
     pub register_uart: Option<Uart>,
     pub ucr: u8,
@@ -79,13 +79,13 @@ pub struct SioSnapshot {
     pub timing: SioTimingSnapshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioInputLines {
     pub cs: bool,
     pub cd: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioTimingConfig {
     pub rx_ready_delay_cycles: u32,
     pub tx_complete_cycles: u32,
@@ -108,7 +108,7 @@ impl Default for SioTimingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SioTimingSnapshot {
     pub config: SioTimingConfig,
     pub rx_ready_countdown: Option<u32>,
@@ -130,7 +130,7 @@ pub enum SioTimedEvent {
     Xon,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SioStub {
     register_uart: Option<Uart>,
     rx_queue: VecDeque<SioQueuedByte>,
@@ -151,6 +151,27 @@ pub struct SioStub {
 }
 
 impl SioStub {
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        let uart = self
+            .register_uart
+            .as_ref()
+            .ok_or("live PV-F1 state requires a register UART")?;
+        if uart.timebase_hz == 0
+            || uart.baud_divisor == 0
+            || uart.pending_rx.len() > 4096
+            || uart.completed_tx.len() > 4096
+            || self.rx_queue.len() > 16384
+            || self.pending_rx_queue.len() > 16384
+            || self.tx_queue.len() > 16384
+            || self.completed_tx_queue.len() > 16384
+            || self.rom_shortcuts_enabled
+            || self.auto_response.is_some()
+        {
+            return Err("invalid live UART timing/queues".into());
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             register_uart: None,

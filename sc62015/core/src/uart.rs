@@ -16,7 +16,7 @@ pub enum UartEvent {
     TxComplete(u8),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Uart {
     pub timebase_hz: u64,
     pub baud_divisor: u64,

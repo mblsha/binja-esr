@@ -7,6 +7,20 @@ export type PvInputPhase = 'starting' | 'waking' | 'off' | 'ready';
 export class PvReadiness {
 	private phase: PvInputPhase = 'starting';
 	private waitingForPowerOn = false;
+	checkpoint() {
+		return { phase: this.phase, waitingForPowerOn: this.waitingForPowerOn };
+	}
+	restoreCheckpoint(input: ReturnType<PvReadiness['checkpoint']>) {
+		if (
+			!input ||
+			!['starting', 'waking', 'off', 'ready'].includes(input.phase) ||
+			typeof input.waitingForPowerOn !== 'boolean' ||
+			(input.waitingForPowerOn && input.phase !== 'waking')
+		)
+			throw new Error('Invalid readiness checkpoint');
+		this.phase = input.phase;
+		this.waitingForPowerOn = input.waitingForPowerOn;
+	}
 	reset() {
 		this.phase = 'starting';
 		this.waitingForPowerOn = false;

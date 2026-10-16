@@ -109,7 +109,7 @@ impl IsrSoftwareWritePolicy {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LlamaState {
     // Architectural registers are hot enough that hashing every access (and
     // cloning a hash table for fail-closed preflight) dominates ROM runs.
@@ -126,6 +126,7 @@ pub struct LlamaState {
     temps: [u32; FAST_TEMP_REGISTERS],
     // Retain the public RegName behavior for malformed/out-of-range helper
     // inputs without putting a HashMap on normal execution paths.
+    #[serde(with = "crate::state_codec::register_map")]
     extra_regs: HashMap<RegName, u32>,
     power_state: PowerState,
     block_transfer_policy: BlockTransferPolicy,
@@ -141,6 +142,7 @@ pub struct LlamaState {
     /// Identifies the contents of `call_stack`: 0 while empty since
     /// construction/reset, otherwise a process-unique value renewed on every
     /// mutation. Lets observers skip re-snapshotting an unchanged stack.
+    #[serde(skip, default = "fresh_call_stack_stamp")]
     call_stack_stamp: u64,
 }
 
@@ -160,6 +162,35 @@ pub struct CallMetricsSnapshot {
 }
 
 impl LlamaState {
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        for (name, value) in [
+            (RegName::BA, self.ba),
+            (RegName::I, self.i),
+            (RegName::X, self.x),
+            (RegName::Y, self.y),
+            (RegName::U, self.u),
+            (RegName::S, self.s),
+            (RegName::F, self.f),
+            (RegName::PC, self.pc),
+            (RegName::IMR, self.imr),
+        ] {
+            if value & !mask_for(name) != 0 {
+                return Err(format!("invalid live register {name:?}"));
+            }
+        }
+        if self.temps.iter().any(|v| *v > 0xff_ffff)
+            || self.call_stack.len() > 65536
+            || self.call_page_stack.len() > 65536
+            || self
+                .call_return_widths
+                .iter()
+                .any(|v| ![16, 24].contains(v))
+        {
+            return Err("invalid live temporary/call state".into());
+        }
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             ba: 0,

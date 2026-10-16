@@ -3,6 +3,7 @@
 //! SRAM read alias and SSR bit1 presence remain a provisional OZ-style profile.
 use sha2::{Digest, Sha256};
 pub const ROM_SHA256: &str = "55f3c327abce50a1d44b0076f3bb6384ef64e4d7af3edd4ad9b53dc84ae87332";
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Pa9c3Card {
     rom: Vec<u8>,
     pub sram: Vec<u8>,

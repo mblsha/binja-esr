@@ -657,6 +657,35 @@ impl Sc62015Emulator {
         Ok(Uint8Array::from(sram.as_slice()))
     }
 
+    pub fn pvf1_card_rom(&self) -> Result<Uint8Array, JsValue> {
+        let (rom, _) = self.pvf1_card_images()?;
+        Ok(Uint8Array::from(rom.as_slice()))
+    }
+
+    pub fn pvf1_ram_card_writable(&self) -> Result<bool, JsValue> {
+        self.pvf1_ram_card_media().map(|(_, writable)| writable)
+    }
+
+    pub fn export_pvf1_live_state(&self) -> Result<Uint8Array, JsValue> {
+        self.runtime
+            .export_pvf1_live_state()
+            .map(|b| Uint8Array::from(b.as_slice()))
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    pub fn restore_pvf1_live_state(
+        &mut self,
+        bundle: &[u8],
+        model: &[u8],
+        bytes: &[u8],
+    ) -> Result<(), JsValue> {
+        self.runtime
+            .restore_pvf1_live_state(bundle, (!model.is_empty()).then_some(model), bytes)
+            .map_err(|e| JsValue::from_str(&e))?;
+        self.pacer.rebase();
+        Ok(())
+    }
+
     /// Install an exact RAM-card image with firmware and retained organizer
     /// backing validated before replacing the runtime. CPU/peripherals start fresh.
     pub fn load_pvf1_with_ram_card(

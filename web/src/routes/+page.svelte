@@ -16,6 +16,7 @@
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
 	import PvInputStatus from '$lib/components/PvInputStatus.svelte';
+	import PvRecordBridge from '$lib/components/PvRecordBridge.svelte';
 	import { lcdPng, downloadBlob } from '$lib/lcd_export';
 	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
 	import {
@@ -41,6 +42,10 @@
 	import { piPanelCapture } from '$lib/pi3000_panel';
 	import { TabletInputs } from '$lib/emulator/tablet_inputs';
 	import { PvReadiness, type PvInputPhase } from '$lib/emulator/pvf1_readiness';
+	import { encodePvLiveState, decodePvLiveState } from '$lib/emulator/pvf1_live_state';
+	import { transferNativeRecords } from '$lib/emulator/pvf1_record_transfer';
+	import { sessionHash } from '$lib/emulator/session_recording';
+	import wasmAssetUrl from '$lib/wasm/pce500_wasm/pce500_wasm_bg.wasm?url';
 	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
 	import { AudioPlayback, AudioDelivery, supportsAudio } from '$lib/emulator/oz_audio';
 	import {
@@ -180,6 +185,57 @@
 	let serialBusy = false;
 	let serialError = '';
 	let serialNotice = '';
+	let recordImportProgress = '';
+	let recordImportActive = false;
+	async function importNativeRecords(bytes: Uint8Array): Promise<string> {
+		if (
+			!romLoaded ||
+			romModel !== 'pv-f1' ||
+			loadingRom ||
+			functionRunnerBusy ||
+			sessionRecording ||
+			liveStateBusy ||
+			!(await stop())
+		)
+			throw new Error('Pause the organizer and finish its current operation first');
+		const generation = romLoadGeneration;
+		functionRunnerBusy = true;
+		recordImportActive = true;
+		recordImportProgress = 'Starting record transfer…';
+		try {
+			let result: { bytes: number; boundaries: number };
+			if (worker) result = await workerCall('pv_record_import', { bytes, generation }, [bytes.buffer]);
+			else {
+				if (
+					fallbackInputs.snapshot().owners.length ||
+					fallbackInputs.typingStatus().pending ||
+					fallbackTablet.status().strokes
+				)
+					throw new Error('Clear pending input before importing records');
+				const prior = emulator.export_pvf1_live_state();
+				fallbackStepAbort = new AbortController();
+				try {
+					result = await transferNativeRecords(emulator, bytes, {
+						signal: fallbackStepAbort.signal,
+						onWire: (wire) => fallbackSerial.pump(() => wire),
+						onProgress: (sent, total) => (recordImportProgress = `${sent} / ${total} bytes sent`),
+					});
+				} catch (error) {
+					emulator.restore_pvf1_live_state(installedRom!.bytes, pvActiveAssets.handwritingModel, prior);
+					throw new Error(`Import stopped; prior organizer state restored: ${String(error)}`);
+				}
+			}
+			await saveBattery(true);
+			refreshAllNow();
+			return `${result.bytes} bytes transferred; organizer closed Receive. Check its result on the display.`;
+		} finally {
+			recordImportActive = false;
+			if (generation === romLoadGeneration) {
+				functionRunnerBusy = false;
+				fallbackStepAbort = null;
+			}
+		}
+	}
 	let serialRevision = 0;
 	const serialCapture = new SerialCapture();
 	let serialStatus = serialCapture.status();
@@ -577,6 +633,8 @@
 				if (data.pen) penStatus = data.pen;
 			}
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
+			if (data.type === 'record_progress' && data.generation === romLoadGeneration)
+				recordImportProgress = `${data.sent} / ${data.total} bytes sent`;
 		};
 		worker.onerror = (event) => {
 			if (worker !== thisWorker) return;
@@ -1597,7 +1655,9 @@
 						: loadingRom
 							? 'LOADING ROM'
 							: functionRunnerBusy
-								? 'EXECUTING SCRIPT'
+								? recordImportActive
+									? 'IMPORTING RECORDS'
+									: 'EXECUTING SCRIPT'
 								: stepBusy
 									? 'STEPPING'
 									: running
@@ -2273,6 +2333,107 @@
 		};
 		pvRamCardName = a.ramCard.length ? `${label} memory card` : '';
 		pvHandwritingName = a.handwritingModel.length ? `${label} recognition model` : '';
+	}
+	let fallbackCoreIdentity: Promise<string> | null = null;
+	async function fallbackLiveContext() {
+		const coreIdentity = await (fallbackCoreIdentity ??= fetch(wasmAssetUrl).then(async (response) => {
+			if (!response.ok) throw new Error('Cannot identify emulator build');
+			return 'wasm-sha256:' + (await sessionHash(new Uint8Array(await response.arrayBuffer())));
+		}));
+		return { firmwareSha256: await sessionHash(installedRom!.bytes), coreIdentity };
+	}
+	let liveStateBusy = false;
+	async function exportPvLiveState() {
+		if (!romLoaded || romModel !== 'pv-f1' || loadingRom || liveStateBusy || !(await stop())) return;
+		const generation = romLoadGeneration;
+		liveStateBusy = true;
+		try {
+			const bytes: Uint8Array = worker
+				? await workerCall('pv_live_export', { generation })
+				: await encodePvLiveState({
+						context: await fallbackLiveContext(),
+						settings: { executionMode, typingCatchUp, targetFps, sound: soundEnabled },
+						model: pvActiveAssets.handwritingModel,
+						native: emulator.export_pvf1_live_state(),
+						inputs: fallbackInputs.checkpoint(),
+						tablet: fallbackTablet.checkpoint(),
+						readiness: fallbackReadiness.checkpoint(),
+					});
+			if (generation !== romLoadGeneration) return;
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pv-f1.pvstate');
+			pvBackupError = '';
+			pvBackupStatus = 'Live state saved';
+		} catch (error) {
+			if (generation === romLoadGeneration) pvBackupError = String(error);
+		} finally {
+			if (generation === romLoadGeneration) liveStateBusy = false;
+		}
+	}
+	async function importPvLiveState(event: Event) {
+		const input = event.currentTarget as HTMLInputElement,
+			file = input.files?.[0];
+		input.value = '';
+		if (
+			!file ||
+			!installedRom ||
+			!romLoaded ||
+			romModel !== 'pv-f1' ||
+			loadingRom ||
+			sessionRecording ||
+			!(await stop())
+		)
+			return;
+		const generation = romLoadGeneration;
+		loadingRom = true;
+		try {
+			if (file.size > 80 * 1024 * 1024) throw new Error('Live state exceeds size limit');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (generation !== romLoadGeneration) return;
+			let media: PvSession;
+			let settings: import('$lib/emulator/pvf1_live_state').PvLiveState['settings'];
+			if (worker) {
+				const result = await workerCall('pv_live_restore', { bytes, generation, nextGeneration: generation + 1 }, [
+					bytes.buffer,
+				]);
+				media = result.media;
+				settings = result.settings;
+			} else {
+				const state = await decodePvLiveState(bytes, await fallbackLiveContext());
+				if (generation !== romLoadGeneration) return;
+				emulator.restore_pvf1_live_state(installedRom.bytes, state.model, state.native);
+				fallbackInputs.restoreCheckpoint(state.inputs);
+				fallbackTablet.restoreCheckpoint(state.tablet);
+				fallbackReadiness.restoreCheckpoint(state.readiness);
+				settings = state.settings;
+				emulator.set_execution_mode(settings.executionMode);
+				pvActiveAssets = {
+					cardRom: emulator.pvf1_card_rom(),
+					handwritingModel: state.model,
+					ramCardWritable: emulator.pvf1_ram_card_writable(),
+				};
+				media = capturePvSession(emulator, pvActiveAssets);
+				resetFallbackSerial();
+			}
+			romLoadGeneration = generation + 1;
+			batteryGeneration = romLoadGeneration;
+			applyPvSessionAssets(media, 'Saved state');
+			executionMode = settings.executionMode;
+			typingCatchUp = settings.typingCatchUp;
+			targetFps = settings.targetFps;
+			soundEnabled = settings.sound;
+			// Restored input owners already match the native electrical levels.
+			// Do not emit releases or clear pending assistance here.
+			physicalHeldCodes.clear();
+			physicalHighlights = new Set();
+			await saveBattery(true);
+			refreshAllNow();
+			pvBackupError = '';
+			pvBackupStatus = `Live state restored from ${file.name}; Resume to continue`;
+		} catch (error) {
+			if (generation === romLoadGeneration) pvBackupError = String(error);
+		} finally {
+			if (romLoadGeneration === generation || romLoadGeneration === generation + 1) loadingRom = false;
+		}
 	}
 	async function exportPvFullBackup() {
 		if (!romLoaded || romModel !== 'pv-f1' || loadingRom || !(await stop())) return;
@@ -3138,7 +3299,38 @@
 		</section>
 	{/if}
 	{#if romModel === 'pv-f1'}
+		<PvRecordBridge
+			capture={() => serialCapture.bytes()}
+			onImport={importNativeRecords}
+			canImport={romLoaded && !loadingRom && !functionRunnerBusy && !sessionRecording && !liveStateBusy}
+			progress={recordImportProgress}
+		/>
 		<section class="serial-panel" aria-label="Saved records" data-testid="pv-saved-records">
+			<button
+				data-testid="pv-live-export"
+				on:click={exportPvLiveState}
+				disabled={!romLoaded || loadingRom || liveStateBusy || functionRunnerBusy || stepBusy || !!controlPending}
+				>Save live state</button
+			>
+			<label
+				>Restore live state <input
+					type="file"
+					accept=".pvstate"
+					data-testid="pv-live-file"
+					on:change={importPvLiveState}
+					disabled={!romLoaded ||
+						loadingRom ||
+						liveStateBusy ||
+						sessionRecording ||
+						functionRunnerBusy ||
+						stepBusy ||
+						!!controlPending}
+				/></label
+			>
+			<p class="hint">
+				Live states preserve the current screen, in-progress work and queued input. Restore requires the same firmware
+				and emulator build.
+			</p>
 			<button
 				data-testid="pv-full-backup-export"
 				on:click={exportPvFullBackup}

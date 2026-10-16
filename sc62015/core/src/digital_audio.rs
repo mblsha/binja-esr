@@ -8,7 +8,7 @@ pub const TIMEBASE_HZ: u64 = 1_024_000;
 pub const QUEUE_CAPACITY: usize = SAMPLE_RATE as usize * 2;
 const HIGH_LEVEL: i64 = 8192;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AudioModePolicy {
     #[default]
     ProvisionalClocked,
@@ -25,7 +25,7 @@ pub struct AudioChunk {
     pub samples: Vec<i16>,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct AudioCapture {
     policy: AudioModePolicy,
     mode_units: [u64; 8],

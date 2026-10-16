@@ -21,6 +21,8 @@ struct Class {
 pub struct Model {
     classes: Vec<Class>,
     hybrid: Option<Hybrid>,
+    #[cfg(feature = "pvf1")]
+    fingerprint: std::sync::OnceLock<String>,
 }
 #[derive(Clone)]
 struct Template {
@@ -35,6 +37,47 @@ struct Hybrid {
     extra_classes: usize,
 }
 impl Model {
+    /// Stable identity of parsed inference inputs; no prediction/test data.
+    #[cfg(feature = "pvf1")]
+    pub fn state_fingerprint(&self) -> String {
+        self.fingerprint
+            .get_or_init(|| self.compute_state_fingerprint())
+            .clone()
+    }
+    #[cfg(feature = "pvf1")]
+    fn compute_state_fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for class in &self.classes {
+            h.update((class.label.len() as u64).to_le_bytes());
+            h.update(class.label.as_bytes());
+            h.update(class.bias.to_bits().to_le_bytes());
+            h.update((class.weights.len() as u64).to_le_bytes());
+            for &(index, weight) in &class.weights {
+                h.update(index.to_le_bytes());
+                h.update(weight.to_bits().to_le_bytes());
+            }
+        }
+        if let Some(hybrid) = &self.hybrid {
+            h.update([1]);
+            h.update(hybrid.latin_ratio.to_bits().to_le_bytes());
+            h.update((hybrid.extra_classes as u64).to_le_bytes());
+            for template in &hybrid.templates {
+                h.update((template.label.len() as u64).to_le_bytes());
+                h.update(template.label.as_bytes());
+                h.update((template.strokes as u64).to_le_bytes());
+                h.update((template.points.len() as u64).to_le_bytes());
+                for point in &template.points {
+                    for v in point {
+                        h.update(v.to_bits().to_le_bytes());
+                    }
+                }
+            }
+        } else {
+            h.update([0]);
+        }
+        format!("{:x}", h.finalize())
+    }
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         if bytes.starts_with(HYBRID_MAGIC) {
             return Self::hybrid_from_bytes(bytes);
@@ -96,6 +139,8 @@ impl Model {
         Ok(Self {
             classes,
             hybrid: None,
+            #[cfg(feature = "pvf1")]
+            fingerprint: std::sync::OnceLock::new(),
         })
     }
     fn hybrid_from_bytes(bytes: &[u8]) -> Result<Self, String> {
@@ -493,6 +538,20 @@ mod tests {
                 }
             })
             .collect()
+    }
+    #[test]
+    #[cfg(feature = "pvf1")]
+    fn live_identity_cache_preserves_exact_parsed_model_fingerprint() {
+        let base = Model::from_bytes(&constant_model()).unwrap();
+        let hybrid =
+            Model::from_bytes(&hybrid_fixture(&[("A", line(true)), ("い", line(false))])).unwrap();
+        for model in [&base, &hybrid] {
+            let expected = model.compute_state_fingerprint();
+            assert_eq!(model.state_fingerprint(), expected);
+            assert_eq!(model.state_fingerprint(), expected);
+            assert_eq!(model.clone().state_fingerprint(), expected);
+        }
+        assert_ne!(base.state_fingerprint(), hybrid.state_fingerprint());
     }
     #[test]
     fn hybrid_latin_clear_match_deduplicates_and_japanese_fallback_is_unchanged() {

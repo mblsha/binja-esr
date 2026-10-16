@@ -38,6 +38,7 @@ pub mod run_control;
 pub mod runtime_device;
 pub mod sio;
 pub mod snapshot;
+mod state_codec;
 pub mod timer;
 pub mod uart;
 
@@ -1449,12 +1450,12 @@ impl CoreRuntime {
 
     fn install_imr_isr_hook(&mut self) {
         let timer_ptr: *mut TimerContext = self.timer.as_mut() as *mut TimerContext;
-        self.memory.set_imr_isr_hook(Some(move |offset, prev, new| {
-            let pc = crate::llama::eval::perfetto_instr_context()
-                .map(|(_, pc)| pc)
-                .unwrap_or_else(crate::llama::eval::perfetto_last_pc);
-            unsafe {
+        self.memory
+            .set_imr_isr_hook(Some(move |offset, prev, new| unsafe {
                 let timer = &mut *timer_ptr;
+                let pc = crate::llama::eval::perfetto_instr_context()
+                    .map(|(_, pc)| pc)
+                    .unwrap_or(timer.observation_pc);
                 let reg_name = if offset == IMEM_IMR_OFFSET {
                     "IMR"
                 } else {
@@ -1500,8 +1501,7 @@ impl CoreRuntime {
                     };
                     tracer.record_irq_event(name, payload);
                 });
-            }
-        }));
+            }));
     }
 
     /// The host ON contact, excluding an independently asserted RTC alarm level.
@@ -1949,6 +1949,7 @@ impl CoreRuntime {
         // matching the caller's single boundary rather than ticking twice.
         let result = (|| {
             for _ in 0..boundaries {
+                self.timer.observation_pc = self.state.pc();
                 let elapsed_timing_units = self.elapsed_timing_units();
                 let level = device.before_boundary(&mut runtime_device::BoundaryContext {
                     memory: &mut self.memory,
@@ -2645,6 +2646,7 @@ impl CoreRuntime {
         let mut remaining = boundaries;
         while remaining != 0 {
             remaining -= 1;
+            self.timer.observation_pc = self.state.pc();
             // Quiet steady state: a running core that will not take an IRQ at
             // this boundary, with no input level to re-latch and memoized
             // stable ROM at PC. Every step of the general prelude is then a

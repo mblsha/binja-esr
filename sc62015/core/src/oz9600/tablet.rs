@@ -2,6 +2,7 @@
 //! Physical tablet samples. ADC routing is derived from the unmodified F0
 //! firmware; coordinate calibration and electrical timing remain provisional.
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Tablet {
     pub x: u16,
     pub y: u16,
@@ -21,6 +22,16 @@ impl Default for Tablet {
 }
 
 impl Tablet {
+    #[cfg(feature = "pvf1")]
+    pub(crate) fn validate_live_state(&self) -> Result<(), String> {
+        if [self.x, self.y, self.latched_sample, self.contact_sample]
+            .iter()
+            .any(|v| *v > 1023)
+        {
+            return Err("invalid live ten-bit ADC state".into());
+        }
+        Ok(())
+    }
     /// Explicit model pressure hypothesis. The existing boards retain their
     /// full-scale default. Coordinate routing and held conversion are shared;
     /// voltage interpretation and pressure thresholds belong to each board.
