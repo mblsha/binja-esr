@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		parseNativeRecords,
+		RECORD_JSON_LIMIT,
 		recordsJson,
 		importRecordsJson,
 		recordsVcard,
@@ -27,8 +28,9 @@
 		input.value = '';
 		if (!file) return;
 		try {
-			if (file.size > 12 * 1024 * 1024) throw new Error('Record file exceeds size limit');
-			records = file.name.toLowerCase().endsWith('.json')
+			const json = file.name.toLowerCase().endsWith('.json');
+			if (file.size > (json ? RECORD_JSON_LIMIT : 4 * 1024 * 1024)) throw new Error('Record file exceeds size limit');
+			records = json
 				? await importRecordsJson(await file.text())
 				: parseNativeRecords(new Uint8Array(await file.arrayBuffer()));
 			error = '';

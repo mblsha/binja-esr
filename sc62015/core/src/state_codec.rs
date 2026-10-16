@@ -1,5 +1,6 @@
 // PY_SOURCE: pce500/emulator.py
 //! Owned-state codecs, separate from host pacing, callbacks and caches.
+#[cfg(feature = "pa9500")]
 pub(crate) mod array {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     pub fn serialize<T: Serialize, S: Serializer, const N: usize>(
