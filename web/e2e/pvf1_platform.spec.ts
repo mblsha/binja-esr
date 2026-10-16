@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
 test.skip(!process.env.PVF1_ROM_PATH || !process.env.PVF1_RETAINED_PATH, 'Requires acquired firmware/backing');
 
 test('native organizer sound reaches real WebAudio and stops when disabled', async ({ page }, info) => {
@@ -39,6 +40,10 @@ test('native organizer sound reaches real WebAudio and stops when disabled', asy
 	const count = await page.evaluate(() => (window as any).__audioProbe.starts);
 	await page.waitForTimeout(200);
 	expect(await page.evaluate(() => (window as any).__audioProbe.starts)).toBe(count);
+	await writeFile(
+		info.outputPath('audio-observations.json'),
+		JSON.stringify(await page.evaluate(() => (window as any).__audioProbe), null, 2),
+	);
 	await info.attach('web-audio-observations', {
 		body: JSON.stringify(await page.evaluate(() => (window as any).__audioProbe)),
 		contentType: 'application/json',
