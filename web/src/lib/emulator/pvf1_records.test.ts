@@ -60,6 +60,10 @@ describe('native PV-F1 records', () => {
 		expect(ics).toContain('DTEND:20240301T133000');
 		expect(ics).toContain('SUMMARY:A\\,B');
 		expect(ics).not.toContain('TZID');
+		const minute = parseNativeRecords(
+			wire('"i","TIM1","MEM1"\r\n"T","Start","Body"\r\n"D","199301010033  ","Native12:33AM"\r\n\x1a'),
+		);
+		expect(await recordsCalendar(minute, '20261016T000000Z')).toContain('DTSTART:19930101T003300');
 		const bad = parseNativeRecords(wire('"i","TIM1","MEM1"\r\n"T","Date","Memo"\r\n"D","20230229","invalid"\r\n\x1a'));
 		await expect(recordsCalendar(bad)).rejects.toThrow('Invalid native calendar date');
 	});
@@ -80,6 +84,7 @@ describe('native PV-F1 records', () => {
 				{ join } = await import('node:path');
 			for (const [name, family, count] of [
 				['schedule', 'schedule', 5],
+				['schedule-minute', 'schedule', 1],
 				['telephone1', 'contacts', 2],
 				['telephone2', 'contacts', 2],
 				['business', 'business', 3],
@@ -93,6 +98,8 @@ describe('native PV-F1 records', () => {
 				expect((await importRecordsJson(await recordsJson(record))).bytes).toEqual(original);
 				if (family === 'contacts' || family === 'business') expect(await recordsVcard(record)).toContain('BEGIN:VCARD');
 				if (family === 'schedule') expect(await recordsCalendar(record, '20261016T000000Z')).toContain('BEGIN:VEVENT');
+				if (name === 'schedule-minute')
+					expect(await recordsCalendar(record, '20261016T000000Z')).toContain('DTSTART:19930101T003300');
 				if (family === 'memo') expect(recordsMemoText(record)).toContain('ＡＴＥＳＴ');
 			}
 		},

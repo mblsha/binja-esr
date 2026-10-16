@@ -23,6 +23,7 @@ async function download(page: Page, testid: string, path?: string) {
 }
 for (const [name, family, count] of [
 	['schedule', 'schedule', 5],
+	['schedule-minute', 'schedule', 1],
 	['telephone1', 'contacts', 2],
 	['telephone2', 'contacts', 2],
 	['business', 'business', 3],
@@ -45,7 +46,7 @@ for (const [name, family, count] of [
 			);
 		if (family === 'schedule')
 			expect((await download(page, 'pv-record-calendar', info.outputPath('schedule.ics'))).toString()).toContain(
-				'DTSTART;VALUE=DATE:19930101',
+				name === 'schedule-minute' ? 'DTSTART:19930101T003300' : 'DTSTART;VALUE=DATE:19930101',
 			);
 		if (family === 'memo')
 			expect((await download(page, 'pv-record-memo', info.outputPath('memo.txt'))).toString()).toContain('ＡＴＥＳＴ');
