@@ -9,6 +9,17 @@ import {
 } from './pvf1_records';
 const wire = (s: string) => Uint8Array.from([...s].map((c) => c.charCodeAt(0)));
 describe('native PV-F1 records', () => {
+	it('reopens its own expanded lossless JSON for a large opaque field', async () => {
+		const start = wire('"i","FUTURE"\r\n"T","Unknown"\r\n"D","');
+		const end = wire('"\r\n\x1a');
+		const bytes = new Uint8Array(start.length + 2 * 1024 * 1024 + end.length);
+		bytes.set(start);
+		bytes.set(end, bytes.length - end.length);
+		const record = parseNativeRecords(bytes),
+			text = await recordsJson(record);
+		expect(text.length).toBeGreaterThan(12 * 1024 * 1024);
+		expect((await importRecordsJson(text)).bytes).toEqual(bytes);
+	});
 	it('preserves original unknown bytes/columns, quoted fields, empty cells and memo paragraph separators', async () => {
 		const bytes = wire(
 			'"i","SCRT","CLSC","CLAS","MEM1","FUTURE"\r\n"T","Secret","Code","Class","Memo","Future"\r\n"D"," ",,"Group","A\x1fB, ""quoted""","\x82"\r\n\x1a',
