@@ -452,3 +452,42 @@ Recovery starts a fresh paused CPU/peripheral state from saved backing. This is
 not a live CPU/LCD snapshot and does not promise to resume an unfinished editor
 operation. Browser data clearing still removes local saves; exported backups
 remain useful for recovery on another browser or computer.
+
+## Previewed contact, calendar and Memo imports
+
+The Record explorer accepts UTF-8 `.vcf`, `.ics` and `.txt` files in addition to
+byte-preserving native CSV and lossless JSON. Choose a destination, inspect the
+mapped fields and every omission, and acknowledge the current preview before
+sending. Changing conversion options requires a new acknowledgement. Save the
+original source and the complete conversion review if you need to retain fields
+the organizer cannot represent.
+
+Contacts support vCard3.0/4.0 names, phone/fax, postal address and multiline notes;
+Business also maps organization, section and title. Business Receive requires an
+organization name. Optional sort readings control native index placement; contacts
+without readings can be found on the Other tab. Only identical converted rows
+within the source file are compared for duplicates. Existing organizer records
+are left to the firmware's Receive behavior.
+
+Calendar imports support standalone all-day entries without DTEND, floating
+local times, and fixed UTC/IANA-zone events converted with an explicitly chosen
+organizer time zone. Recurrence, custom zone rules, embedded alarms and all-day
+DTEND ranges are refused. Ambiguous/nonexistent zoned times require an explicit
+UTC time. Unknown properties are listed as omissions. A text file imports as one
+Memo with a chosen full-width classification code1–9 and optional name.
+
+Conversion refuses unmappable CP932 characters, transport controls and text that
+would exceed the native editor's byte capacities. For example, Memo's acquired
+editor accepts997 payload bytes; a larger stored native record can be shortened
+by normal Modify/save. Contact fields share a work area, so available space also
+depends on earlier fields. Native CSV/JSON continues to preserve acquired bytes
+without treating them as a promise of editability.
+
+Open the matching native application's Port15 communication page, select the
+Hyper electronic system organizer and Additional Receive, then Execute.
+The browser sends the reviewed native CSV through the ordinary UART and ROM
+parser. The existing live-state transaction restores the exact pre-import state
+on host transfer failure. Successful native Receive can still normalize fields;
+modern interchange is a documented subset, not a lossless replacement for native
+CSV/JSON. Software checks use one standalone Rust core and focused Chromium/WebKit
+integration; physical-device equivalence and Firefox remain unverified.
