@@ -163,9 +163,16 @@ function fields(records: NativeRecords, row: string[]) {
 	return (key: string) => row[records.columns.indexOf(key)] ?? '';
 }
 function extras(records: NativeRecords, row: string[]) {
-	return records.columns
-		.slice(1)
-		.map((key, i) => `X-PVF1-${i + 1}-${key.toUpperCase().replace(/[^A-Z0-9-]/g, '-')}:${escape(row[i + 1] ?? '')}`);
+	return records.columns.slice(1).map((key, i) => {
+		const name = `X-PVF1-${i + 1}-${key.toUpperCase().replace(/[^A-Z0-9-]/g, '-')}`,
+			value = row[i + 1] ?? '';
+		// Native structured fields can contain control bytes which are not
+		// legal vCard/iCalendar TEXT. Label this decoded UTF-8 metadata encoding;
+		// the native file/lossless JSON remains the exact CP932 source.
+		return /[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(value)
+			? `${name}-UTF8-BASE64:${base64(new TextEncoder().encode(value))}`
+			: `${name}:${escape(value)}`;
+	});
 }
 export async function recordsVcard(records: NativeRecords): Promise<string> {
 	if (!['contacts', 'business'].includes(records.family)) throw new Error('This transfer is not a contact book');
@@ -185,7 +192,16 @@ export async function recordsVcard(records: NativeRecords): Promise<string> {
 		if (f('OFCE') || f('SCTN')) lines.push(`ORG:${escape(f('OFCE'))};${escape(f('SCTN'))}`);
 		if (f('PSTN')) lines.push(`TITLE:${escape(f('PSTN'))}`);
 		if (f('ADR1') || f('ZIPC')) lines.push(`ADR:;;${escape(f('ADR1'))};;;${escape(f('ZIPC'))};`);
-		if (f('RMRK')) lines.push(`NOTE:${escape(f('RMRK'))}`);
+		if (f('RMRK')) {
+			const remark = f('RMRK');
+			// Native type04 is a structured subrecord. Simple remarks have one
+			// MEM1 body and the native 1E/0C trailer; retain the complete wire in extras.
+			const plain = /^MEM1:([\s\S]*?)\x1e\x0c$/.exec(remark);
+			if (plain && /\x1e|\x0c/.test(plain[1])) throw new Error('Structured remarks require lossless export');
+			const note = plain ? plain[1] : remark;
+			if (/[\x00-\x08\x0b-\x1f\x7f-\x9f]/.test(note)) throw new Error('Opaque remarks require lossless export');
+			lines.push(`NOTE:${escape(note)}`);
+		}
 		lines.push(...extras(records, row), 'END:VCARD');
 	});
 	return folded(lines);
