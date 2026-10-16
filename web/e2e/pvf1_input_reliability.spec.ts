@@ -67,6 +67,41 @@ async function finish(page: Page, info: TestInfo) {
 }
 const observe = (page: Page, type: string) => page.evaluate((type) => (window as any).__observe(type), type);
 
+test('early wake input waits for native readiness, exposes its queue and cancels before delivery', async ({
+	page,
+}, info) => {
+	await open(page);
+	await expect(page.getByTestId('pv-input-readiness')).toHaveAttribute('data-phase', 'ready');
+	await page.getByTestId('vk-off').click();
+	await advance(page);
+	await page.getByTestId('power-on').click();
+	await expect(page.getByTestId('pv-input-readiness')).toHaveAttribute('data-phase', 'waking');
+	await page.getByTestId('vk-clear').click();
+	await page.getByTestId('vk-clear').click();
+	await expect(page.getByText('2 keys pending', { exact: false })).toBeVisible();
+	await page.getByRole('button', { name: 'Cancel queued keys', exact: true }).click();
+	await expect.poll(async () => (await observe(page, 'input_state')).typing.pending).toBe(0);
+	await page.getByRole('button', { name: 'Calculator', exact: true }).click();
+	for (const [x, y] of [
+		[135, 167],
+		[195, 176],
+		[164, 167],
+		[224, 188],
+	])
+		await tap(page, x, y);
+	await expect(page.getByTestId('pv-pen-queue')).toContainText('5 pen strokes');
+	await advance(page, 8_000_000);
+	await expect(page.getByTestId('pv-input-readiness')).toHaveAttribute('data-phase', 'ready');
+	await expect(page.getByTestId('pv-pen-queue')).toHaveCount(0);
+	await page.getByTestId('pv-tablet-lcd').screenshot({ path: info.outputPath('early-wake-calculator-five.png') });
+	const s = await finish(page, info);
+	expect(s.events.filter((e) => e.kind === 'matrix' && e.code === 1)).toHaveLength(0);
+	const pen = s.events.filter((e) => e.kind === 'tablet' && e.pressed);
+	expect(pen).toHaveLength(5);
+	expect(pen[0].at).toBeGreaterThan(10_000_000);
+	expect(s.events.at(-1)).toMatchObject({ sha256: '82a38e7abb006feef7df9dad76977f88b71a6b76c6568db83c54e65bcb45dacf' });
+});
+
 test('quick ON wakes normal OFF and short pen clicks work while Resume is running', async ({ page }, info) => {
 	await open(page);
 	await page.getByTestId('vk-off').click();
@@ -129,61 +164,110 @@ test('paused quick app changes and repeated virtual contacts preserve separate t
 	expect(s.events.filter((e) => e.kind === 'matrix' && !e.pressed)).toHaveLength(2);
 });
 
-test('paused handwriting preserves two complete pointer trajectories through normal ROM recognition', async ({
-	page,
-}, info) => {
-	await open(page, true);
-	for (const [x, y] of [
-		[277, 62],
-		[222, 16],
-		[100, 90],
-		[298, 130],
-		[290, 109],
-	]) {
-		await tap(page, x, y);
-		await advance(page);
-	}
-	const strokes = [
-		[
-			[186, 210],
-			[143, 710],
-			[223, 863],
-			[313, 810],
-		],
-		[
-			[710, 220],
-			[770, 570],
-			[693, 723],
-		],
-	];
-	for (const stroke of strokes) {
-		for (let i = 0; i < stroke.length; i++) {
-			const previous = stroke[Math.max(0, i - 1)],
-				next = stroke[i];
-			for (let j = i ? 1 : 12; j <= 12; j++) {
-				const t = j / 12,
-					p = await point(
-						page,
-						Math.round(18 + (previous[0] + (next[0] - previous[0]) * t) * 0.06),
-						Math.round(174 + (previous[1] + (next[1] - previous[1]) * t) * 0.061),
-					);
-				await page.mouse.move(p.x, p.y);
-				if (i === 0) await page.mouse.down();
-			}
+for (const pointer of ['mouse', 'pen'] as const)
+	test(`paused ${pointer} handwriting preserves two complete pointer trajectories through normal ROM recognition`, async ({
+		page,
+	}, info) => {
+		await open(page, true);
+		for (const [x, y] of [
+			[277, 62],
+			[222, 16],
+			[100, 90],
+			[298, 130],
+			[290, 109],
+		]) {
+			await tap(page, x, y);
+			await advance(page);
 		}
-		await page.mouse.up();
-	}
-	await advance(page, 6_000_000);
-	const status = await observe(page, 'pv_state');
-	expect(status.auxiliary.classifications).toBe(1);
-	expect(status.auxiliary.recognized_labels[0]).toBe('い');
-	await page.getByTestId('pv-tablet-lcd').screenshot({ path: info.outputPath('recognized-i.png') });
-	const s = await finish(page, info);
-	// Initial five menu taps and two full strokes; motion is not coalesced away.
-	const pen = s.events.filter((e) => e.kind === 'tablet');
-	expect(pen.filter((e) => !e.pressed)).toHaveLength(7);
-	expect(pen.filter((e) => e.pressed).length).toBeGreaterThan(50);
-});
+		const cdp = await page.context().newCDPSession(page);
+		await page.getByTestId('pv-tablet-lcd').evaluate((el) => {
+			(window as any).__strokePointerTypes = [];
+			el.addEventListener('pointerdown', (e) =>
+				(window as any).__strokePointerTypes.push((e as PointerEvent).pointerType),
+			);
+		});
+		let held = false,
+			last = { x: 0, y: 0 };
+		const movePen = async (p: { x: number; y: number }) => {
+			last = p;
+			if (pointer === 'mouse') await page.mouse.move(p.x, p.y);
+			else
+				await cdp.send('Input.dispatchMouseEvent', {
+					type: 'mouseMoved',
+					...p,
+					buttons: held ? 1 : 0,
+					pointerType: 'pen',
+					force: held ? 0.5 : 0,
+				});
+		};
+		const penDown = async () => {
+			held = true;
+			if (pointer === 'mouse') await page.mouse.down();
+			else
+				await cdp.send('Input.dispatchMouseEvent', {
+					type: 'mousePressed',
+					...last,
+					button: 'left',
+					buttons: 1,
+					pointerType: 'pen',
+					force: 0.5,
+				});
+		};
+		const penUp = async () => {
+			held = false;
+			if (pointer === 'mouse') await page.mouse.up();
+			else
+				await cdp.send('Input.dispatchMouseEvent', {
+					type: 'mouseReleased',
+					...last,
+					button: 'left',
+					buttons: 0,
+					pointerType: 'pen',
+					force: 0,
+				});
+		};
+		const strokes = [
+			[
+				[186, 210],
+				[143, 710],
+				[223, 863],
+				[313, 810],
+			],
+			[
+				[710, 220],
+				[770, 570],
+				[693, 723],
+			],
+		];
+		for (const stroke of strokes) {
+			for (let i = 0; i < stroke.length; i++) {
+				const previous = stroke[Math.max(0, i - 1)],
+					next = stroke[i];
+				for (let j = i ? 1 : 12; j <= 12; j++) {
+					const t = j / 12,
+						p = await point(
+							page,
+							Math.round(18 + (previous[0] + (next[0] - previous[0]) * t) * 0.06),
+							Math.round(174 + (previous[1] + (next[1] - previous[1]) * t) * 0.061),
+						);
+					await movePen(p);
+					if (i === 0) await penDown();
+				}
+			}
+			await penUp();
+		}
+		expect(await page.evaluate(() => (window as any).__strokePointerTypes)).toEqual([pointer, pointer]);
+		await advance(page, 6_000_000);
+		const status = await observe(page, 'pv_state');
+		expect(status.auxiliary.classifications).toBe(1);
+		expect(status.auxiliary.recognized_labels[0]).toBe('い');
+		await page.getByTestId('pv-tablet-lcd').screenshot({ path: info.outputPath('recognized-i.png') });
+		const s = await finish(page, info);
+		// Initial five menu taps and two full strokes; motion is not coalesced away.
+		const pen = s.events.filter((e) => e.kind === 'tablet');
+		expect(pen.filter((e) => !e.pressed)).toHaveLength(7);
+		expect(pen.filter((e) => e.pressed).length).toBeGreaterThan(50);
+	});
 
 test('pointer cancel, lost capture, blur and hidden/resume discard queued contacts and permit fresh input', async ({
 	page,

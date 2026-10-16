@@ -27,6 +27,7 @@ export class TabletInputs {
 		/** Positive cadence preserves deferred motion using scheduler boundaries.
 		 * Zero retains the existing immediate/coalesced contact policy. */
 		private replayPointHold: () => number = () => 0,
+		private canDeliver: () => boolean = () => true,
 	) {}
 	set(owner: string, contact: TabletContact, cancel = false) {
 		if (
@@ -116,7 +117,7 @@ export class TabletInputs {
 	}
 
 	private startStroke() {
-		if (this.held || this.gap) return;
+		if (this.held || this.gap || !this.canDeliver()) return;
 		this.held = this.pending.shift() ?? null;
 		if (this.held) {
 			this.held.pointRemaining = this.held.pointHold;
@@ -158,6 +159,13 @@ export class TabletInputs {
 		this.discard();
 		if (held) this.apply({ ...held.contact, pressed: false });
 	}
+	status() {
+		return {
+			strokes: this.pending.length + Number(this.held !== null),
+			points: this.pendingPoints,
+			blocked: this.blocked,
+		};
+	}
 	limitBudget = (requested: number) => {
 		if (this.gap > 0) return Math.min(requested, this.gap);
 		if (this.held?.pointRemaining) requested = Math.min(requested, this.held.pointRemaining);
@@ -169,7 +177,10 @@ export class TabletInputs {
 			if (this.gap === 0) this.startStroke();
 			return;
 		}
-		if (!this.held) return;
+		if (!this.held) {
+			this.startStroke();
+			return;
+		}
 		this.held.remaining = Math.max(0, this.held.remaining - used);
 		if (this.held.pointHold > 0) {
 			this.held.pointRemaining = Math.max(0, this.held.pointRemaining - used);

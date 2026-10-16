@@ -25,7 +25,13 @@
 			element.releasePointerCapture(previous.pointer);
 	}
 	function down(event: PointerEvent) {
-		if (event.button !== 0 || disabled || held) return;
+		if (
+			event.button !== 0 ||
+			(event.isPrimary === false && ['touch', 'pen'].includes(event.pointerType)) ||
+			disabled ||
+			held
+		)
+			return;
 		event.preventDefault();
 		const box = element.getBoundingClientRect();
 		const point = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
@@ -37,11 +43,17 @@
 	function move(event: PointerEvent) {
 		if (!trackMovement || !held || held.pointer !== event.pointerId || disabled) return;
 		const box = element.getBoundingClientRect();
-		const point = fixed ?? coordinates((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
-		if (!point) return;
-		held.x = point[0];
-		held.y = point[1];
-		onContact({ raw_x: held.x, raw_y: held.y, pressed: true }, held.owner, false);
+		const samples = event.getCoalescedEvents?.() ?? [];
+		// Include the final event too: a browser may return an empty list, or a
+		// coalesced list whose last sample precedes the dispatched endpoint.
+		for (const sample of [...samples, event]) {
+			const point =
+				fixed ?? coordinates((sample.clientX - box.left) / box.width, (sample.clientY - box.top) / box.height);
+			if (!point || (held.x === point[0] && held.y === point[1])) continue;
+			held.x = point[0];
+			held.y = point[1];
+			onContact({ raw_x: held.x, raw_y: held.y, pressed: true }, held.owner, false);
+		}
 	}
 	$: if (disabled) release(true);
 	onDestroy(() => release(true));
@@ -50,7 +62,10 @@
 <svelte:window
 	on:blur={() => release(true)}
 	on:pointerup={(e) => {
-		if (held?.pointer === e.pointerId) release();
+		if (held?.pointer === e.pointerId) {
+			move(e);
+			release();
+		}
 	}}
 	on:pointercancel={(e) => {
 		if (held?.pointer === e.pointerId) release(true);

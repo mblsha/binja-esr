@@ -1,6 +1,14 @@
 import { normalizeRomModel, type RomModel } from '../rom_model';
 import { ozBatteryIdentity } from './oz_battery_store';
-import { capturePvSession, pvBatteryIdentity, encodePvSession, decodePvSession, type PvAssets } from './pvf1_session';
+import {
+	capturePvSession,
+	pvBatteryIdentity,
+	pvRetainedIdentity,
+	encodePvSession,
+	decodePvSession,
+	loadPvSession,
+	type PvAssets,
+} from './pvf1_session';
 import {
 	SessionRecorder,
 	decodeRecordedSession,
@@ -25,6 +33,7 @@ import { planPaste } from './paste_plan';
 import { runOzPhysicalReplay, ozPbm, type OzProfile, type TabletContact } from './oz9600_replay';
 import { piPanelCapture } from '$lib/pi3000_panel';
 import { TabletInputs } from './tablet_inputs';
+import { PvReadiness, type PvInputPhase } from './pvf1_readiness';
 import { AudioDelivery, supportsAudio } from './oz_audio';
 import { SerialDelivery, queueSerialInput, supportsSerial } from './oz_serial';
 import {
@@ -81,6 +90,7 @@ type WorkerRequest =
 	| { id: number; type: 'pv_state' }
 	| { id: number; type: 'pv_retained_export'; generation: number }
 	| { id: number; type: 'pv_session_export'; generation: number }
+	| { id: number; type: 'pv_session_restore'; bytes: Uint8Array; generation: number; nextGeneration: number }
 	| { id: number; type: 'pv_battery_identity'; bytes: Uint8Array }
 	| { id: number; type: 'pv_card_export'; generation: number }
 	| { id: number; type: 'pv_ram_card_export'; generation: number }
@@ -169,6 +179,8 @@ type KeyboardDebug = {
 };
 
 type Frame = {
+	pvInputPhase: PvInputPhase | null;
+	pen: ReturnType<TabletInputs['status']>;
 	recording: ReturnType<SessionRecorder['status']> | null;
 	paste: ReturnType<HostInputs['pasteStatus']>;
 	inputContacts: { matrix: number[]; on: boolean };
@@ -242,20 +254,8 @@ async function installSessionBacking(context: SessionContext, initial: Uint8Arra
 		throw new Error('Recording requires its matching emulator build');
 	if (context.model === 'pv-f1') {
 		const media = await decodePvSession(initial);
-		if (media.ramCard.length)
-			emulator.load_pvf1_with_ram_card(
-				currentBundle,
-				media.retained,
-				media.handwritingModel,
-				media.ramCard,
-				media.ramCardWritable,
-			);
-		else emulator.load_pvf1(currentBundle, media.retained, media.handwritingModel, media.cardRom, media.cardSram);
-		pvAssets = {
-			cardRom: media.cardRom,
-			handwritingModel: media.handwritingModel,
-			ramCardWritable: media.ramCardWritable,
-		};
+		pvAssets = loadPvSession(emulator, currentBundle, media);
+		pvReadiness.reset();
 	} else {
 		emulator.load_oz9600(currentBundle, initial, context.profile);
 		currentOzProfile = context.profile as OzProfile;
@@ -286,12 +286,32 @@ let runLoopId = 0;
 let lastLcdTextUpdateMs = 0;
 let lastLcdText: string[] | null = null;
 
+const pvReadiness = new PvReadiness();
+function observePvReadiness() {
+	if (romModel === 'pv-f1') pvReadiness.observe(emulator.power_state(), emulator.halted(), emulator.get_reg('PC'));
+}
+function postInputStatus() {
+	self.postMessage({
+		type: 'input_status',
+		generation: machineGeneration,
+		pvInputPhase: romModel === 'pv-f1' ? pvReadiness.status() : null,
+		pen: tabletInputs.status(),
+		typing: inputs.typingStatus(),
+		paste: inputs.pasteStatus(),
+		inputContacts: emulator.input_contacts(),
+	});
+}
+const canDeliverPvInput = () => romModel !== 'pv-f1' || pvReadiness.canDeliver();
 const inputs = new HostInputs((contact, down) => {
+	if (romModel === 'pv-f1' && contact === 'on' && down) {
+		pvReadiness.noteOn(emulator.power_state() === 'off');
+		if (!pvReadiness.canDeliver()) tabletInputs.clear();
+	}
 	applyContact(emulator, contact, down);
 	sessionRecorder?.input(
 		contact === 'on' ? { kind: 'on', pressed: down } : { kind: 'matrix', code: contact, pressed: down },
 	);
-});
+}, canDeliverPvInput);
 const tabletInputs = new TabletInputs(
 	(c) => {
 		romModel === 'pv-f1'
@@ -304,11 +324,13 @@ const tabletInputs = new TabletInputs(
 	() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 	() => (romModel === 'pv-f1' ? 50_000 : 0),
 	() => (romModel === 'pv-f1' ? 20_000 : 0),
+	canDeliverPvInput,
 );
 const hostInputs = {
 	limitBudget: (n: number) => Math.min(inputs.limitBudget(n), tabletInputs.limitBudget(n)),
 	advance: (n: number) => {
 		sessionRecorder?.advance(n);
+		observePvReadiness();
 		inputs.advance(n);
 		tabletInputs.advance(n);
 	},
@@ -672,6 +694,7 @@ function snapshotKeyboard(): { keyboardDebug: KeyboardDebug; keyboardDebugJson: 
 }
 
 function captureFrame(forceText: boolean, forceDisplay = false): Frame {
+	observePvReadiness();
 	const rawGeometry = emulator.lcd_capture_if_changed(forceDisplay);
 	const geometry = rawGeometry && romModel === 'pi-3000' ? piPanelCapture(rawGeometry) : rawGeometry;
 	// Rust returns an owned JS Uint8Array, safe to transfer without another copy.
@@ -728,6 +751,8 @@ function captureFrame(forceText: boolean, forceDisplay = false): Frame {
 
 	const kb = snapshotKeyboard();
 	return {
+		pvInputPhase: romModel === 'pv-f1' ? pvReadiness.status() : null,
+		pen: tabletInputs.status(),
 		recording: sessionRecorder?.status() ?? null,
 		lcdPixels: pixels?.buffer as ArrayBuffer | undefined,
 		paste: inputs.pasteStatus(),
@@ -820,6 +845,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				'pv_recognizer',
 				'pv_reset',
 				'pv_retained_restore',
+				'pv_session_restore',
 				'oz_reset',
 				'oz_retained_restore',
 				'oz_replay',
@@ -1028,6 +1054,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					emu.load_rom_with_model(msg.bytes, model);
 				}
 				romModel = model;
+				pvReadiness.reset();
 				currentBundle = msg.bytes.slice();
 				currentOzProfile = msg.ozProfile ?? 'strict';
 				pvAssets = {
@@ -1075,6 +1102,24 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				replyOk(msg.id, capturePvSession(emulator, pvAssets));
 				return;
 			}
+			case 'pv_session_restore': {
+				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
+					throw new Error('Stale PV-F1 full backup generation');
+				const media = await decodePvSession(msg.bytes, pvRetainedIdentity(emulator.export_pvf1_retained()));
+				if (signal?.aborted) throw new ExecutionCancelled(0);
+				const mode = emulator.execution_mode();
+				pvAssets = loadPvSession(emulator, currentBundle, media);
+				pvReadiness.reset();
+				emulator.set_execution_mode(mode);
+				machineGeneration = msg.nextGeneration;
+				inputs.clear();
+				tabletInputs.discard();
+				resetSerial();
+				syncAudio(true);
+				requestFrame(true, true);
+				replyOk(msg.id, media);
+				return;
+			}
 			case 'pv_retained_export': {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1' || operations.busy)
 					throw new Error('Requires idle current PV-F1 generation');
@@ -1097,6 +1142,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
 					throw new Error('Stale PV-F1 reset generation');
 				emulator.reset_pvf1(msg.model);
+				pvReadiness.reset();
 				pvAssets.handwritingModel = msg.model.slice();
 				machineGeneration = msg.nextGeneration;
 				inputs.clear();
@@ -1110,6 +1156,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration || romModel !== 'pv-f1')
 					throw new Error('Stale PV-F1 backup generation');
 				emulator.restore_pvf1_retained(msg.bytes, msg.model);
+				pvReadiness.reset();
 				pvAssets.handwritingModel = msg.model.slice();
 				machineGeneration = msg.nextGeneration;
 				inputs.clear();
@@ -1233,6 +1280,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					throw new Error('LCD contact outside PV-F1 main window');
 				const [raw_x, raw_y] = pressed ? emulator.pvf1_lcd_to_raw(x, y) : [0, 0];
 				tabletInputs.set(msg.owner, { raw_x, raw_y, pressed }, msg.cancel);
+				postInputStatus();
 				replyOk(msg.id);
 				return;
 			}
@@ -1244,6 +1292,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				if (msg.generation !== machineGeneration) throw new Error('Stale tablet generation');
 				if (ozReplayActive) throw new Error('Physical replay owns input until it finishes or Stop is acknowledged');
 				tabletInputs.set(msg.owner, msg.contact, msg.cancel);
+				postInputStatus();
 				replyOk(msg.id);
 				return;
 			}
@@ -1406,13 +1455,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 					minimumGap: romModel === 'pv-f1' && msg.type === 'virtual_key' ? 50_000 : undefined,
 					buffered: (msg.type === 'physical_key' || romModel === 'pv-f1') && (msg.buffered ?? false),
 				});
-				(self as any).postMessage({
-					type: 'input_status',
-					generation: machineGeneration,
-					inputContacts: emulator.input_contacts(),
-					paste: inputs.pasteStatus(),
-					typing: inputs.typingStatus(),
-				});
+				postInputStatus();
 				replyOk(msg.id, {
 					generation: machineGeneration,
 					applied: !msg.buffered,
@@ -1429,13 +1472,7 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				inputs.releaseSource(msg.source);
 				if (msg.source === 'virtual' && ['oz-9600', 'pi-3000', 'pv-f1'].includes(romModel) && !ozReplayActive)
 					tabletInputs.clear();
-				(self as any).postMessage({
-					type: 'input_status',
-					generation: machineGeneration,
-					inputContacts: emulator.input_contacts(),
-					paste: inputs.pasteStatus(),
-					typing: inputs.typingStatus(),
-				});
+				postInputStatus();
 				replyOk(msg.id, { generation: machineGeneration, applied: true });
 				return;
 			}
@@ -1462,7 +1499,13 @@ async function handleRequest(msg: WorkerRequest, signal?: AbortSignal) {
 				return;
 			}
 			case 'input_state': {
-				replyOk(msg.id, { generation: machineGeneration, ...inputs.snapshot(), rust: emulator.input_contacts() });
+				replyOk(msg.id, {
+					generation: machineGeneration,
+					pvInputPhase: romModel === 'pv-f1' ? pvReadiness.status() : null,
+					pen: tabletInputs.status(),
+					...inputs.snapshot(),
+					rust: emulator.input_contacts(),
+				});
 				return;
 			}
 		}
@@ -1498,6 +1541,7 @@ async function dispatchRequest(msg: WorkerRequest) {
 			'pa_reset',
 			'oz_replay',
 			'record_start',
+			'pv_session_restore',
 			'record_end',
 			'session_replay',
 		].includes(msg.type)
