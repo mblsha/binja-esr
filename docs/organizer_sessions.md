@@ -40,6 +40,42 @@ establish physical controller timing.
 PV-F1 assisted virtual matrix keys serialize distinct taps with a 200,000
 boundary hold and 50,000 boundary gap. Pen assistance uses the same hold/gap
 and preserves movement at 20,000 boundary intervals. Disable assisted taps for
-raw virtual matrix levels. ON bypasses queued typing. Allow the firmware to
-finish startup or wake recovery before app input; delivering a contact does not
-guarantee that a busy ROM accepts it.
+raw virtual matrix levels. ON bypasses queued typing. After ON wakes an OFF
+PV-F1, assisted keys and complete pen strokes wait in order until the firmware
+reaches its input wait. Waiting consumes no contact hold or movement budget.
+The status below the device reports waking, readiness, queued strokes and
+points; Cancel queued input releases both keyboard and pen sources. Cold
+startup and calibration remain interactive: follow the device display when
+prompted. Readiness observes a firmware input wait; it cannot guarantee that
+every later contact is accepted by a busy application.
+
+PV-F1 pen capture accepts the primary pen/touch pointer, preserves ordered
+coalesced movement samples and the release endpoint, and ignores duplicate
+pixels. Cancellation, blur and disabling input release the current contact
+without inventing a final stroke point. Mouse input uses the same path.
+
+## Portable PV-F1 backup
+
+In Saved records, **Save full backup** pauses and downloads one `.pvbackup`
+file containing organizer RAM, scratch storage, RTC, learned handwriting
+templates, the active recognition model, and the mounted program card ROM/SRAM
+or RAM card with its write protection. It does not include organizer firmware.
+Load the matching firmware in another browser profile, then **Restore full
+backup**. Restore validates the checksum, firmware identities, backing and
+native assets before replacing the machine. It starts a fresh paused CPU;
+Resume and open an application to use the saved records. A corrupt or foreign
+backup leaves the current machine intact. Existing RAM/RTC and separate card
+exports remain available. A backup contains private records and card contents.
+
+## Background and suspension
+
+Hiding or suspending a PV-F1 or OZ-9600 page releases input, requests a pause
+and saves its backing. Returning keeps it paused until **Resume**. Emulated
+time is frozen while paused, alarms do not fire, and Resume does not catch up
+to wall-clock time. Running the emulator requires a visible page.
+
+Automatic saving commits periodically and on Pause. Recovery after renderer
+loss uses the last completed save; the browser may stop execution before a
+new asynchronous save completes. Keep exported backups for durable copies
+outside browser storage. This policy does not promise operating-system sleep
+or original-device clock accuracy.

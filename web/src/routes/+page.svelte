@@ -7,12 +7,15 @@
 		encodePvSession,
 		decodePvSession,
 		pvBatteryIdentity,
+		pvRetainedIdentity,
+		loadPvSession,
 		type PvAssets,
 		type PvSession,
 	} from '$lib/emulator/pvf1_session';
 	import LcdCanvas from '$lib/components/LcdCanvas.svelte';
 	import { LCD_CHIP_COLS, LCD_CHIP_ROWS, LCD_COLS, LCD_ROWS } from '$lib/lcd';
 	import DeviceShell from '$lib/components/DeviceShell.svelte';
+	import PvInputStatus from '$lib/components/PvInputStatus.svelte';
 	import { lcdPng, downloadBlob } from '$lib/lcd_export';
 	import { contactsForKeyEvent, type HostKeyboardMode } from '$lib/keymap';
 	import {
@@ -37,6 +40,7 @@
 	import { runOzPhysicalReplay, type OzProfile, type TabletContact } from '$lib/emulator/oz9600_replay';
 	import { piPanelCapture } from '$lib/pi3000_panel';
 	import { TabletInputs } from '$lib/emulator/tablet_inputs';
+	import { PvReadiness, type PvInputPhase } from '$lib/emulator/pvf1_readiness';
 	import { planPaste, MAX_PASTE_CHARACTERS } from '$lib/emulator/paste_plan';
 	import { AudioPlayback, AudioDelivery, supportsAudio } from '$lib/emulator/oz_audio';
 	import {
@@ -302,7 +306,21 @@
 	let menuOpen = false;
 	let lcdOnly = false;
 	const pendingVirtualRelease = new Map<number, number>();
-	const fallbackInputs = new HostInputs((contact, down) => applyContact(emulator, contact, down));
+	let pvInputPhase: PvInputPhase = 'starting';
+	let penStatus = { strokes: 0, points: 0, blocked: false };
+	const fallbackReadiness = new PvReadiness();
+	function observeFallbackReadiness() {
+		if (romModel === 'pv-f1' && emulator)
+			pvInputPhase = fallbackReadiness.observe(emulator.power_state(), emulator.halted(), emulator.get_reg('PC'));
+	}
+	const fallbackCanDeliver = () => romModel !== 'pv-f1' || fallbackReadiness.canDeliver();
+	const fallbackInputs = new HostInputs((contact, down) => {
+		if (romModel === 'pv-f1' && contact === 'on' && down) {
+			fallbackReadiness.noteOn(emulator.power_state() === 'off');
+			if (!fallbackReadiness.canDeliver()) fallbackTablet.clear();
+		}
+		applyContact(emulator, contact, down);
+	}, fallbackCanDeliver);
 	const fallbackTablet = new TabletInputs(
 		(c) =>
 			romModel === 'pv-f1'
@@ -315,12 +333,15 @@
 		() => (['pi-3000', 'pv-f1'].includes(romModel) ? 200_000 : 40_000),
 		() => (romModel === 'pv-f1' ? 50_000 : 0),
 		() => (romModel === 'pv-f1' ? 20_000 : 0),
+		fallbackCanDeliver,
 	);
 	const fallbackHostInputs = {
 		limitBudget: (n: number) => Math.min(fallbackInputs.limitBudget(n), fallbackTablet.limitBudget(n)),
 		advance: (n: number) => {
+			observeFallbackReadiness();
 			fallbackInputs.advance(n);
 			fallbackTablet.advance(n);
+			penStatus = fallbackTablet.status();
 		},
 		typingBoostBudget: fallbackInputs.typingBoostBudget,
 	};
@@ -373,6 +394,8 @@
 		if (frame.inputContacts) updateDeliveredContacts(frame.inputContacts);
 		if (frame.typing) typingStatus = frame.typing;
 		if (frame.paste) pasteStatus = frame.paste;
+		if (frame.pvInputPhase) pvInputPhase = frame.pvInputPhase;
+		if (frame.pen) penStatus = frame.pen;
 		if (frame?.model && frame.model !== romModel) return;
 		if (frame.recording && sessionRecording) sessionProgress = frame.recording;
 		try {
@@ -554,6 +577,8 @@
 				typingStatus = data.typing;
 				if (data.paste) pasteStatus = data.paste;
 				if (data.inputContacts) updateDeliveredContacts(data.inputContacts);
+				if (data.pvInputPhase) pvInputPhase = data.pvInputPhase;
+				if (data.pen) penStatus = data.pen;
 			}
 			if (data.type === 'render_error') lastError = `Display refresh failed (not a CPU pause or reset): ${data.error}`;
 		};
@@ -795,6 +820,10 @@
 		physicalHeldCodes.clear();
 		physicalHighlights = new Set();
 		if (lastError?.includes('Typing buffer overflow')) lastError = null;
+	}
+	function cancelQueuedInput() {
+		releaseAllPhysicalHeldCodes();
+		releaseInputSource('virtual');
 	}
 
 	async function focusDeviceKeyboard() {
@@ -1155,7 +1184,34 @@
 		}
 	}
 	function saveOnHidden() {
-		if (document.hidden) void saveBattery(true);
+		if (document.hidden) void pauseForLifecycle('the app was hidden');
+	}
+	let lifecycleMessage = '';
+	let lifecycleStop: Promise<void> | null = null;
+	function pauseForLifecycle(reason: string): Promise<void> {
+		if (!['pv-f1', 'oz-9600'].includes(romModel)) return saveBattery(true).then(() => {});
+		if (!romLoaded || loadingRom || workerHealth !== 'ready') return Promise.resolve();
+		if (lifecycleStop) return lifecycleStop;
+		cancelQueuedInput();
+		const active = running || stepBusy || functionRunnerBusy || controlPending === 'start';
+		if (!active) return saveBattery(true).then(() => {});
+		const generation = romLoadGeneration;
+		lifecycleMessage = 'Pausing for browser suspension…';
+		const job = (async () => {
+			const paused = await stop();
+			if (generation === romLoadGeneration)
+				lifecycleMessage = paused
+					? `Paused because ${reason}. Device time is frozen; select Resume to continue.`
+					: 'Pause was not acknowledged; check the emulator status.';
+		})();
+		lifecycleStop = job;
+		void job.finally(() => {
+			if (lifecycleStop === job) lifecycleStop = null;
+		});
+		return job;
+	}
+	function onPageFreeze() {
+		void pauseForLifecycle('the browser suspended this page');
 	}
 	async function installRom(
 		bytes: Uint8Array,
@@ -1293,6 +1349,7 @@
 			return;
 		}
 		if (model === 'pv-f1') {
+			if (!worker) fallbackReadiness.reset();
 			pvHandwritingModel = handwritingModel;
 			pvActiveAssets = {
 				cardRom: media.cardRom.slice(),
@@ -1350,6 +1407,7 @@
 	}
 
 	function refreshFast() {
+		if (!worker) observeFallbackReadiness();
 		pumpFallbackSerial();
 		if (worker) return;
 		if (!emulator) return;
@@ -2067,6 +2125,7 @@
 				if (worker) await workerCall('pv_reset', { model, generation, nextGeneration: generation + 1 }, [model.buffer]);
 				else {
 					emulator.reset_pvf1(model);
+					fallbackReadiness.reset();
 					fallbackInputs.clear();
 					fallbackTablet.discard();
 				}
@@ -2217,6 +2276,95 @@
 			pvBackupError = String(error);
 		}
 	}
+	function applyPvSessionAssets(a: PvSession, label: string) {
+		pvActiveAssets = {
+			cardRom: a.cardRom.slice(),
+			handwritingModel: a.handwritingModel.slice(),
+			ramCardWritable: a.ramCardWritable,
+		};
+		pvCardRom = a.cardRom.slice();
+		pvCardSram = a.cardSram.slice();
+		pvRamCard = a.ramCard.slice();
+		pvRamCardRequested = !!a.ramCard.length;
+		pvRamCardWritable = a.ramCardWritable;
+		pvHandwritingModel = a.handwritingModel.slice();
+		pvCardNames = {
+			rom: a.cardRom.length ? `${label} program card` : '',
+			sram: a.cardSram.length ? `${label} SRAM` : '',
+		};
+		pvRamCardName = a.ramCard.length ? `${label} memory card` : '';
+		pvHandwritingName = a.handwritingModel.length ? `${label} recognition model` : '';
+	}
+	async function exportPvFullBackup() {
+		if (!romLoaded || romModel !== 'pv-f1' || loadingRom || !(await stop())) return;
+		const generation = romLoadGeneration;
+		loadingRom = true;
+		try {
+			const media: PvSession = worker
+				? await workerCall('pv_session_export', { generation })
+				: capturePvSession(emulator, pvActiveAssets);
+			const bytes = await encodePvSession(media);
+			if (generation !== romLoadGeneration) return;
+			downloadBlob(new Blob([Uint8Array.from(bytes)], { type: 'application/octet-stream' }), 'pv-f1.pvbackup');
+			pvBackupError = '';
+			pvBackupStatus = 'Full backup saved';
+		} catch (error) {
+			if (generation === romLoadGeneration) pvBackupError = String(error);
+		} finally {
+			if (generation === romLoadGeneration) loadingRom = false;
+		}
+	}
+	async function importPvFullBackup(event: Event) {
+		const input = event.currentTarget as HTMLInputElement,
+			file = input.files?.[0];
+		input.value = '';
+		if (
+			!file ||
+			!installedRom ||
+			!romLoaded ||
+			romModel !== 'pv-f1' ||
+			loadingRom ||
+			sessionRecording ||
+			!(await stop())
+		)
+			return;
+		const generation = romLoadGeneration;
+		loadingRom = true;
+		try {
+			if (file.size > 64 * 1024 * 1024 + 4096) throw new Error('Full backup exceeds size limit');
+			const bytes = new Uint8Array(await file.arrayBuffer());
+			if (generation !== romLoadGeneration) return;
+			let media: PvSession;
+			if (worker)
+				media = await workerCall('pv_session_restore', { bytes, generation, nextGeneration: generation + 1 }, [
+					bytes.buffer,
+				]);
+			else {
+				media = await decodePvSession(bytes, pvRetainedIdentity(emulator.export_pvf1_retained()));
+				if (generation !== romLoadGeneration) return;
+				loadPvSession(emulator, installedRom.bytes, media);
+				fallbackReadiness.reset();
+				emulator.set_execution_mode(executionMode);
+				fallbackInputs.clear();
+				fallbackTablet.discard();
+				resetFallbackSerial();
+			}
+			if (generation !== romLoadGeneration) return;
+			romLoadGeneration = generation + 1;
+			batteryGeneration = romLoadGeneration;
+			applyPvSessionAssets(media, 'Backup');
+			releaseAllPhysicalHeldCodes();
+			releaseInputSource('virtual');
+			await saveBattery(true);
+			refreshAllNow();
+			pvBackupError = '';
+			pvBackupStatus = `Full backup restored from ${file.name}; Resume to boot from saved records`;
+		} catch (error) {
+			if (generation === romLoadGeneration) pvBackupError = String(error);
+		} finally {
+			if (romLoadGeneration === generation || romLoadGeneration === generation + 1) loadingRom = false;
+		}
+	}
 	async function beginSessionRecording() {
 		if (!worker || sessionBusy || sessionRecording || !romLoaded || !(await stop())) return;
 		sessionBusy = true;
@@ -2302,24 +2450,7 @@
 			targetFps = context.settings.targetFps;
 			soundEnabled = context.settings.sound;
 			if (result.pvAssets) {
-				const a = result.pvAssets;
-				pvActiveAssets = {
-					cardRom: Uint8Array.from(a.cardRom),
-					handwritingModel: Uint8Array.from(a.handwritingModel),
-					ramCardWritable: a.ramCardWritable,
-				};
-				pvCardRom = Uint8Array.from(a.cardRom);
-				pvCardSram = Uint8Array.from(a.cardSram);
-				pvRamCard = Uint8Array.from(a.ramCard);
-				pvRamCardRequested = !!a.ramCard.length;
-				pvRamCardWritable = a.ramCardWritable;
-				pvHandwritingModel = Uint8Array.from(a.handwritingModel);
-				pvCardNames = {
-					rom: a.cardRom.length ? 'Recorded program card' : '',
-					sram: a.cardSram.length ? 'Recorded SRAM' : '',
-				};
-				pvRamCardName = a.ramCard.length ? 'Recorded memory card' : '';
-				pvHandwritingName = a.handwritingModel.length ? 'Recorded recognition model' : '';
+				applyPvSessionAssets(result.pvAssets, 'Recorded');
 			} else {
 				ozLoadedProfile = context.profile;
 				ozProfile = context.profile;
@@ -2357,6 +2488,7 @@
 				]);
 			} else {
 				emulator.restore_pvf1_retained(bytes, pvHandwritingModel);
+				fallbackReadiness.reset();
 				fallbackInputs.clear();
 				fallbackTablet.discard();
 			}
@@ -2596,6 +2728,11 @@
 	}
 
 	async function start() {
+		if (['pv-f1', 'oz-9600'].includes(romModel) && document.hidden) {
+			lifecycleMessage = 'Bring this app into view before resuming.';
+			return;
+		}
+		lifecycleMessage = '';
 		if (!romLoaded || running || controlPending || stepBusy || functionRunnerBusy || workerHealth !== 'ready') return;
 		if (executionMode === 'deterministic') return;
 		if (soundEnabled) {
@@ -2761,6 +2898,8 @@
 			void saveBattery();
 		}, 5000);
 		document.addEventListener('visibilitychange', saveOnHidden);
+		document.addEventListener('freeze', onPageFreeze);
+		window.addEventListener('pagehide', onPageFreeze);
 		document.addEventListener('visibilitychange', onAudioVisibilityChange);
 		try {
 			const requestedModel = normalizeRomModel(new URL(window.location.href).searchParams.get('model'));
@@ -2795,6 +2934,8 @@
 	onDestroy(() => {
 		if (batteryTimer) clearInterval(batteryTimer);
 		document.removeEventListener('visibilitychange', saveOnHidden);
+		document.removeEventListener('freeze', onPageFreeze);
+		window.removeEventListener('pagehide', onPageFreeze);
 		const battery = batterySession;
 		batterySession = null;
 		void battery?.close();
@@ -2852,6 +2993,13 @@
 		</div>
 	</header>
 	{#if soundError}<p role="status">Sound unavailable: {soundError}</p>{/if}
+	{#if ['pv-f1', 'oz-9600'].includes(romModel)}
+		<p class="hint" data-testid="lifecycle-policy">
+			Hiding or suspending this app pauses the emulator and its clock. Resume explicitly when you return; alarms do not
+			fire while paused.
+		</p>
+		{#if lifecycleMessage}<p role="status" data-testid="lifecycle-status">{lifecycleMessage}</p>{/if}
+	{/if}
 	{#if menuOpen}
 		<section class="quick-options" aria-label="Device options">
 			<label
@@ -3046,11 +3194,12 @@
 		<div class="queue-status" role="status">
 			{pasteStatus.pending || typingStatus.pending} keys pending{pasteStatus.pending
 				? ' — paste; delivered contacts, not ROM acknowledgement'
-				: ''}{typingStatus.blocked ? ' — input buffer blocked' : ''}<button on:click={releaseAllPhysicalHeldCodes}
+				: ''}{typingStatus.blocked ? ' — input buffer blocked' : ''}<button on:click={cancelQueuedInput}
 				>Cancel queued keys</button
 			>
 		</div>
 	{/if}
+
 	{#if keyboardNotice}<p class="hint" role="status" data-testid="keyboard-notice">{keyboardNotice}</p>{/if}
 	{#if romModel === 'pi-3000'}
 		<section class="serial-panel" aria-label="Saved records" data-testid="pi-saved-records">
@@ -3075,6 +3224,25 @@
 	{/if}
 	{#if romModel === 'pv-f1'}
 		<section class="serial-panel" aria-label="Saved records" data-testid="pv-saved-records">
+			<button
+				data-testid="pv-full-backup-export"
+				on:click={exportPvFullBackup}
+				disabled={!romLoaded || loadingRom || functionRunnerBusy || stepBusy || !!controlPending}
+				>Save full backup</button
+			>
+			<label
+				>Restore full backup <input
+					type="file"
+					accept=".pvbackup"
+					data-testid="pv-full-backup-file"
+					on:change={importPvFullBackup}
+					disabled={!romLoaded || loadingRom || sessionRecording || functionRunnerBusy || stepBusy || !!controlPending}
+				/></label
+			>
+			<p class="hint">
+				One file includes organizer records, clock, learned handwriting, recognition model and the mounted card. Restore
+				restarts the organizer with the matching firmware.
+			</p>
 			<label
 				><input
 					type="checkbox"
@@ -3362,6 +3530,14 @@
 						fit
 					/>
 				</div>
+				<svelte:fragment slot="input-status"
+					>{#if romModel === 'pv-f1' && romLoaded}<PvInputStatus
+							phase={pvInputPhase}
+							pen={penStatus}
+							paused={!running}
+							onCancel={cancelQueuedInput}
+						/>{/if}</svelte:fragment
+				>
 			</DeviceShell>
 		{/if}
 	</div>
