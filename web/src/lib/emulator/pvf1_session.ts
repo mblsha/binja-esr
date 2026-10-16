@@ -24,6 +24,34 @@ export interface PvIdentityMachine {
 	export_pvf1_retained(): Uint8Array;
 	free(): void;
 }
+export interface PvSessionMachine extends Pick<PvIdentityMachine, 'load_pvf1'> {
+	load_pvf1_with_ram_card(
+		bundle: Uint8Array,
+		retained: Uint8Array,
+		model: Uint8Array,
+		card: Uint8Array,
+		writable: boolean,
+	): void;
+}
+
+/** Native loaders validate a candidate before replacing the active machine. */
+export function loadPvSession(machine: PvSessionMachine, bundle: Uint8Array, session: PvSession): PvAssets {
+	validate(session);
+	if (session.ramCard.length)
+		machine.load_pvf1_with_ram_card(
+			bundle,
+			session.retained,
+			session.handwritingModel,
+			session.ramCard,
+			session.ramCardWritable,
+		);
+	else machine.load_pvf1(bundle, session.retained, session.handwritingModel, session.cardRom, session.cardSram);
+	return {
+		cardRom: session.cardRom.slice(),
+		handwritingModel: session.handwritingModel.slice(),
+		ramCardWritable: session.ramCardWritable,
+	};
+}
 const MAGIC = new TextEncoder().encode('PVWEB01\0');
 const PARTS = ['retained', 'cardRom', 'cardSram', 'ramCard', 'handwritingModel'] as const;
 const LIMIT = 64 * 1024 * 1024;
