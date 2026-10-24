@@ -1127,10 +1127,18 @@
 			return true;
 		const save = (async () => {
 			try {
-				const checkpoint: { image: Uint8Array; session?: Uint8Array } = installedRom?.model === 'pv-f1'
-                    ? { image: await encodePvSession(worker ? await workerCall('pv_session_export', { generation }) : capturePvSession(emulator, pvActiveAssets)) }
-                    : worker ? await workerCall('oz_checkpoint_export', { generation })
-                    : { image: emulator.export_oz9600_retained(), session: emulator.export_oz9600_session() };
+				const checkpoint: { image: Uint8Array; session?: Uint8Array } =
+					installedRom?.model === 'pv-f1'
+						? {
+								image: await encodePvSession(
+									worker
+										? await workerCall('pv_session_export', { generation })
+										: capturePvSession(emulator, pvActiveAssets),
+								),
+							}
+						: worker
+							? await workerCall('oz_checkpoint_export', { generation })
+							: { image: emulator.export_oz9600_retained(), session: emulator.export_oz9600_session() };
 				if (session !== batterySession) return false;
 				const result = await session.save(checkpoint.image, checkpoint.session);
 				if (session !== batterySession) return false;
@@ -2751,6 +2759,8 @@
 				requested.source,
 				generation,
 				new Uint8Array(),
+				new Uint8Array(),
+				null,
 				backup,
 			);
 			if (generation === romLoadGeneration && romLoaded) {

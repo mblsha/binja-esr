@@ -71,7 +71,14 @@ impl Sc62015Emulator {
         retained: &[u8],
         expected_battery: Option<&[u8]>,
     ) -> Result<(), JsValue> {
-        self.install_rom_with_options(rom, model, profile, retained, expected_battery, PvF1Assets::default())
+        self.install_rom_with_options(
+            rom,
+            model,
+            profile,
+            retained,
+            expected_battery,
+            PvF1Assets::default(),
+        )
     }
 
     fn install_rom_with_options(

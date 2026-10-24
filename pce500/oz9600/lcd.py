@@ -57,7 +57,10 @@ class LcdController:
         value = sum(
             (0x80 >> bit)
             for bit in range(8)
-            if (self.firmware_window_candidate or self.permits_pixel(*self.bit_location(x, y, bit), read=True))
+            if (
+                self.firmware_window_candidate
+                or self.permits_pixel(*self.bit_location(x, y, bit), read=True)
+            )
             and self.pixel(*self.bit_location(x, y, bit))
         )
         return value & self.registers[3]

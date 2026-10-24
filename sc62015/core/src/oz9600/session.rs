@@ -385,6 +385,40 @@ mod tests {
         );
     }
     #[test]
+    fn pre_pvf1_shared_state_defaults_restore_and_continue() {
+        let mut original = runtime();
+        original.step_scheduler_boundaries(10).unwrap();
+        let image = original.oz9600_session_state().unwrap();
+        let legacy = changed(&image, |data| {
+            data["hardware"]["lcd"]
+                .as_object_mut()
+                .unwrap()
+                .remove("firmware_window_candidate");
+            data["hardware"]["tablet"]
+                .as_object_mut()
+                .unwrap()
+                .remove("contact_sample");
+            for key in ["policy", "mode_units"] {
+                data["hardware"]["audio"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+            }
+            data["timer"]
+                .as_object_mut()
+                .unwrap()
+                .remove("observation_pc");
+        });
+        let mut restored = runtime();
+        restored.restore_oz9600_session(&legacy).unwrap();
+        original.step_scheduler_boundaries(20).unwrap();
+        restored.step_scheduler_boundaries(20).unwrap();
+        assert_eq!(
+            original.oz9600_session_state().unwrap(),
+            restored.oz9600_session_state().unwrap()
+        );
+    }
+    #[test]
     fn invalid_checkpoint_never_mutates_fresh_candidate() {
         let image = runtime().oz9600_session_state().unwrap();
         let mut bads = vec![vec![], image[..image.len() - 1].to_vec()];

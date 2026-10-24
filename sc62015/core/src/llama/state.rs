@@ -129,7 +129,7 @@ pub struct LlamaState {
     temps: [u32; FAST_TEMP_REGISTERS],
     // Retain the public RegName behavior for malformed/out-of-range helper
     // inputs without putting a HashMap on normal execution paths.
-    #[serde(with = "resume_extra_regs")]
+    #[serde(with = "crate::state_codec::register_map")]
     extra_regs: HashMap<RegName, u32>,
     power_state: PowerState,
     block_transfer_policy: BlockTransferPolicy,
@@ -700,28 +700,5 @@ mod tests {
         assert_eq!(state.pop_call_page(), Some(0xAB0000));
         assert_eq!(state.pop_call_page(), Some(0x120000));
         assert_eq!(state.pop_call_page(), None);
-    }
-}
-
-// A sequence represents TEMP(n) keys without JSON map-key restrictions.
-mod resume_extra_regs {
-    use super::*;
-    pub fn serialize<S: serde::Serializer>(
-        value: &HashMap<RegName, u32>,
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
-        let mut entries: Vec<_> = value.iter().map(|(k, v)| (*k, *v)).collect();
-        entries.sort_by_key(|(k, _)| format!("{k:?}"));
-        entries.serialize(s)
-    }
-    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
-        d: D,
-    ) -> Result<HashMap<RegName, u32>, D::Error> {
-        let entries = Vec::<(RegName, u32)>::deserialize(d)?;
-        let map: HashMap<_, _> = entries.iter().copied().collect();
-        if entries.len() != map.len() {
-            return Err(serde::de::Error::custom("duplicate extra register"));
-        }
-        Ok(map)
     }
 }

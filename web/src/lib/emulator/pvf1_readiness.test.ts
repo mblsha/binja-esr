@@ -30,6 +30,8 @@ it('does not consume holds while waiting; preserves queued matrix and complete p
 	);
 	const p = new TabletInputs(
 		(e) => pen.push(e),
+		undefined,
+		undefined,
 		() => 20,
 		() => 5,
 		() => 2,
@@ -71,6 +73,8 @@ it('cancels waiting input immediately without executing or releasing an undelive
 	const events: any[] = [];
 	const p = new TabletInputs(
 		(e) => events.push(e),
+		undefined,
+		undefined,
 		() => 20,
 		() => 5,
 		() => 2,

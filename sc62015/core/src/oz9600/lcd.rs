@@ -160,7 +160,8 @@ impl LcdController {
         let mut value = 0;
         for bit in 0..8 {
             if self.bit_location(x, y, bit).is_some_and(|(px, py)| {
-                (self.firmware_window_candidate || self.permits_pixel(px, py, true)) && self.pixel(px, py)
+                (self.firmware_window_candidate || self.permits_pixel(px, py, true))
+                    && self.pixel(px, py)
             }) {
                 value |= 0x80 >> bit;
             }

@@ -33,7 +33,11 @@ impl Default for Tablet {
 
 impl Tablet {
     pub(super) fn validate_session(&self) -> Result<(), String> {
-        if self.x > 1023 || self.y > 1023 || self.latched_sample > 1023 || self.contact_sample > 1023 {
+        if self.x > 1023
+            || self.y > 1023
+            || self.latched_sample > 1023
+            || self.contact_sample > 1023
+        {
             return Err("Invalid saved tablet state".into());
         }
         Ok(())
