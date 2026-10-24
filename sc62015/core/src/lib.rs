@@ -1291,8 +1291,11 @@ impl CoreRuntime {
 
     #[inline]
     fn refresh_sio_interrupts(&mut self) {
-        // Only a ready receiver can add an ISR bit; otherwise this is a no-op.
-        if self.sio.as_ref().is_some_and(|sio| !sio.is_register_uart())
+        // Receive-ready holds RXRI asserted, including the register UART.
+        // OZ-9600 measurements keep the request set after early and late
+        // acknowledgment while RXR is full. Reading RXD releases readiness;
+        // the pending bit then remains latched until software acknowledges it.
+        if self.sio.is_some()
             && self
                 .memory
                 .read_internal_byte_silent(IMEM_USR_OFFSET)
