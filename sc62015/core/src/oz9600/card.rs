@@ -70,11 +70,30 @@ impl CoreRuntime {
         if hw.borrow().card.is_some() {
             return Err(CoreError::Other("OZ card already attached".into()));
         }
-        // Executable card bytes are a static, epoch-bound view, just like the
-        // banked system ROM. SRAM below has a separate passive-backing contract;
-        // general device callbacks remain quarantined across scheduler ticks.
+        // The card ROM shares its address window with the mapper's native
+        // upper-window response. Keep instruction and data reads in the same
+        // selected view; the old static overlay hid every native mapper read.
+        // Guest writes may select another view between instructions, whereas
+        // autonomous device ticks do not alter these mapper controls.
+        let rom_reader = hw.clone();
+        let rom_peeker = hw.clone();
+        self.memory.add_overlay(MemoryOverlay {
+            start: 0x40000,
+            end: 0x7ffff,
+            name: "oz9600_card_rom".into(),
+            data: None,
+            read_only: true,
+            read_handler: Some(Box::new(move |address, pc| {
+                Some(rom_reader.borrow_mut().architectural_read(address, pc))
+            })),
+            preflight_read_handler: Some(Box::new(move |address, _| {
+                rom_peeker.borrow().read(address)
+            })),
+            write_handler: None,
+            perfetto_thread: None,
+        });
         self.memory
-            .add_rom_overlay(0x40000, &rom.repeat(2), "oz9600_card_rom");
+            .declare_passive_instruction_rom_view("oz9600_card_rom")?;
         let reader = hw.clone();
         let peeker = hw.clone();
         let writer = hw.clone();
@@ -138,6 +157,47 @@ mod tests {
         assert_eq!(card.read(0x80000), None);
         assert_eq!(card.presence_ssr(0xa4), 0xa6);
     }
+    #[test]
+    fn native_upper_view_is_selected_only_for_measured_mapper_controls() {
+        let mut hardware = super::super::Hardware {
+            card: Some(Oz707Card {
+                rom: vec![0x12; ROM_SIZE],
+                sram: vec![0x34; SRAM_SIZE],
+            }),
+            ..Default::default()
+        };
+        for (mode, selector) in [(0x20, 7), (0x30, 7), (0x20, 0xfe)] {
+            for (address, value) in [
+                (0x04020, mode),
+                (0x04021, selector),
+                (0x04022, 0xff),
+                (0x04023, 1),
+                (0x08b05, 0),
+            ] {
+                hardware.write(address, value, None);
+            }
+            assert_eq!(hardware.read(0x42000), Some(0xe8));
+            assert_eq!(hardware.read(0x52000), Some(0xea));
+            for (address, value, original) in [
+                (0x04020, 0x35, mode),
+                (0x04021, 0x08, selector),
+                (0x04022, 0, 0xff),
+                (0x04023, 0, 1),
+                (0x08b05, 2, 0),
+            ] {
+                hardware.write(address, value, None);
+                assert_eq!(hardware.read(0x42000), Some(0x12));
+                hardware.write(address, original, None);
+            }
+        }
+        hardware.write(0x04020, 0x30, None);
+        assert_eq!(
+            hardware.read(0x42000),
+            Some(0x12),
+            "30/FE is not a measured native view"
+        );
+    }
+
     #[test]
     fn malformed_media_and_wrong_machine_are_rejected_before_mutation() {
         assert!(Oz707Card::from_images(&[], &[]).is_err());

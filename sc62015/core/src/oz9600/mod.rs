@@ -181,6 +181,17 @@ impl Hardware {
             && (self.gpio[5] & 0x03) == 0x02
     }
 
+    fn native_upper_default_read(&self) -> bool {
+        // Physical 20/30 07 FF 01 and ordinary Schedule 20 FE FF 01,
+        // GPIO 00, returned address-derived E8-EE at sampled 4-7 sites.
+        // Other selectors, unsampled offsets and writes remain unqualified.
+        ((matches!(self.gate[0x20], 0x20 | 0x30) && self.selector == 7)
+            || (self.gate[0x20] == 0x20 && self.selector == 0xfe))
+            && self.gate[0x22] == 0xff
+            && self.page_readback() == 1
+            && (self.gpio[5] & 0x03) == 0
+    }
+
     pub fn read(&self, address: u32) -> Option<u8> {
         match address {
             0x04021 => Some(self.selector),
@@ -215,6 +226,9 @@ impl Hardware {
             // configuration, not established physical page wiring.
             0x80000..=0xbffff => Some(self.ram[(address - 0x80000) as usize]),
             0x30000..=0x3ffff => self.card.as_ref().and_then(|card| card.read(address)),
+            0x40000..=0x7ffff if self.native_upper_default_read() => {
+                Some(0xe0 | (((address >> 16) as u8) << 1))
+            }
             0x40000..=0x7ffff => Some(
                 self.card
                     .as_ref()
@@ -294,8 +308,15 @@ impl Hardware {
             }
             0x08420..=0x0843f => {
                 let before = self.watched_pixel();
-                if let Err(error) = self.lcd.write((address & 31) as usize, value) {
-                    self.fault = Some(format!("{error}, write {address:05X}, PC {pc:?}"));
+                // Measured OZ byte/word pairs ignore read-coordinate writes
+                // when selection is closed. Keep this at the model boundary:
+                // other boards sharing the LCD have separate access policies.
+                if !((0x08434..=0x08437).contains(&address)
+                    && self.lcd.registers[0x0e] & lcd::READ_SELECTION_CLOSED != 0)
+                {
+                    if let Err(error) = self.lcd.write((address & 31) as usize, value) {
+                        self.fault = Some(format!("{error}, write {address:05X}, PC {pc:?}"));
+                    }
                 }
                 self.record_pixel_change(before, address, pc);
                 self.log("write", address, value, pc);

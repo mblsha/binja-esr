@@ -266,9 +266,9 @@ pub struct MemoryImage {
     memory_writes: Cell<u64>,
     imr_isr_hook: Option<ImrIsrHook>,
     overlays: Vec<MemoryOverlay>,
-    /// Model-declared passive RAM: callbacks share owned backing, and device
-    /// ticks cannot change its bytes. Ordinary guest stores remain live.
-    passive_instruction_ram: HashSet<String>,
+    /// Model-declared instruction views: owned RAM or a mapper-selected ROM
+    /// response whose bytes cannot change during an autonomous device tick.
+    passive_instruction_views: HashSet<String>,
     overlay_span: Option<(u32, u32)>,
     /// No overlay or host range intersects the upper ROM window
     /// 0xC0000..=0xFFFFF (kept exact by `refresh_upper_rom_plain`).
@@ -337,7 +337,7 @@ impl MemoryImage {
             memory_writes: Cell::new(0),
             imr_isr_hook: None,
             overlays: Vec::new(),
-            passive_instruction_ram: HashSet::new(),
+            passive_instruction_views: HashSet::new(),
             overlay_span: None,
             upper_rom_plain: true,
             memory_card_state: MemoryCardState::Unconfigured,
@@ -536,7 +536,7 @@ impl MemoryImage {
     }
 
     fn add_overlay_internal(&mut self, overlay: MemoryOverlay) {
-        self.passive_instruction_ram.remove(&overlay.name);
+        self.passive_instruction_views.remove(&overlay.name);
         self.overlay_span = Some(match self.overlay_span {
             Some((start, end)) => (start.min(overlay.start), end.max(overlay.end)),
             None => (overlay.start, overlay.end),
@@ -548,7 +548,7 @@ impl MemoryImage {
     }
 
     fn remove_overlay_internal(&mut self, name: &str) -> bool {
-        self.passive_instruction_ram.remove(name);
+        self.passive_instruction_views.remove(name);
         let previous_len = self.overlays.len();
         self.overlays.retain(|ov| ov.name != name);
         self.overlay_span = self.overlays.iter().fold(None, |span, overlay| {
@@ -631,13 +631,36 @@ impl MemoryImage {
             ));
         }
         self.advance_overlay_epoch();
-        self.passive_instruction_ram.insert(name.to_owned());
+        self.passive_instruction_views.insert(name.to_owned());
+        Ok(())
+    }
+
+    /// Declare a read-only model-owned view whose bytes may depend on guest
+    /// mapper writes, but cannot change during a scheduler/device tick. A
+    /// side-effect-free preflight reader must see the same current view.
+    pub(crate) fn declare_passive_instruction_rom_view(&mut self, name: &str) -> Result<()> {
+        let mut matches = self.overlays.iter().filter(|overlay| overlay.name == name);
+        let valid = matches.next().is_some_and(|overlay| {
+            overlay.read_only
+                && overlay.data.is_none()
+                && overlay.read_handler.is_some()
+                && overlay.preflight_read_handler.is_some()
+                && overlay.write_handler.is_none()
+        }) && matches.next().is_none();
+        if !valid {
+            return Err(CoreError::Other(
+                "passive instruction ROM view requires one read-only callback with preflight"
+                    .into(),
+            ));
+        }
+        self.advance_overlay_epoch();
+        self.passive_instruction_views.insert(name.to_owned());
         Ok(())
     }
 
     /// Whether a scheduled instruction byte has one stable view across a host
     /// timer/device tick. General callbacks remain quarantined; a model may
-    /// explicitly declare owned passive RAM under the contract above.
+    /// explicitly declare an owned passive view under the contracts above.
     pub fn instruction_byte_is_stable(&self, address: u32) -> bool {
         let address = canonical_address(address);
         if self.requires_python(address) {
@@ -648,7 +671,7 @@ impl MemoryImage {
                 continue;
             }
             if overlay.read_handler.is_some() || overlay.preflight_read_handler.is_some() {
-                return self.passive_instruction_ram.contains(&overlay.name);
+                return self.passive_instruction_views.contains(&overlay.name);
             }
             if overlay
                 .data
@@ -2446,6 +2469,50 @@ mod tests {
             .memory
             .declare_passive_instruction_ram("missing")
             .is_err());
+    }
+
+    #[test]
+    fn passive_readonly_view_tracks_guest_selection_and_revokes_on_removal() {
+        let selected = Rc::new(Cell::new(0x42));
+        let reader = selected.clone();
+        let peeker = selected.clone();
+        let mut mem = MemoryImage::new();
+        mem.add_overlay(MemoryOverlay {
+            start: 0x40000,
+            end: 0x40000,
+            name: "selected-rom".into(),
+            data: None,
+            read_only: true,
+            read_handler: Some(Box::new(move |_, _| Some(reader.get()))),
+            preflight_read_handler: Some(Box::new(move |_, _| Some(peeker.get()))),
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        assert!(!mem.instruction_byte_is_stable(0x40000));
+        mem.declare_passive_instruction_rom_view("selected-rom")
+            .unwrap();
+        assert!(mem.instruction_byte_is_stable(0x40000));
+        assert_eq!(mem.load_with_pc(0x40000, 8, None), Some(0x42));
+        selected.set(0x24);
+        assert_eq!(mem.read_byte_for_preflight(0x40000, None), Some(0x24));
+        assert_eq!(mem.load_with_pc(0x40000, 8, None), Some(0x24));
+        mem.store(0x40000, 8, 0x99).unwrap();
+        assert_eq!(selected.get(), 0x24);
+        mem.remove_overlay("selected-rom");
+        let reader = selected.clone();
+        let peeker = selected;
+        mem.add_overlay(MemoryOverlay {
+            start: 0x40000,
+            end: 0x40000,
+            name: "selected-rom".into(),
+            data: None,
+            read_only: true,
+            read_handler: Some(Box::new(move |_, _| Some(reader.get()))),
+            preflight_read_handler: Some(Box::new(move |_, _| Some(peeker.get()))),
+            write_handler: None,
+            perfetto_thread: None,
+        });
+        assert!(!mem.instruction_byte_is_stable(0x40000));
     }
 
     #[test]

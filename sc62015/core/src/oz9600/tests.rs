@@ -103,6 +103,46 @@ fn physical_calendar_basic_calendar_b_window_read_contrast() {
 }
 
 #[test]
+fn paired_physical_native_upper_window_samples_use_selected_default_view() {
+    let rt = synthetic_runtime();
+    let hw = rt.oz9600_hardware().unwrap();
+    for (mode, selector) in [(0x20, 7), (0x30, 7), (0x20, 0xfe)] {
+        {
+            let mut hw = hw.borrow_mut();
+            hw.gate[0x20] = mode;
+            hw.selector = selector;
+            hw.gate[0x22] = 0xff;
+            hw.gate[0x23] = 1;
+            hw.gpio[5] = 0;
+        }
+        for (address, expected) in [
+            (0x42000, 0xe8),
+            (0x4a000, 0xe8),
+            (0x52000, 0xea),
+            (0x5a000, 0xea),
+            (0x62000, 0xec),
+            (0x6a000, 0xec),
+            (0x72000, 0xee),
+            (0x7a000, 0xee),
+        ] {
+            assert_eq!(
+                rt.memory.read_byte_for_preflight(address, None),
+                Some(expected)
+            );
+            assert_eq!(rt.memory.load(address, 8), Some(u32::from(expected)));
+        }
+    }
+    {
+        let mut hw = hw.borrow_mut();
+        hw.gate[0x20] = 0x35;
+        hw.gate[0x23] = 0;
+        hw.gpio[5] = 2;
+    }
+    // A card-free component fixture has no ROM, even in the CARD control view.
+    assert_eq!(rt.memory.read_byte_for_preflight(0x42000, None), Some(0xff));
+}
+
+#[test]
 fn opt_in_audio_uses_shared_boundary_timing_and_does_not_mutate_execution() {
     let mut program = vec![0x30, 0xcc, 0xfd, 0x90]; // MV (SCR), ISE | BZ0
     program.extend([0x00; 64]); // NOPs
@@ -570,6 +610,42 @@ fn rtc_advances_through_off_without_cpu_timers_or_automatic_power_wake() {
 }
 
 #[test]
+fn physical_year_zero_daily_alarm_latches_during_off_without_claiming_wake() {
+    use crate::llama::state::PowerState;
+
+    let mut rt = synthetic_runtime();
+    rt.configure_oz9600_profile(ExecutionProfile::ExperimentalRtcIrqImr)
+        .unwrap();
+    let hw = rt.oz9600_hardware().unwrap().clone();
+    {
+        let mut h = hw.borrow_mut();
+        h.execution.experimental_rtc_second_period = Some(10);
+        for (offset, byte) in [0x00, 0xda, 0xdd, 0xec, 0x05].into_iter().enumerate() {
+            h.rtc.write(offset, byte);
+        }
+        for (offset, byte) in [0x00, 0xde, 0xdd, 0x0c, 0x00, 0x07].into_iter().enumerate() {
+            h.rtc.write(16 + offset, byte);
+        }
+        h.rtc.write(rtc::MASK_A, 1);
+        h.gate[0x10] = 1;
+    }
+    rt.state.set_power_state(PowerState::Off);
+    rt.step(2400).unwrap();
+    assert!(rt.state.is_off(), "automatic wake remains a separate gap");
+    assert_eq!((rt.instruction_count(), rt.cycle_count()), (0, 0));
+    let h = hw.borrow();
+    assert_eq!(h.rtc.clock().unwrap().hour, 23);
+    assert_eq!(h.rtc.clock().unwrap().minute, 30);
+    assert_ne!(h.rtc.read(rtc::CAUSE_A) & 1, 0);
+    drop(h);
+    // The RTC source is raised after the scheduler boundary; its provisional
+    // gate-array latch is sampled at the next one, without a CPU instruction.
+    rt.step(1).unwrap();
+    assert_ne!(hw.borrow().gate[0x12] & 1, 0);
+    assert!(rt.state.is_off());
+}
+
+#[test]
 fn physical_replay_on_contact_is_separate_from_matrix_and_released_without_cpu_execution() {
     let mut rt = synthetic_runtime();
     let replay = input::PhysicalReplay::parse(
@@ -983,15 +1059,35 @@ fn physical_predecrement_and_overlap_vectors_are_device_defaults() {
             Some(expected)
         );
     }
-    rt.load_rom(&[0x0b, 8, 0, 0x32, 0xcb, 0x72, 0x70], 0xe0000);
-    rt.set_reg("PC", 0xe0000);
-    rt.step_scheduler_boundaries(2).unwrap();
-    let expected = [
-        0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
-        0x10,
-    ];
-    for (address, expected) in (0x70..0x80).zip(expected) {
-        assert_eq!(rt.memory.read_internal_byte_silent(address), Some(expected));
+    // OZ-9600 acquisitions on 11/18 October 2026 measured both overlap directions.
+    for (destination, source, expected) in [
+        (
+            0x72,
+            0x70,
+            [
+                0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0x11, 0x22, 0xbb, 0xcc, 0xdd, 0xee,
+                0xff, 0x10,
+            ],
+        ),
+        (
+            0x70,
+            0x72,
+            [
+                0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+                0xff, 0x10,
+            ],
+        ),
+    ] {
+        for (address, value) in (0x70..0x80).zip((1..=16).map(|n| (n * 0x11) as u8)) {
+            rt.memory.write_internal_byte(address, value);
+        }
+        rt.load_rom(&[0x0b, 8, 0, 0x32, 0xcb, destination, source], 0xe0000);
+        rt.set_reg("PC", 0xe0000);
+        rt.step_scheduler_boundaries(2).unwrap();
+        assert_eq!(rt.get_reg("I"), 0);
+        for (address, expected) in (0x70..0x80).zip(expected) {
+            assert_eq!(rt.memory.read_internal_byte_silent(address), Some(expected));
+        }
     }
     rt.power_on_reset().unwrap();
     assert_eq!(
@@ -1110,4 +1206,36 @@ fn recognized_irq_session_roundtrip_continues_and_reset_clears_latch() {
     restored.timer.clear_pending_for_reset();
     assert_eq!(restored.timer.recognized_mask, 0);
     assert!(restored.timer.recognition_delay);
+}
+
+#[test]
+fn oz_bus_read_coordinate_byte_and_word_writes_obey_access_selection() {
+    let mut rt = synthetic_runtime();
+    for (offset, initial, changed) in [
+        (0x14, 0x0069, 0x0068),
+        (0x14, 0x0069, 0x0169),
+        (0x16, 0x0011, 0x0010),
+        (0x16, 0x0011, 0x0111),
+    ] {
+        for word in [false, true] {
+            for (control, closed) in [(0x05, false), (0x15, true)] {
+                rt.memory.store(0x0842e, 8, 0x05).unwrap();
+                rt.memory.store(0x08420 + offset, 16, initial).unwrap();
+                rt.memory.store(0x0842e, 8, control).unwrap();
+                if word {
+                    rt.memory.store(0x08420 + offset, 16, changed).unwrap();
+                } else if initial & 255 != changed & 255 {
+                    rt.memory.store(0x08420 + offset, 8, changed & 255).unwrap();
+                } else {
+                    rt.memory.store(0x08421 + offset, 8, changed >> 8).unwrap();
+                }
+                rt.memory.store(0x0842e, 8, 0x05).unwrap();
+                assert_eq!(
+                    rt.memory.load(0x08400 + offset, 16),
+                    Some(if closed { initial } else { changed })
+                );
+                assert!(rt.oz9600_hardware().unwrap().borrow().fault.is_none());
+            }
+        }
+    }
 }
