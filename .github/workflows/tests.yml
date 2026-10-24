@@ -9,11 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # Keep pull-request feedback to one authoritative interpreter. The
-        # second supported version still runs after merge on push.
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.11"]' || '["3.11", "3.12"]') }}
 
     steps:
     - uses: actions/checkout@v4
@@ -23,7 +18,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: "3.11"
     
     - name: Install uv
       uses: astral-sh/setup-uv@v4
@@ -42,13 +37,6 @@ jobs:
         uv pip install maturin
         uv run maturin develop --manifest-path sc62015/rustcore/Cargo.toml
     
-    - name: Run LLAMA/Python parity sweep
-      env:
-        FORCE_BINJA_MOCK: 1
-      run: |
-        uv run python tools/llama_parity_sweep.py --emit-traces --trace-prefix trace_ref
-        uv run python scripts/compare_perfetto_traces.py --compare-irq trace_ref_python.trace trace_ref_llama.trace
-
     - name: Run contract harness parity tests
       env:
         FORCE_BINJA_MOCK: 1

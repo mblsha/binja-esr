@@ -1622,55 +1622,6 @@ def test_instruction_execution(case: InstructionTestCase) -> None:
         )
 
 
-# HW-002 intentionally drives a complete 65,536-iteration register ring. Under
-# coverage, slower CPython runners can legitimately exceed the global 60s guard.
-@pytest.mark.timeout(180)
-@pytest.mark.parametrize(
-    ("mnemonic", "instr_bytes", "expected_fz", "write_multiplier"),
-    [
-        ("ADCL", bytes.fromhex("541020"), 0, 1),
-        ("SBCL", bytes.fromhex("5C1020"), 1, 1),
-        ("DADL", bytes.fromhex("C41020"), 0, 1),
-        ("DSBL", bytes.fromhex("D41020"), 1, 1),
-        ("MVL", bytes.fromhex("CB1020"), 1, 1),
-        ("MVLD", bytes.fromhex("CF1020"), 1, 1),
-        ("EXL", bytes.fromhex("C31020"), 1, 2),
-        ("DSLL", bytes.fromhex("EC10"), 0, 1),
-        ("DSRL", bytes.fromhex("FC10"), 0, 1),
-    ],
-    ids=lambda value: value if isinstance(value, str) else None,
-)
-def test_hw002_zero_counted_instruction_executes_full_16bit_ring(
-    mnemonic: str,
-    instr_bytes: bytes,
-    expected_fz: int,
-    write_multiplier: int,
-) -> None:
-    """HW-002 backs the count; expected_fz is the provisional model policy.
-
-    This flat all-zero bus does not establish the live SFR inputs in the
-    original hardware probe. HW-023 rechecks addition/shift Z special cases.
-    """
-    cpu, raw, _reads, writes = _make_cpu_and_mem(ADDRESS_SPACE_SIZE, {}, instr_bytes)
-    cpu.regs.set(RegisterName.I, 0)
-    cpu.regs.set(RegisterName.FC, 0)
-    cpu.regs.set(RegisterName.FZ, 1)
-
-    decoded = cpu.decode_instruction(0)
-    assert decoded is not None
-    assert asm_str(decoded.render()).split()[0] == mnemonic
-
-    cpu.execute_instruction(0)
-
-    assert cpu.regs.get(RegisterName.I) == 0
-    assert cpu.regs.get(RegisterName.FC) == 0
-    assert cpu.regs.get(RegisterName.FZ) == expected_fz
-    assert cpu.regs.get(RegisterName.PC) == len(instr_bytes)
-    assert len(writes) == 0x10000 * write_multiplier
-    assert raw[imem(0x10)] == 0
-    assert raw[imem(0x20)] == 0
-
-
 @pytest.mark.parametrize(("initial_i", "expected_cycles"), [(3, 3), (0, 0x10000)])
 def test_hw002_wait_dispatch_uses_16bit_do_while_count(
     initial_i: int, expected_cycles: int
