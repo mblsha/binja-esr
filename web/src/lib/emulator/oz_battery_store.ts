@@ -68,7 +68,12 @@ export const browserBatteryStorage: BatteryStorage = {
 			record.previous !== undefined &&
 			(!Array.isArray(record.previous) ||
 				record.previous.length > BATTERY_HISTORY_LIMIT ||
-				record.previous.some((v: BatteryVersion) => !(v?.image instanceof Uint8Array) || !Number.isFinite(v?.savedAt)))
+				record.previous.some(
+					(v: BatteryVersion) =>
+						!(v?.image instanceof Uint8Array) ||
+						!Number.isFinite(v?.savedAt) ||
+						(v.session !== undefined && !(v.session instanceof Uint8Array)),
+				))
 		)
 			throw new Error('Saved-record history has an invalid storage format; the original was preserved');
 		return { ...copyVersion(record), previous: record.previous?.map(copyVersion) };
@@ -137,7 +142,10 @@ export class BatterySession {
 	versions(): BatteryVersion[] {
 		return this.image === null
 			? []
-			: [copyVersion({ image: this.image, session: this.session ?? undefined, savedAt: this.savedAt! }), ...this.previous.map(copyVersion)];
+			: [
+					copyVersion({ image: this.image, session: this.session ?? undefined, savedAt: this.savedAt! }),
+					...this.previous.map(copyVersion),
+				];
 	}
 	static async open(key: string, storage = browserBatteryStorage, lock = browserBatteryLock): Promise<BatterySession> {
 		const release = await lock(key);
