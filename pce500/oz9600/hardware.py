@@ -1,7 +1,7 @@
 """Provisional logical OZ bus. No CPU, captured RAM or physical alias claim."""
 
 from .audio import AudioCapture
-from .lcd import LcdController
+from .lcd import LcdController, READ_SELECTION_CLOSED
 from .rtc import Rtc
 from .tablet import Tablet
 
@@ -64,6 +64,20 @@ class Hardware:
             and self.gpio[5] & 0x03 == 0x02
         )
 
+    def _native_upper_default_read(self):
+        # Physical 20/30 07 FF 01 and ordinary Schedule 20 FE FF 01,
+        # GPIO 00 returned E8-EE at sampled 4-7 sites. Other selectors,
+        # unsampled offsets and writes remain provisional.
+        return (
+            (
+                (self.gate[0x20] in (0x20, 0x30) and self.selector == 7)
+                or (self.gate[0x20] == 0x20 and self.selector == 0xFE)
+            )
+            and self.gate[0x22] == 0xFF
+            and self._page_readback() == 1
+            and self.gpio[5] & 3 == 0
+        )
+
     def _page_readback(self):
         # Physical CARD/BASIC write 10 -> read 00; retain the raw write latch.
         return self.gate[0x23] & ~0x10
@@ -104,6 +118,8 @@ class Hardware:
         if 0x30000 <= address <= 0x3FFFF:
             return self.card.read(address) if self.card else None
         if 0x40000 <= address <= 0x7FFFF:
+            if self._native_upper_default_read():
+                return 0xE0 | ((address >> 16) << 1)
             return self.card.read(address) if self.card else 255
         if 0xC0000 <= address <= 0xDFFFF and self.selector in self.banks:
             return self.banks[self.selector][address - 0xC0000]
@@ -137,7 +153,13 @@ class Hardware:
             elif 0x8000 <= address <= 0x83FF:
                 self.rtc.write(address & 31, value)
             elif 0x8420 <= address <= 0x843F:
-                self.lcd.write(address & 31, value)
+                # OZ byte/word pairs ignore read-coordinate writes while
+                # selection is closed. Other boards' access policy is open.
+                if not (
+                    0x8434 <= address <= 0x8437
+                    and self.lcd.registers[14] & READ_SELECTION_CLOSED
+                ):
+                    self.lcd.write(address & 31, value)
             elif address == 0x8800:
                 self.tablet.write_conversion_control(value)
             elif 0x8B00 <= address <= 0x8BFF:

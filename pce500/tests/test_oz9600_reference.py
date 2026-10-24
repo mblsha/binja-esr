@@ -303,6 +303,48 @@ def test_schedule_special_seconds_match_the_programmed_minute_without_relaxing_c
         assert not rtc.read(10) & 1
 
 
+def test_physical_daily_alarm_year_zero_form_matches_current_year_only_at_deadline():
+    # Read-only physical images from 27 and 30 December 1994. The ordinary
+    # cached candidates retain 1994; RTC alarm-register readback has year 00.
+    for current, alarm, before_deadline in [
+        ("00 DA DD EC 05", "00 DE DD 0C 00 07", 239),
+        ("19 A9 F0 EC 05", "00 9E F4 0C 00 07", 56914),
+    ]:
+        rtc = Rtc()
+        rtc.backing[:5] = bytes.fromhex(current)
+        rtc.backing[16:22] = bytes.fromhex(alarm)
+        rtc.write(8, 1)
+        rtc.advance_experimental_seconds(before_deadline)
+        assert not rtc.read(10) & 1
+        rtc.advance_experimental_seconds(1)
+        assert rtc.read(10) & 1 and rtc.interrupt_asserted()
+        rtc.write(10, 0)
+        rtc.advance_experimental_seconds(1)
+        assert not rtc.read(10) & 1
+
+    # A complete, nonzero year remains an exact-date deadline.
+    rtc = Rtc()
+    rtc.backing[:5] = bytes.fromhex("00 DA DD EC 05")
+    rtc.backing[16:22] = bytes.fromhex("00 DE DD DC 05 07")
+    rtc.advance_experimental_seconds(240)
+    assert not rtc.read(10) & 1
+
+    # The inferred year wildcard does not relax month/day matching.
+    rtc = Rtc()
+    rtc.backing[:5] = bytes.fromhex("00 DA DD EC 05")
+    rtc.backing[16:22] = bytes.fromhex("00 DE E5 0C 00 07")
+    rtc.advance_experimental_seconds(240)
+    assert not rtc.read(10) & 1
+
+    # A bounded interval that crosses New Year can encounter the same form
+    # in the next calendar year without broadening nonzero-year deadlines.
+    rtc = Rtc()
+    rtc.backing[:5] = Clock(1994, 12, 31, 23, 59, 58, 5).encode(bytes(5))
+    rtc.backing[16:22] = bytes.fromhex("00 00 08 01 00 07")
+    rtc.advance_experimental_seconds(3)
+    assert rtc.clock().year == 1995 and rtc.read(10) & 1
+
+
 def test_off_time_advances_only_the_opt_in_rtc_source_and_preserves_phase_during_hold():
     from pce500.oz9600.hardware import Hardware
 
@@ -641,3 +683,35 @@ def test_physical_window_readback_preserves_excluded_backing_pixels(
     assert read_group() == 0
     window((0, 0, 319, 239))
     assert read_group() == backing
+
+
+@pytest.mark.parametrize("word", [False, True])
+@pytest.mark.parametrize("control,closed", [(0x05, False), (0x15, True)])
+@pytest.mark.parametrize(
+    "offset,initial,changed",
+    [
+        (20, 0x0069, 0x0068),
+        (20, 0x0069, 0x0169),
+        (22, 0x0011, 0x0010),
+        (22, 0x0011, 0x0111),
+    ],
+)
+def test_oz_bus_read_coordinate_writes_obey_access_selection(
+    word, control, closed, offset, initial, changed
+):
+    # Paired byte/word writes, scoped to the OZ bus. The measured Y pairs
+    # are 0011 -> 0010 and 0011 -> 0111; other board policies stay separate.
+    hw = Hardware()
+    hw.write(0x0842E, 0x05)
+    hw.write(0x08420 + offset, initial & 255)
+    hw.write(0x08421 + offset, initial >> 8)
+    hw.write(0x0842E, control)
+    low = changed & 255
+    high = changed >> 8
+    if word or low != initial & 255:
+        hw.write(0x08420 + offset, low)
+    if word or high != initial >> 8:
+        hw.write(0x08421 + offset, high)
+    hw.write(0x0842E, 0x05)
+    assert hw.lcd.word(offset) == (initial if closed else changed)
+    assert hw.fault is None
