@@ -1,4 +1,4 @@
-"""Decoder/LLIL PRE1 consistency for one-selector MVL; not hardware evidence."""
+"""Decoder/LLIL MVL regressions; physical vectors are identified per test."""
 
 import pytest
 from binja_test_mocks.eval_llil import Memory
@@ -61,3 +61,34 @@ def test_mvl_external_destination_uses_pre1_for_its_only_imem_selector(
     )
     assert cpu.regs.get(RegisterName.I) == 0
     assert cpu.regs.get(RegisterName.F) == 3
+
+
+@pytest.mark.parametrize("backend", ["python", "llama"])
+@pytest.mark.parametrize(
+    "destination,source,expected_hex",
+    [
+        (0x72, 0x70, "11 22 11 22 11 22 11 22 11 22 BB CC DD EE FF 10"),
+        (0x70, 0x72, "33 44 55 66 77 88 99 AA 99 AA BB CC DD EE FF 10"),
+    ],
+)
+def test_physical_internal_overlap_vectors(backend, destination, source, expected_hex):
+    # OZ-9600 11/18 October 2026: eight bytes, exact PRE32/CB encodings.
+    raw = bytearray(ADDRESS_SPACE_SIZE)
+    raw[0x1000:0x1004] = bytes([0x32, 0xCB, destination, source])
+    raw[INTERNAL_MEMORY_START + 0x70 : INTERNAL_MEMORY_START + 0x80] = bytes.fromhex(
+        "11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF 10"
+    )
+    raw[INTERNAL_MEMORY_START + 0xEC : INTERNAL_MEMORY_START + 0xEF] = bytes(
+        [0xB3, 3, 0xC0]
+    )
+    expected = bytearray(raw)
+    expected[INTERNAL_MEMORY_START + 0x70 : INTERNAL_MEMORY_START + 0x80] = (
+        bytes.fromhex(expected_hex)
+    )
+    memory = Memory(raw.__getitem__, raw.__setitem__)
+    setattr(memory, "peek_byte_for_preflight", lambda address, _pc=None: raw[address])
+    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    cpu.regs.set(RegisterName.I, 8)
+    cpu.execute_instruction(0x1000)
+    assert raw == expected
+    assert cpu.regs.get(RegisterName.I) == 0
