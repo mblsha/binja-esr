@@ -1,5 +1,10 @@
 from .opcodes import *  # noqa: F401,F403
-from .opcodes import _lift_wrapped_memory_load, _low_byte, _resize_unsigned
+from .opcodes import (
+    _lift_wrapped_memory_load,
+    _low_byte,
+    _resize_unsigned,
+    _zero_extend_byte,
+)
 from binaryninja.enums import BranchType  # noqa: F401
 from .traits import HasWidth
 from typing import Callable
@@ -1623,7 +1628,7 @@ class IncDecInstruction(Instruction):
                 il.or_expr(
                     2,
                     il.and_expr(2, il.reg(2, RegisterName("I")), il.const(2, 0xFF00)),
-                    il.zero_extend(2, result.lift(il)),
+                    _zero_extend_byte(il, 2, result.lift(il)),
                 ),
             )
         )
