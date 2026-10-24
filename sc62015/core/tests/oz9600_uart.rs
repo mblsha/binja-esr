@@ -23,14 +23,15 @@ fn ordinary_guest_txd_write_reaches_host_without_an_iocs_shortcut() {
 
 #[cfg(feature = "oz9600")]
 #[test]
-fn runtime_receive_irq_latches_on_arrival_without_reasserting_on_every_instruction() {
+fn runtime_receive_irq_stays_asserted_while_ready_and_latched_until_ack_after_read() {
     use sc62015_core::oz9600::{configure_hardware, Hardware};
     let mut fixed = vec![0; 0x20000];
-    fixed[..6].copy_from_slice(&[0x30, 0xcc, 0xf7, 0x48, 0x13, 2]);
+    // Guest masks acceptance and selects the physically checked 9600-8N1 mode.
+    fixed[..10].copy_from_slice(&[0x30, 0xcc, 0xfb, 0, 0x30, 0xcc, 0xf7, 0x78, 0x13, 2]);
     fixed[0x1fffd..].copy_from_slice(&[0, 0, 0x0e]);
     let mut rt = configure_hardware(&fixed, Hardware::default()).unwrap();
     rt.step_scheduler_boundaries(10).unwrap();
-    rt.queue_sio_receive_byte(0x41);
+    rt.queue_sio_receive_byte(0x43);
     assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20, 0);
     rt.step_scheduler_boundaries(50_000).unwrap();
     assert_eq!(
@@ -41,18 +42,50 @@ fn runtime_receive_irq_latches_on_arrival_without_reasserting_on_every_instructi
         rt.memory.read_internal_byte_silent(0xf8).unwrap() & 0x20,
         0x20
     );
-    // Component fixture acknowledges ISR while deliberately leaving RXD unread.
-    // RXR alone must not create a second completion event.
-    rt.memory.write_internal_byte(0xfc, 0);
-    rt.step_scheduler_boundaries(50_000).unwrap();
+
+    // OZ-9600 native observations: acknowledgment cannot quench RXRI while
+    // RXR remains full, including a repeat long after the byte's arrival.
+    let other = rt.memory.read_internal_byte_silent(0xfc).unwrap() & !0x20;
+    rt.memory.write_internal_byte(0xfc, other);
+    rt.step_scheduler_boundaries(1).unwrap();
+    assert_eq!(
+        rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20,
+        0x20
+    );
+    rt.step_scheduler_boundaries(4096).unwrap();
+    rt.memory.write_internal_byte(0xfc, other);
+    rt.step_scheduler_boundaries(4096).unwrap();
+    assert_eq!(
+        rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20,
+        0x20
+    );
+
+    assert_eq!(
+        rt.sio.as_mut().unwrap().handle_read(0xf9, &mut rt.memory),
+        Some(0x43)
+    );
+    assert_eq!(rt.memory.read_internal_byte_silent(0xf8).unwrap() & 0x20, 0);
+    rt.step_scheduler_boundaries(1).unwrap();
+    assert_eq!(
+        rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20,
+        0x20
+    );
+    let other = rt.memory.read_internal_byte_silent(0xfc).unwrap() & !0x20;
+    rt.memory.write_internal_byte(0xfc, other);
+    rt.step_scheduler_boundaries(4096).unwrap();
     assert_eq!(rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20, 0);
-    rt.queue_sio_receive_byte(0x42);
+    assert_eq!(
+        rt.memory.read_internal_byte_silent(0xfc).unwrap() & other,
+        other
+    );
+
+    rt.queue_sio_receive_byte(0xc6);
     rt.step_scheduler_boundaries(50_000).unwrap();
     assert_eq!(
         rt.memory.read_internal_byte_silent(0xfc).unwrap() & 0x20,
         0x20
     );
-    assert_eq!(rt.memory.read_internal_byte_silent(0xf8).unwrap() & 2, 2);
+    assert_eq!(rt.memory.read_internal_byte_silent(0xf8).unwrap() & 7, 0);
     rt.power_on_reset().unwrap();
     assert_eq!(rt.sio.as_ref().unwrap().uart().unwrap().control, 0);
     assert_eq!(rt.memory.read_internal_byte_silent(0xf8), Some(0x18));
