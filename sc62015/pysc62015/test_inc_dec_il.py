@@ -24,7 +24,7 @@ def test_inc_dec_il_preserves_ih_carry_and_uses_byte_zero(
     raw = bytearray(ADDRESS_SPACE_SIZE)
     raw[0x1000:0x1002] = bytes([opcode, 1])
     memory = Memory(raw.__getitem__, raw.__setitem__)
-    memory.peek_byte_for_preflight = lambda address, _pc=None: raw[address]
+    setattr(memory, "peek_byte_for_preflight", lambda address, _pc=None: raw[address])
     cpu = CPU(memory, reset_on_init=False, backend=backend)
     cpu.regs.set(RegisterName.I, initial)
     cpu.regs.set(RegisterName.FC, carry)
@@ -40,7 +40,7 @@ def test_keyword_probe_keeps_the_word_for_the_following_comparison(backend):
     # INC IL; DEC IL; SUB BA,I: the complete 8264 word must still compare equal.
     raw[0x1000:0x1006] = bytes.fromhex("6c 01 7c 01 4c 23")
     memory = Memory(raw.__getitem__, raw.__setitem__)
-    memory.peek_byte_for_preflight = lambda address, _pc=None: raw[address]
+    setattr(memory, "peek_byte_for_preflight", lambda address, _pc=None: raw[address])
     cpu = CPU(memory, reset_on_init=False, backend=backend)
     cpu.regs.set(RegisterName.I, 0x8264)
     cpu.regs.set(RegisterName.BA, 0x8264)
