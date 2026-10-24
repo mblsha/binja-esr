@@ -649,39 +649,49 @@ def test_reg_imem_offset_imem_selector_uses_pre1(backend: str) -> None:
 
 
 # HW-002 backs the 65,536 count, not the flat-bus flag policy below (HW-023).
-# The Python LLIL backend can legitimately exceed the global 60s guard in CI.
-@pytest.mark.timeout(180)
-@pytest.mark.parametrize("backend", ["python", "llama"])
+# The full ring runs on the native LLAMA core only; the Python LLIL backend
+# spends minutes on the same 65,536 iterations.
+_HW002_RING_CASES = [
+    ("ADCL", bytes.fromhex("541020"), 0, 1),
+    ("SBCL", bytes.fromhex("5C1020"), 1, 1),
+    ("DADL", bytes.fromhex("C41020"), 0, 1),
+    ("DSBL", bytes.fromhex("D41020"), 1, 1),
+    ("MVL", bytes.fromhex("CB1020"), 1, 1),
+    ("MVLD", bytes.fromhex("CF1020"), 1, 1),
+    ("EXL", bytes.fromhex("C31020"), 1, 2),
+    ("DSLL", bytes.fromhex("EC10"), 0, 1),
+    ("DSRL", bytes.fromhex("FC10"), 0, 1),
+]
+
+
 @pytest.mark.parametrize(
-    ("mnemonic", "program", "expected_fz"),
-    [
-        ("ADCL", bytes.fromhex("541020"), 0),
-        ("SBCL", bytes.fromhex("5C1020"), 1),
-        ("DADL", bytes.fromhex("C41020"), 0),
-        ("DSBL", bytes.fromhex("D41020"), 1),
-        ("MVL", bytes.fromhex("CB1020"), 1),
-        ("MVLD", bytes.fromhex("CF1020"), 1),
-        ("EXL", bytes.fromhex("C31020"), 1),
-        ("DSLL", bytes.fromhex("EC10"), 0),
-        ("DSRL", bytes.fromhex("FC10"), 0),
-    ],
+    ("mnemonic", "program", "expected_fz", "write_multiplier"),
+    _HW002_RING_CASES,
+    ids=[case[0] for case in _HW002_RING_CASES],
 )
-def test_hw002_i_zero_counted_model_contract_across_backends(
-    backend: str, mnemonic: str, program: bytes, expected_fz: int
+def test_hw002_i_zero_executes_full_16bit_ring(
+    mnemonic: str, program: bytes, expected_fz: int, write_multiplier: int
 ) -> None:
-    """Keep both cores aligned without claiming measured all-zero SFR inputs.
+    """Pin the I=0 ring without claiming measured all-zero SFR inputs.
 
     Addition/shift expected_fz values retain the explicitly provisional I=0
     compatibility rule. This is a model regression, not an exact raw-capture
     replay or new evidence that silicon has a count-specific Z exception.
     """
-    if backend == "llama":
-        assert "llama" in available_backends(), "LLAMA backend not available"
+    assert "llama" in available_backends(), "LLAMA backend not available"
 
     raw = bytearray(ADDRESS_SPACE_SIZE)
     raw[: len(program)] = program
     memory = _make_memory(raw)
-    cpu = CPU(memory, reset_on_init=False, backend=backend)
+    writes: list[int] = []
+    store = memory.write_mem
+
+    def counting_write(address: int, value: int) -> None:
+        writes.append(address)
+        store(address, value)
+
+    memory.write_mem = counting_write
+    cpu = CPU(memory, reset_on_init=False, backend="llama")
     cpu.regs.set(RegisterName.I, 0)
     cpu.regs.set(RegisterName.FC, 0)
     cpu.regs.set(RegisterName.FZ, 1)
@@ -692,6 +702,7 @@ def test_hw002_i_zero_counted_model_contract_across_backends(
     assert cpu.regs.get(RegisterName.I) == 0
     assert cpu.regs.get(RegisterName.FC) == 0
     assert cpu.regs.get(RegisterName.FZ) == expected_fz
+    assert len(writes) == 0x10000 * write_multiplier
     assert raw[INTERNAL_MEMORY_START + 0x10] == 0
     assert raw[INTERNAL_MEMORY_START + 0x20] == 0
 
