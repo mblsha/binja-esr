@@ -15,9 +15,24 @@ export class TabletInputs {
 		private mailboxBusy: () => boolean = () => false,
 		private minimumHold: () => number = () => 40_000,
 		private minimumGap: () => number = () => 0,
-		private replayPointHold: () => number = () => 0,
+		replayPointHold: () => number = () => 0,
+		canDeliver: () => boolean = () => true,
 	) {
-		this.buffered = new BufferedTabletInputs(apply, minimumHold, minimumGap, replayPointHold);
+		this.buffered = new BufferedTabletInputs(apply, minimumHold, minimumGap, replayPointHold, canDeliver);
+	}
+	checkpoint() {
+		return this.buffered.checkpoint();
+	}
+	restoreCheckpoint(input: ReturnType<BufferedTabletInputs['checkpoint']>) {
+		this.buffered.restoreCheckpoint(input);
+		this.held = null;
+		this.queue = [];
+		this.gap = 0;
+	}
+	status() {
+		return this.minimumGap() > 0
+			? this.buffered.status()
+			: { strokes: this.queue.length + Number(this.held !== null), points: 0, blocked: false };
 	}
 	private canRelease() {
 		return this.held?.remaining === 0 && (this.ready() || this.held.grace === 0);
@@ -115,7 +130,6 @@ export class TabletInputs {
 	};
 }
 
-
 type Stroke = {
 	owner: string;
 	contact: TabletContact;
@@ -145,7 +159,7 @@ class BufferedTabletInputs {
 			points: this.pendingPoints,
 		});
 	}
-	restoreCheckpoint(input: ReturnType<TabletInputs['checkpoint']>) {
+	restoreCheckpoint(input: ReturnType<BufferedTabletInputs['checkpoint']>) {
 		const d = structuredClone(input);
 		const fail = () => {
 			throw new Error('Invalid tablet-input checkpoint');

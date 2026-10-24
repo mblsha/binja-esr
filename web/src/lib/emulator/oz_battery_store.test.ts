@@ -16,7 +16,11 @@ function fixture() {
 				image: record.image.slice(),
 				session: record.session?.slice(),
 				savedAt: record.savedAt,
-				previous: record.previous?.map((v: BatteryVersion) => ({ image: v.image.slice(), savedAt: v.savedAt })),
+				previous: record.previous?.map((v: BatteryVersion) => ({
+					image: v.image.slice(),
+					session: v.session?.slice(),
+					savedAt: v.savedAt,
+				})),
 			});
 		}),
 	};
@@ -147,5 +151,12 @@ it('commits RAM and running state atomically; quota failures retain both and all
 	await a.close();
 	const b = await BatterySession.open('paired', f.storage, f.lock);
 	expect(b.loaded?.session).toEqual(new Uint8Array([4]));
+	const history = b.versions();
+	expect(history.map(({ image, session }) => [Array.from(image), session && Array.from(session)])).toEqual([
+		[[3], [4]],
+		[[1], [2]],
+	]);
+	history[1].session![0] = 99;
+	expect(b.versions()[1].session).toEqual(new Uint8Array([2]));
 	await b.close();
 });

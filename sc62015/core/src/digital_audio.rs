@@ -27,7 +27,9 @@ pub struct AudioChunk {
 
 #[derive(Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct AudioCapture {
+    #[serde(default)]
     policy: AudioModePolicy,
+    #[serde(default)]
     mode_units: [u64; 8],
     enabled: bool,
     phase: u64,

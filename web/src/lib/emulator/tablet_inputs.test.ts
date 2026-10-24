@@ -6,6 +6,8 @@ describe('buffered pen strokes', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 		);
@@ -38,6 +40,8 @@ describe('buffered stroke lifecycle', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 		);
@@ -54,6 +58,8 @@ describe('buffered stroke lifecycle', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 		);
@@ -79,6 +85,8 @@ describe('buffered stroke lifecycle', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 		);
@@ -100,6 +108,8 @@ describe('buffered stroke lifecycle', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 		);
@@ -125,6 +135,8 @@ describe('deferred handwriting motion', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 8,
 			() => 2,
 			() => 2,
@@ -156,6 +168,8 @@ describe('deferred handwriting motion', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 1,
 			() => 2,
 			() => 2,
@@ -177,6 +191,8 @@ describe('deferred handwriting motion', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 			() => 2,
@@ -201,6 +217,8 @@ describe('deferred handwriting motion', () => {
 		const apply = vi.fn();
 		const pen = new TabletInputs(
 			apply,
+			undefined,
+			undefined,
 			() => 2,
 			() => 2,
 			() => 2,

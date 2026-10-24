@@ -40,6 +40,8 @@ describe('live input checkpoints', () => {
 		const make = (events: unknown[]) =>
 			new TabletInputs(
 				(c) => events.push({ ...c }),
+				undefined,
+				undefined,
 				() => 200_000,
 				() => 50_000,
 				() => 20_000,
