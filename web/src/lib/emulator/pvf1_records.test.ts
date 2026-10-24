@@ -19,7 +19,7 @@ describe('native PV-F1 records', () => {
 			text = await recordsJson(record);
 		expect(text.length).toBeGreaterThan(12 * 1024 * 1024);
 		expect((await importRecordsJson(text)).bytes).toEqual(bytes);
-	});
+	}, 30_000); // The expanded fixture exceeds 12 MiB and takes longer on shared CI runners.
 	it('preserves original unknown bytes/columns, quoted fields, empty cells and memo paragraph separators', async () => {
 		const bytes = wire(
 			'"i","SCRT","CLSC","CLAS","MEM1","FUTURE"\r\n"T","Secret","Code","Class","Memo","Future"\r\n"D"," ",,"Group","A\x1fB, ""quoted""","\x82"\r\n\x1a',
