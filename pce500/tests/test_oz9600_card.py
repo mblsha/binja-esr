@@ -29,6 +29,46 @@ def test_canonical_sram_read_mirror_and_readonly_rom_share_one_backing():
     assert hw.card.read(0x80000) is None
 
 
+def test_paired_physical_native_upper_samples_override_card_rom_view():
+    hw = Hardware()
+    hw.card = fixture_card()
+    for mode in (0x20, 0x30):
+        hw.gate[0x20], hw.selector, hw.gate[0x22], hw.gate[0x23], hw.gpio[5] = (
+            mode,
+            7,
+            0xFF,
+            1,
+            0,
+        )
+        for address, expected in (
+            (0x42000, 0xE8),
+            (0x4A000, 0xE8),
+            (0x52000, 0xEA),
+            (0x5A000, 0xEA),
+            (0x62000, 0xEC),
+            (0x6A000, 0xEC),
+            (0x72000, 0xEE),
+            (0x7A000, 0xEE),
+        ):
+            assert hw.read(address) == expected
+    hw.gate[0x20], hw.selector = 0x20, 0xFE
+    for address, expected in (
+        (0x42000, 0xE8),
+        (0x4A000, 0xE8),
+        (0x52000, 0xEA),
+        (0x5A000, 0xEA),
+        (0x62000, 0xEC),
+        (0x6A000, 0xEC),
+        (0x72000, 0xEE),
+        (0x7A000, 0xEE),
+    ):
+        assert hw.read(address) == expected
+    hw.gate[0x20] = 0x30
+    assert hw.read(0x42000) == 0x00  # 30/FE was not physically sampled.
+    hw.gate[0x20], hw.gate[0x23], hw.gpio[5] = 0x35, 0, 2
+    assert hw.read(0x42000) == 0x00  # Synthetic card ROM offset 0x2000.
+
+
 def test_bad_media_identity_and_sizes_are_rejected():
     with pytest.raises(ValueError, match="128 KiB"):
         Oz707Card(b"", b"")

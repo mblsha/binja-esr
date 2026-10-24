@@ -22,6 +22,7 @@ pub const ACCESS_REQUEST: u8 = 1;
 pub const ACCESS_READY: u8 = 2;
 pub const SAMPLE_SYNC: u8 = 4;
 pub const FRAME_PHASE: u8 = 8;
+pub const READ_SELECTION_CLOSED: u8 = 0x10;
 pub const FRAME_HALF_PERIOD: u64 = 32768;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]

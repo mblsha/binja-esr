@@ -152,11 +152,26 @@ class Rtc:
                     alarm = Clock.decode(raw)
                 except ValueError:
                     continue
-                matched = (
-                    key(old) < (*key(alarm)[:5], 59) and key(alarm) <= key(new)
-                    if any_second
-                    else key(old) < key(alarm) <= key(new)
-                )
+                # Two physical daily-alarm images have a current-year cached
+                # candidate but zero year bits in the RTC alarm register; the
+                # first fired at its deadline. Interpret only this observed
+                # year-zero form as a year wildcard in the opt-in RTC policy.
+                year_zero = raw[3] & 0xF0 == 0 and raw[4] & 0x0F == 0
+                years = range(old.year, new.year + 1) if year_zero else (alarm.year,)
+                matched = False
+                for year in years:
+                    candidate = replace(alarm, year=year)
+                    try:
+                        candidate.validate()
+                    except ValueError:
+                        continue
+                    if any_second:
+                        last = replace(candidate, second=59)
+                        matched = key(old) < key(last) and key(candidate) <= key(new)
+                    else:
+                        matched = key(old) < key(candidate) <= key(new)
+                    if matched:
+                        break
                 if matched:
                     causes |= 1 << channel
         self.backing[:5] = encoded

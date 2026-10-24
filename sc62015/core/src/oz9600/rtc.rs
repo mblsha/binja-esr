@@ -176,8 +176,10 @@ impl Rtc {
     /// due cause; the second channel and silicon comparison remain hypotheses.
     /// Only the observed sixth-byte 07 form and valid complete date/times
     /// participate. Schedule's seconds-3F form matches any crossed second in
-    /// that minute (F0 D8003 and a normal-ROM programmed deadline). Exact silicon
-    /// reassert timing and other wildcard fields remain unqualified.
+    /// that minute (F0 D8003 and a normal-ROM programmed deadline). The
+    /// year-zero form in two physical daily-alarm images matches the current
+    /// calendar year; the first image accompanied automatic alarm wake. Exact
+    /// silicon reassert timing and other wildcard fields remain unqualified.
     /// All validation precedes mutation. Masked events still latch/coalesce.
     pub fn advance_experimental_seconds(&mut self, seconds: u64) -> Result<(), String> {
         if self.registers[CONTROL] & HOLD != 0 {
@@ -214,18 +216,29 @@ impl Rtc {
                     bytes[0] &= 0xc0;
                 }
                 if let Ok(alarm) = Clock::decode(bytes) {
-                    let matched = if any_second {
-                        // Intersection of (old,new] with the closed match minute.
-                        // After acknowledgement a subsequent second can reassert;
-                        // the unmodified ROM is responsible for rearming the block.
-                        let last = Clock {
-                            second: 59,
-                            ..alarm
-                        };
-                        old.time_key() < last.time_key() && alarm.time_key() <= new.time_key()
-                    } else {
-                        old.time_key() < alarm.time_key() && alarm.time_key() <= new.time_key()
-                    };
+                    let year_zero = bytes[3] & 0xf0 == 0 && bytes[4] & 0x0f == 0;
+                    let first_year = if year_zero { old.year } else { alarm.year };
+                    let last_year = if year_zero { new.year } else { alarm.year };
+                    let matched = (first_year..=last_year).any(|year| {
+                        let candidate = Clock { year, ..alarm };
+                        if candidate.validate().is_err() {
+                            return false;
+                        }
+                        if any_second {
+                            // Intersection of (old,new] with the closed match
+                            // minute. After acknowledgement a later second can
+                            // reassert; the ROM must rearm the block.
+                            let last = Clock {
+                                second: 59,
+                                ..candidate
+                            };
+                            old.time_key() < last.time_key()
+                                && candidate.time_key() <= new.time_key()
+                        } else {
+                            old.time_key() < candidate.time_key()
+                                && candidate.time_key() <= new.time_key()
+                        }
+                    });
                     if matched {
                         causes |= 1 << channel;
                     }
@@ -381,6 +394,80 @@ mod tests {
         let saved = rtc.registers();
         assert!(rtc.advance_experimental_seconds(1).is_err());
         assert_eq!(rtc.registers(), saved);
+    }
+
+    #[test]
+    fn physical_daily_alarm_year_zero_form_matches_current_year_only_at_deadline() {
+        for (current, alarm, before_deadline) in [
+            (
+                [0x00, 0xda, 0xdd, 0xec, 0x05],
+                [0x00, 0xde, 0xdd, 0x0c, 0x00, 0x07],
+                239,
+            ),
+            (
+                [0x19, 0xa9, 0xf0, 0xec, 0x05],
+                [0x00, 0x9e, 0xf4, 0x0c, 0x00, 0x07],
+                56914,
+            ),
+        ] {
+            let mut rtc = Rtc::default();
+            for (offset, byte) in current.into_iter().enumerate() {
+                rtc.write(offset, byte);
+            }
+            for (offset, byte) in alarm.into_iter().enumerate() {
+                rtc.write(16 + offset, byte);
+            }
+            rtc.write(MASK_A, 1);
+            rtc.advance_experimental_seconds(before_deadline).unwrap();
+            assert_eq!(rtc.read(CAUSE_A) & 1, 0);
+            rtc.advance_experimental_seconds(1).unwrap();
+            assert_ne!(rtc.read(CAUSE_A) & 1, 0);
+            assert!(rtc.interrupt_asserted());
+            rtc.write(CAUSE_A, 0);
+            rtc.advance_experimental_seconds(1).unwrap();
+            assert_eq!(rtc.read(CAUSE_A) & 1, 0);
+        }
+
+        let mut rtc = Rtc::default();
+        for (offset, byte) in [0x00, 0xda, 0xdd, 0xec, 0x05].into_iter().enumerate() {
+            rtc.write(offset, byte);
+        }
+        for (offset, byte) in [0x00, 0xde, 0xdd, 0xdc, 0x05, 0x07].into_iter().enumerate() {
+            rtc.write(16 + offset, byte);
+        }
+        rtc.advance_experimental_seconds(240).unwrap();
+        assert_eq!(rtc.read(CAUSE_A) & 1, 0);
+
+        let mut rtc = Rtc::default();
+        set_clock(
+            &mut rtc,
+            0,
+            Clock {
+                year: 1994,
+                month: 12,
+                day: 31,
+                hour: 23,
+                minute: 59,
+                second: 58,
+                weekday: 5,
+            },
+        );
+        for (offset, byte) in [0x00, 0x00, 0x08, 0x01, 0x00, 0x07].into_iter().enumerate() {
+            rtc.write(16 + offset, byte);
+        }
+        rtc.advance_experimental_seconds(3).unwrap();
+        assert_eq!(rtc.clock().unwrap().year, 1995);
+        assert_ne!(rtc.read(CAUSE_A) & 1, 0);
+
+        let mut rtc = Rtc::default();
+        for (offset, byte) in [0x00, 0xda, 0xdd, 0xec, 0x05].into_iter().enumerate() {
+            rtc.write(offset, byte);
+        }
+        for (offset, byte) in [0x00, 0xde, 0xe5, 0x0c, 0x00, 0x07].into_iter().enumerate() {
+            rtc.write(16 + offset, byte);
+        }
+        rtc.advance_experimental_seconds(240).unwrap();
+        assert_eq!(rtc.read(CAUSE_A) & 1, 0);
     }
 
     #[test]
