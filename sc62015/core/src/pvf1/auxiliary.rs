@@ -800,7 +800,9 @@ impl Auxiliary {
                         engine.start_packet(request, cycle, 2 + 4 * count, None, false)?;
                         *sample_uploads += 1;
                         *last_samples = request[2..2 + 4 * count]
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .map(|p| {
                                 [
                                     u16::from_le_bytes([p[0], p[1]]),
